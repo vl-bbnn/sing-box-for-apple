@@ -1,21 +1,10 @@
 import Foundation
 import Libbox
+import Library
 import SwiftUI
 
-public enum STUNTimeoutOption: Int32, CaseIterable, Identifiable {
-    case three = 3
-    case five = 5
-    case ten = 10
-
-    public var id: Int32 { rawValue }
-
-    public var label: String {
-        "\(rawValue)s"
-    }
-}
-
 @MainActor
-public final class STUNTestViewModel: BaseViewModel {
+public final class STUNTestViewModel: BaseViewModel, OutboundSelectable {
     @Published public var phase: Int32 = -1
     @Published public var externalAddr: String = ""
     @Published public var latencyMs: Int32 = 0
@@ -23,12 +12,33 @@ public final class STUNTestViewModel: BaseViewModel {
     @Published public var natFiltering: Int32 = 0
     @Published public var natTypeSupported: Bool = false
     @Published public var isRunning = false
-    @Published public var server: String = LibboxSTUNDefaultServer
-    @Published public var timeout: STUNTimeoutOption = .three
     @Published public var selectedOutbound: String = ""
 
+    @Published public var server: String = LibboxSTUNDefaultServer {
+        didSet {
+            guard !isLoadingPreferences else { return }
+            saveServerTask?.cancel()
+            saveServerTask = Task {
+                try? await Task.sleep(nanoseconds: 300_000_000)
+                guard !Task.isCancelled else { return }
+                await SharedPreferences.stunServer.set(server)
+            }
+        }
+    }
+
+    private var isLoadingPreferences = false
+    private var saveServerTask: Task<Void, Never>?
     private var standaloneTest: LibboxSTUNTest?
     private var runningTask: Task<Void, Never>?
+
+    public func loadPreferences() async {
+        isLoadingPreferences = true
+        let saved = await SharedPreferences.stunServer.get()
+        if !saved.isEmpty {
+            server = saved
+        }
+        isLoadingPreferences = false
+    }
 
     public func startTest(vpnConnected: Bool) {
         phase = -1
@@ -41,14 +51,13 @@ public final class STUNTestViewModel: BaseViewModel {
 
         let server = server
         let outboundTag = selectedOutbound
-        let timeoutSeconds = timeout.rawValue
 
         if vpnConnected {
             let handler = TestHandler(self)
             runningTask = Task { [weak self] in
                 do {
                     try await Task.detached {
-                        try LibboxNewStandaloneCommandClient()!.startSTUNTest(withTimeout: server, outboundTag: outboundTag, timeoutSeconds: timeoutSeconds, handler: handler)
+                        try LibboxNewStandaloneCommandClient()!.startSTUNTest(server, outboundTag: outboundTag, handler: handler)
                     }.value
                 } catch {
                     guard let self else { return }
@@ -61,7 +70,7 @@ public final class STUNTestViewModel: BaseViewModel {
             let test = LibboxNewSTUNTest()!
             standaloneTest = test
             let handler = TestHandler(self)
-            test.start(withTimeout: server, timeoutSeconds: timeoutSeconds, handler: handler)
+            test.start(server, handler: handler)
         }
     }
 
@@ -110,7 +119,7 @@ public final class STUNTestViewModel: BaseViewModel {
             let natTypeSupported = result.natTypeSupported
             DispatchQueue.main.async { [self] in
                 guard let viewModel, viewModel.isRunning else { return }
-                viewModel.phase = 3
+                viewModel.phase = LibboxSTUNPhaseDone
                 viewModel.externalAddr = externalAddr
                 viewModel.latencyMs = latencyMs
                 viewModel.natMapping = natMapping

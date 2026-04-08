@@ -9,6 +9,24 @@ public struct STUNTestView: View {
 
     public init() {}
 
+    private func natMappingColor(_ value: Int32) -> Color {
+        switch value {
+        case LibboxNATMappingEndpointIndependent: .green
+        case LibboxNATMappingAddressDependent: .yellow
+        case LibboxNATMappingAddressAndPortDependent: .red
+        default: .primary
+        }
+    }
+
+    private func natFilteringColor(_ value: Int32) -> Color {
+        switch value {
+        case LibboxNATFilteringEndpointIndependent: .green
+        case LibboxNATFilteringAddressDependent: .yellow
+        case LibboxNATFilteringAddressAndPortDependent: .red
+        default: .primary
+        }
+    }
+
     @ViewBuilder
     private func resultValue(_ value: String?, active: Bool) -> some View {
         if let value {
@@ -23,7 +41,7 @@ public struct STUNTestView: View {
             ProgressView()
                 .controlSize(.small)
         } else {
-            Text("-")
+            Text(verbatim: "-")
         }
     }
 
@@ -35,8 +53,9 @@ public struct STUNTestView: View {
                         Text(viewModel.server)
                     }
                 #else
-                    FormItem("Server") {
-                        TextField("STUN Server", text: $viewModel.server)
+                    FormItem(String(localized: "Server")) {
+                        TextField(text: $viewModel.server) {}
+                            .multilineTextAlignment(.trailing)
                             .autocorrectionDisabled()
                         #if os(iOS)
                             .textInputAutocapitalization(.never)
@@ -44,18 +63,12 @@ public struct STUNTestView: View {
                         #endif
                     }
                 #endif
-                Picker("Timeout", selection: $viewModel.timeout) {
-                    ForEach(STUNTimeoutOption.allCases) { option in
-                        Text(option.label).tag(option)
-                    }
-                }
-                .disabled(viewModel.isRunning)
                 if let profile = environments.extensionProfile {
-                    OutboundSection(profile: profile, viewModel: viewModel)
+                    ToolOutboundSection(profile: profile, viewModel: viewModel)
                 }
             }
 
-            Section {
+            Section("Action") {
                 if viewModel.isRunning {
                     FormButton {
                         viewModel.cancel()
@@ -74,62 +87,36 @@ public struct STUNTestView: View {
             if viewModel.phase >= 0 {
                 Section("Results") {
                     FormTextItem("External Address", "network") {
-                        resultValue(viewModel.externalAddr.isEmpty ? nil : viewModel.externalAddr, active: viewModel.phase == 0)
+                        resultValue(viewModel.externalAddr.isEmpty ? nil : viewModel.externalAddr, active: viewModel.phase == LibboxSTUNPhaseBinding)
                     }
                     FormTextItem("Latency", "timer") {
-                        resultValue(viewModel.latencyMs > 0 ? "\(viewModel.latencyMs) ms" : nil, active: viewModel.phase == 0)
+                        resultValue(viewModel.latencyMs > 0 ? "\(viewModel.latencyMs) ms" : nil, active: viewModel.phase == LibboxSTUNPhaseBinding)
                     }
-                    if viewModel.phase == 3, !viewModel.natTypeSupported {
+                    if viewModel.phase == LibboxSTUNPhaseDone, !viewModel.natTypeSupported {
                         FormTextItem("NAT Type Detection", "exclamationmark.triangle") {
                             Text("Not supported by server")
                         }
                     } else {
                         FormTextItem("NAT Mapping", "arrow.left.arrow.right") {
-                            resultValue(viewModel.natMapping > 0 ? LibboxFormatNATMapping(viewModel.natMapping) : nil, active: viewModel.phase == 1)
+                            resultValue(viewModel.natMapping > 0 ? LibboxFormatNATMapping(viewModel.natMapping) : nil, active: viewModel.phase == LibboxSTUNPhaseNATMapping)
+                                .foregroundStyle(viewModel.natMapping > 0 ? natMappingColor(viewModel.natMapping) : .primary)
                         }
                         FormTextItem("NAT Filtering", "line.3.horizontal.decrease") {
-                            resultValue(viewModel.natFiltering > 0 ? LibboxFormatNATFiltering(viewModel.natFiltering) : nil, active: viewModel.phase == 2)
+                            resultValue(viewModel.natFiltering > 0 ? LibboxFormatNATFiltering(viewModel.natFiltering) : nil, active: viewModel.phase == LibboxSTUNPhaseNATFiltering)
+                                .foregroundStyle(viewModel.natFiltering > 0 ? natFilteringColor(viewModel.natFiltering) : .primary)
                         }
                     }
                 }
             }
         }
         .navigationTitle("STUN Test")
+        .task {
+            await viewModel.loadPreferences()
+        }
         .alert($viewModel.alert)
         .onDisappear {
             if viewModel.isRunning {
                 viewModel.cancel()
-            }
-        }
-    }
-}
-
-private struct OutboundSection: View {
-    @ObservedObject var profile: ExtensionProfile
-    @ObservedObject var viewModel: STUNTestViewModel
-
-    var body: some View {
-        Group {
-            if profile.status.isConnectedStrict {
-                FormNavigationLink {
-                    OutboundPickerView(selectedOutbound: $viewModel.selectedOutbound)
-                } label: {
-                    HStack {
-                        Text("Outbound")
-                        Spacer()
-                        Text(viewModel.selectedOutbound.isEmpty ? String(localized: "Default") : viewModel.selectedOutbound)
-                            .foregroundColor(.secondary)
-                            .lineLimit(1)
-                    }
-                }
-            }
-        }
-        .onChangeCompat(of: profile.status) { status in
-            if !status.isConnectedStrict {
-                if viewModel.isRunning {
-                    viewModel.cancel()
-                }
-                viewModel.selectedOutbound = ""
             }
         }
     }
