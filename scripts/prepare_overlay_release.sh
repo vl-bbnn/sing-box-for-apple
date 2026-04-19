@@ -47,12 +47,12 @@ upstream_version="$(
 )"
 
 overlay_commit_count="$(git rev-list --count "$origin_remote/main..$origin_remote/overlay")"
-if [[ "$overlay_commit_count" != "1" ]]; then
-	echo "expected origin/overlay to contain exactly one overlay commit relative to origin/main, got $overlay_commit_count" >&2
+if [[ "$overlay_commit_count" == "0" ]]; then
+	echo "expected origin/overlay to contain overlay commits relative to origin/main" >&2
 	exit 1
 fi
 
-overlay_commit="$(git rev-list --reverse "$origin_remote/main..$origin_remote/overlay" | head -n 1)"
+overlay_commits="$(git rev-list --reverse "$origin_remote/main..$origin_remote/overlay")"
 upstream_changed=false
 version_changed=false
 should_release=false
@@ -74,7 +74,7 @@ fi
 write_output current_main_sha "$current_main_sha"
 write_output current_overlay_sha "$current_overlay_sha"
 write_output upstream_sha "$upstream_sha"
-write_output overlay_commit "$overlay_commit"
+write_output overlay_commit_count "$overlay_commit_count"
 write_output current_version "$current_version"
 write_output upstream_version "$upstream_version"
 write_output upstream_changed "$upstream_changed"
@@ -88,7 +88,10 @@ fi
 
 git branch -f main "$upstream_remote/main" >/dev/null
 git checkout -B "$tmp_branch" "$upstream_remote/main" >/dev/null
-git cherry-pick --no-edit "$overlay_commit" >/dev/null
+while IFS= read -r overlay_commit; do
+	[[ -n "$overlay_commit" ]] || continue
+	git cherry-pick --no-edit "$overlay_commit" >/dev/null
+done <<< "$overlay_commits"
 
 new_overlay_sha="$(git rev-parse HEAD)"
 new_version="$(python3 scripts/read_apple_project_setting.py --file "$project_file" --infoplist SFI/Info.plist --setting MARKETING_VERSION)"
