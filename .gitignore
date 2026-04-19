@@ -16,3 +16,4 @@ AGENTS.md
 /fastlane/.cache/
 /Config/Overlay.local.xcconfig
 /HelperService/LaunchDaemons/HelperService.plist
+__pycache__/
