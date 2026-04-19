@@ -3,6 +3,49 @@ SHELL := /bin/bash
 .SILENT:
 
 INSTALLER_SIGN_IDENTITY := 16480CA444F481F8DEAF9421FAD2CCE590FC54E4
+OVERLAY_CONFIG := Config/Overlay.xcconfig
+OVERLAY_SETTING := ./scripts/overlay_setting.sh
+BASE_PACKAGE_IDENTIFIER := $(shell $(OVERLAY_SETTING) OVERLAY_BASE_PACKAGE_IDENTIFIER)
+DEVELOPMENT_TEAM := $(shell $(OVERLAY_SETTING) OVERLAY_DEVELOPMENT_TEAM)
+MACOS_SYSTEM_PROFILE_SPECIFIER := $(shell $(OVERLAY_SETTING) OVERLAY_MACOS_SYSTEM_PROFILE_SPECIFIER)
+MACOS_STANDALONE_PROFILE_SPECIFIER := $(shell $(OVERLAY_SETTING) OVERLAY_MACOS_STANDALONE_PROFILE_SPECIFIER)
+OVERLAY_HELPER_PLIST := HelperService/LaunchDaemons/HelperService.plist
+SFM_SYSTEM_EXPORT_PLIST := build/SFM.System-Export.plist
+SFM_SYSTEM_DISTRIBUTION_ARM64 := build/SFM.System-distribution-arm64.xml
+SFM_SYSTEM_DISTRIBUTION_X86_64 := build/SFM.System-distribution-x86_64.xml
+SFM_SYSTEM_DISTRIBUTION_UNIVERSAL := build/SFM.System-distribution-universal.xml
+
+$(SFM_SYSTEM_EXPORT_PLIST): SFM.System/Export.plist.in $(OVERLAY_CONFIG)
+	mkdir -p build
+	sed \
+		-e 's|__BASE_PACKAGE_IDENTIFIER__|$(BASE_PACKAGE_IDENTIFIER)|g' \
+		-e 's|__MACOS_SYSTEM_PROFILE_SPECIFIER__|$(MACOS_SYSTEM_PROFILE_SPECIFIER)|g' \
+		-e 's|__MACOS_STANDALONE_PROFILE_SPECIFIER__|$(MACOS_STANDALONE_PROFILE_SPECIFIER)|g' \
+		"$<" > "$@"
+
+$(SFM_SYSTEM_DISTRIBUTION_ARM64): SFM.System/distribution.xml.in $(OVERLAY_CONFIG)
+	mkdir -p build
+	sed \
+		-e 's|__BASE_PACKAGE_IDENTIFIER__|$(BASE_PACKAGE_IDENTIFIER)|g' \
+		-e 's|__HOST_ARCHITECTURES__|arm64|g' \
+		-e 's|__COMPONENT_PKG__|component-arm64.pkg|g' \
+		"$<" > "$@"
+
+$(SFM_SYSTEM_DISTRIBUTION_X86_64): SFM.System/distribution.xml.in $(OVERLAY_CONFIG)
+	mkdir -p build
+	sed \
+		-e 's|__BASE_PACKAGE_IDENTIFIER__|$(BASE_PACKAGE_IDENTIFIER)|g' \
+		-e 's|__HOST_ARCHITECTURES__|x86_64|g' \
+		-e 's|__COMPONENT_PKG__|component-x86_64.pkg|g' \
+		"$<" > "$@"
+
+$(SFM_SYSTEM_DISTRIBUTION_UNIVERSAL): SFM.System/distribution.xml.in $(OVERLAY_CONFIG)
+	mkdir -p build
+	sed \
+		-e 's|__BASE_PACKAGE_IDENTIFIER__|$(BASE_PACKAGE_IDENTIFIER)|g' \
+		-e 's|__HOST_ARCHITECTURES__|arm64,x86_64|g' \
+		-e 's|__COMPONENT_PKG__|component-universal.pkg|g' \
+		"$<" > "$@"
 
 build_all: build_ios build_macos build_tvos
 
@@ -12,7 +55,7 @@ build_ios:
 build_macos:
 	xcodebuild build -scheme SFM -configuration Debug -destination 'generic/platform=macOS' | xcbeautify | grep -A 10 -e "Build Succeeded" -e "BUILD FAILED" -e "❌"
 
-build_macos_standalone:
+build_macos_standalone: $(OVERLAY_HELPER_PLIST)
 	xcodebuild build -scheme SFM.System -configuration Debug -destination 'generic/platform=macOS' | xcbeautify | grep -A 10 -e "Build Succeeded" -e "BUILD FAILED" -e "❌"
 
 build_tvos:
@@ -50,32 +93,32 @@ upload_tvos:
 release_macos_standalone: release_macos_dmg release_macos_pkg
 
 # Archive commands
-archive_macos_standalone_apple:
+archive_macos_standalone_apple: $(OVERLAY_HELPER_PLIST)
 	rm -rf build/SFM.System-arm64.xcarchive
 	xcodebuild archive -scheme SFM.System -configuration Release -archivePath build/SFM.System-arm64.xcarchive -derivedDataPath build/SFM.System-arm64.dd ARCHS=arm64 -allowProvisioningUpdates | xcbeautify | grep -A 10 -e "Archive Succeeded" -e "ARCHIVE FAILED" -e "❌"
 
-archive_macos_standalone_intel:
+archive_macos_standalone_intel: $(OVERLAY_HELPER_PLIST)
 	rm -rf build/SFM.System-x86_64.xcarchive
 	xcodebuild archive -scheme SFM.System -configuration Release -archivePath build/SFM.System-x86_64.xcarchive -derivedDataPath build/SFM.System-x86_64.dd ARCHS=x86_64 -allowProvisioningUpdates | xcbeautify | grep -A 10 -e "Archive Succeeded" -e "ARCHIVE FAILED" -e "❌"
 
-archive_macos_standalone_universal:
+archive_macos_standalone_universal: $(OVERLAY_HELPER_PLIST)
 	rm -rf build/SFM.System-universal.xcarchive
 	xcodebuild archive -scheme SFM.System -configuration Release -archivePath build/SFM.System-universal.xcarchive -derivedDataPath build/SFM.System-universal.dd -allowProvisioningUpdates | xcbeautify | grep -A 10 -e "Archive Succeeded" -e "ARCHIVE FAILED" -e "❌"
 
 archive_macos_standalone: archive_macos_standalone_apple archive_macos_standalone_intel archive_macos_standalone_universal
 
 # Export commands
-export_macos_standalone_apple:
+export_macos_standalone_apple: $(SFM_SYSTEM_EXPORT_PLIST)
 	rm -rf build/SFM.System-arm64
-	xcodebuild -exportArchive -archivePath build/SFM.System-arm64.xcarchive -exportOptionsPlist SFM.System/Export.plist -exportPath build/SFM.System-arm64 -allowProvisioningUpdates
+	xcodebuild -exportArchive -archivePath build/SFM.System-arm64.xcarchive -exportOptionsPlist $(SFM_SYSTEM_EXPORT_PLIST) -exportPath build/SFM.System-arm64 -allowProvisioningUpdates
 
-export_macos_standalone_intel:
+export_macos_standalone_intel: $(SFM_SYSTEM_EXPORT_PLIST)
 	rm -rf build/SFM.System-x86_64
-	xcodebuild -exportArchive -archivePath build/SFM.System-x86_64.xcarchive -exportOptionsPlist SFM.System/Export.plist -exportPath build/SFM.System-x86_64 -allowProvisioningUpdates
+	xcodebuild -exportArchive -archivePath build/SFM.System-x86_64.xcarchive -exportOptionsPlist $(SFM_SYSTEM_EXPORT_PLIST) -exportPath build/SFM.System-x86_64 -allowProvisioningUpdates
 
-export_macos_standalone_universal:
+export_macos_standalone_universal: $(SFM_SYSTEM_EXPORT_PLIST)
 	rm -rf build/SFM.System-universal
-	xcodebuild -exportArchive -archivePath build/SFM.System-universal.xcarchive -exportOptionsPlist SFM.System/Export.plist -exportPath build/SFM.System-universal -allowProvisioningUpdates
+	xcodebuild -exportArchive -archivePath build/SFM.System-universal.xcarchive -exportOptionsPlist $(SFM_SYSTEM_EXPORT_PLIST) -exportPath build/SFM.System-universal -allowProvisioningUpdates
 
 # DMG commands
 build_macos_dmg_apple: archive_macos_standalone_apple export_macos_standalone_apple
@@ -135,19 +178,19 @@ release_macos_dmg_universal: build_macos_dmg_universal notarize_macos_dmg_univer
 release_macos_dmg: release_macos_dmg_apple release_macos_dmg_intel release_macos_dmg_universal
 
 # PKG commands
-build_macos_pkg_apple: archive_macos_standalone_apple export_macos_standalone_apple
+build_macos_pkg_apple: archive_macos_standalone_apple export_macos_standalone_apple $(SFM_SYSTEM_DISTRIBUTION_ARM64)
 	rm -f build/SFM-Apple.pkg
 	rm -rf build/pkgroot-arm64
 	mkdir -p build/pkgroot-arm64
 	ditto "build/SFM.System-arm64/SFM.app" "build/pkgroot-arm64/SFM.app"
 	pkgbuild --root "build/pkgroot-arm64" \
 		--component-plist SFM.System/component.plist \
-		--identifier io.nekohasekai.sfavt.standalone \
+		--identifier $(BASE_PACKAGE_IDENTIFIER).standalone \
 		--install-location /Applications \
 		--min-os-version 13.0 \
 		--compression latest \
 		build/component-arm64.pkg
-	productbuild --distribution SFM.System/distribution-arm64.xml \
+	productbuild --distribution $(SFM_SYSTEM_DISTRIBUTION_ARM64) \
 		--package-path build \
 		--resources SFM.System/Resources \
 		--sign "$(INSTALLER_SIGN_IDENTITY)" \
@@ -155,19 +198,19 @@ build_macos_pkg_apple: archive_macos_standalone_apple export_macos_standalone_ap
 	rm -rf build/pkgroot-arm64
 	rm -f build/component-arm64.pkg
 
-build_macos_pkg_intel: archive_macos_standalone_intel export_macos_standalone_intel
+build_macos_pkg_intel: archive_macos_standalone_intel export_macos_standalone_intel $(SFM_SYSTEM_DISTRIBUTION_X86_64)
 	rm -f build/SFM-Intel.pkg
 	rm -rf build/pkgroot-x86_64
 	mkdir -p build/pkgroot-x86_64
 	ditto "build/SFM.System-x86_64/SFM.app" "build/pkgroot-x86_64/SFM.app"
 	pkgbuild --root "build/pkgroot-x86_64" \
 		--component-plist SFM.System/component.plist \
-		--identifier io.nekohasekai.sfavt.standalone \
+		--identifier $(BASE_PACKAGE_IDENTIFIER).standalone \
 		--install-location /Applications \
 		--min-os-version 13.0 \
 		--compression latest \
 		build/component-x86_64.pkg
-	productbuild --distribution SFM.System/distribution-x86_64.xml \
+	productbuild --distribution $(SFM_SYSTEM_DISTRIBUTION_X86_64) \
 		--package-path build \
 		--resources SFM.System/Resources \
 		--sign "$(INSTALLER_SIGN_IDENTITY)" \
@@ -175,19 +218,19 @@ build_macos_pkg_intel: archive_macos_standalone_intel export_macos_standalone_in
 	rm -rf build/pkgroot-x86_64
 	rm -f build/component-x86_64.pkg
 
-build_macos_pkg_universal: archive_macos_standalone_universal export_macos_standalone_universal
+build_macos_pkg_universal: archive_macos_standalone_universal export_macos_standalone_universal $(SFM_SYSTEM_DISTRIBUTION_UNIVERSAL)
 	rm -f build/SFM-Universal.pkg
 	rm -rf build/pkgroot-universal
 	mkdir -p build/pkgroot-universal
 	ditto "build/SFM.System-universal/SFM.app" "build/pkgroot-universal/SFM.app"
 	pkgbuild --root "build/pkgroot-universal" \
 		--component-plist SFM.System/component.plist \
-		--identifier io.nekohasekai.sfavt.standalone \
+		--identifier $(BASE_PACKAGE_IDENTIFIER).standalone \
 		--install-location /Applications \
 		--min-os-version 13.0 \
 		--compression latest \
 		build/component-universal.pkg
-	productbuild --distribution SFM.System/distribution-universal.xml \
+	productbuild --distribution $(SFM_SYSTEM_DISTRIBUTION_UNIVERSAL) \
 		--package-path build \
 		--resources SFM.System/Resources \
 		--sign "$(INSTALLER_SIGN_IDENTITY)" \
@@ -248,3 +291,9 @@ clean:
 	rm -rf build/SFM.System-universal.dd
 	rm -f build/SFM-Apple.dmg build/SFM-Intel.dmg build/SFM-Universal.dmg
 	rm -f build/SFM-Apple.pkg build/SFM-Intel.pkg build/SFM-Universal.pkg
+$(OVERLAY_HELPER_PLIST): HelperService/LaunchDaemons/HelperService.plist.in $(OVERLAY_CONFIG) $(OVERLAY_SETTING)
+	mkdir -p HelperService/LaunchDaemons
+	sed \
+		-e 's|__BASE_PACKAGE_IDENTIFIER__|$(BASE_PACKAGE_IDENTIFIER)|g' \
+		-e 's|__DEVELOPMENT_TEAM__|$(DEVELOPMENT_TEAM)|g' \
+		"$<" > "$@"
