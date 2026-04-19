@@ -1,0 +1,14 @@
+<?xml version="1.0" encoding="utf-8"?>
+<installer-gui-script minSpecVersion="2">
+    <title>sing-box</title>
+    <license file="LICENSE"/>
+    <pkg-ref id="__BASE_PACKAGE_IDENTIFIER__.standalone"/>
+    <options customize="never" require-scripts="false" hostArchitectures="__HOST_ARCHITECTURES__"/>
+    <choices-outline>
+        <line choice="default"/>
+    </choices-outline>
+    <choice id="default" title="sing-box">
+        <pkg-ref id="__BASE_PACKAGE_IDENTIFIER__.standalone"/>
+    </choice>
+    <pkg-ref id="__BASE_PACKAGE_IDENTIFIER__.standalone" version="0" onConclusion="none">__COMPONENT_PKG__</pkg-ref>
+</installer-gui-script>

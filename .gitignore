@@ -14,3 +14,5 @@ AGENTS.md
 /fastlane/test_output/
 /fastlane/.bundle/
 /fastlane/.cache/
+/Config/Overlay.local.xcconfig
+/HelperService/LaunchDaemons/HelperService.plist
