@@ -14,6 +14,13 @@ SFM_SYSTEM_EXPORT_PLIST := build/SFM.System-Export.plist
 SFM_SYSTEM_DISTRIBUTION_ARM64 := build/SFM.System-distribution-arm64.xml
 SFM_SYSTEM_DISTRIBUTION_X86_64 := build/SFM.System-distribution-x86_64.xml
 SFM_SYSTEM_DISTRIBUTION_UNIVERSAL := build/SFM.System-distribution-universal.xml
+XCODE_AUTH_FLAGS :=
+
+ifneq ($(strip $(ASC_KEY_PATH)$(ASC_KEY_ID)$(ASC_KEY_ISSUER_ID)),)
+XCODE_AUTH_FLAGS += -authenticationKeyPath "$(ASC_KEY_PATH)"
+XCODE_AUTH_FLAGS += -authenticationKeyID "$(ASC_KEY_ID)"
+XCODE_AUTH_FLAGS += -authenticationKeyIssuerID "$(ASC_KEY_ISSUER_ID)"
+endif
 
 $(SFM_SYSTEM_EXPORT_PLIST): SFM.System/Export.plist.in $(OVERLAY_CONFIG)
 	mkdir -p build
@@ -67,58 +74,58 @@ release_ios: archive_ios upload_ios
 
 archive_ios:
 	rm -rf build/SFI.xcarchive
-	xcodebuild archive -scheme SFI -configuration Release -destination 'generic/platform=iOS' -archivePath build/SFI.xcarchive -allowProvisioningUpdates | xcbeautify | grep -A 10 -e "Archive Succeeded" -e "ARCHIVE FAILED" -e "❌"
+	xcodebuild archive -scheme SFI -configuration Release -destination 'generic/platform=iOS' -archivePath build/SFI.xcarchive -allowProvisioningUpdates $(XCODE_AUTH_FLAGS) | xcbeautify | grep -A 10 -e "Archive Succeeded" -e "ARCHIVE FAILED" -e "❌"
 
 upload_ios:
-	xcodebuild -exportArchive -archivePath build/SFI.xcarchive -exportOptionsPlist SFI/Upload.plist -allowProvisioningUpdates
+	xcodebuild -exportArchive -archivePath build/SFI.xcarchive -exportOptionsPlist SFI/Upload.plist -allowProvisioningUpdates $(XCODE_AUTH_FLAGS)
 
 release_macos: archive_macos upload_macos
 
 archive_macos:
 	rm -rf build/SFM.xcarchive
-	xcodebuild archive -scheme SFM -configuration Release -archivePath build/SFM.xcarchive -allowProvisioningUpdates | xcbeautify | grep -A 10 -e "Archive Succeeded" -e "ARCHIVE FAILED" -e "❌"
+	xcodebuild archive -scheme SFM -configuration Release -archivePath build/SFM.xcarchive -allowProvisioningUpdates $(XCODE_AUTH_FLAGS) | xcbeautify | grep -A 10 -e "Archive Succeeded" -e "ARCHIVE FAILED" -e "❌"
 
 upload_macos:
-	xcodebuild -exportArchive -archivePath build/SFM.xcarchive -exportOptionsPlist SFI/Upload.plist -allowProvisioningUpdates
+	xcodebuild -exportArchive -archivePath build/SFM.xcarchive -exportOptionsPlist SFI/Upload.plist -allowProvisioningUpdates $(XCODE_AUTH_FLAGS)
 
 release_tvos: archive_tvos upload_tvos
 
 archive_tvos:
 	rm -rf build/SFT.xcarchive
-	xcodebuild archive -scheme SFT -configuration Release -archivePath build/SFT.xcarchive -allowProvisioningUpdates | xcbeautify | grep -A 10 -e "Archive Succeeded" -e "ARCHIVE FAILED" -e "❌"
+	xcodebuild archive -scheme SFT -configuration Release -archivePath build/SFT.xcarchive -allowProvisioningUpdates $(XCODE_AUTH_FLAGS) | xcbeautify | grep -A 10 -e "Archive Succeeded" -e "ARCHIVE FAILED" -e "❌"
 
 upload_tvos:
-	xcodebuild -exportArchive -archivePath build/SFT.xcarchive -exportOptionsPlist SFI/Upload.plist -allowProvisioningUpdates
+	xcodebuild -exportArchive -archivePath build/SFT.xcarchive -exportOptionsPlist SFI/Upload.plist -allowProvisioningUpdates $(XCODE_AUTH_FLAGS)
 
 release_macos_standalone: release_macos_dmg release_macos_pkg
 
 # Archive commands
 archive_macos_standalone_apple: $(OVERLAY_HELPER_PLIST)
 	rm -rf build/SFM.System-arm64.xcarchive
-	xcodebuild archive -scheme SFM.System -configuration Release -archivePath build/SFM.System-arm64.xcarchive -derivedDataPath build/SFM.System-arm64.dd ARCHS=arm64 -allowProvisioningUpdates | xcbeautify | grep -A 10 -e "Archive Succeeded" -e "ARCHIVE FAILED" -e "❌"
+	xcodebuild archive -scheme SFM.System -configuration Release -archivePath build/SFM.System-arm64.xcarchive -derivedDataPath build/SFM.System-arm64.dd ARCHS=arm64 -allowProvisioningUpdates $(XCODE_AUTH_FLAGS) | xcbeautify | grep -A 10 -e "Archive Succeeded" -e "ARCHIVE FAILED" -e "❌"
 
 archive_macos_standalone_intel: $(OVERLAY_HELPER_PLIST)
 	rm -rf build/SFM.System-x86_64.xcarchive
-	xcodebuild archive -scheme SFM.System -configuration Release -archivePath build/SFM.System-x86_64.xcarchive -derivedDataPath build/SFM.System-x86_64.dd ARCHS=x86_64 -allowProvisioningUpdates | xcbeautify | grep -A 10 -e "Archive Succeeded" -e "ARCHIVE FAILED" -e "❌"
+	xcodebuild archive -scheme SFM.System -configuration Release -archivePath build/SFM.System-x86_64.xcarchive -derivedDataPath build/SFM.System-x86_64.dd ARCHS=x86_64 -allowProvisioningUpdates $(XCODE_AUTH_FLAGS) | xcbeautify | grep -A 10 -e "Archive Succeeded" -e "ARCHIVE FAILED" -e "❌"
 
 archive_macos_standalone_universal: $(OVERLAY_HELPER_PLIST)
 	rm -rf build/SFM.System-universal.xcarchive
-	xcodebuild archive -scheme SFM.System -configuration Release -archivePath build/SFM.System-universal.xcarchive -derivedDataPath build/SFM.System-universal.dd -allowProvisioningUpdates | xcbeautify | grep -A 10 -e "Archive Succeeded" -e "ARCHIVE FAILED" -e "❌"
+	xcodebuild archive -scheme SFM.System -configuration Release -archivePath build/SFM.System-universal.xcarchive -derivedDataPath build/SFM.System-universal.dd -allowProvisioningUpdates $(XCODE_AUTH_FLAGS) | xcbeautify | grep -A 10 -e "Archive Succeeded" -e "ARCHIVE FAILED" -e "❌"
 
 archive_macos_standalone: archive_macos_standalone_apple archive_macos_standalone_intel archive_macos_standalone_universal
 
 # Export commands
 export_macos_standalone_apple: $(SFM_SYSTEM_EXPORT_PLIST)
 	rm -rf build/SFM.System-arm64
-	xcodebuild -exportArchive -archivePath build/SFM.System-arm64.xcarchive -exportOptionsPlist $(SFM_SYSTEM_EXPORT_PLIST) -exportPath build/SFM.System-arm64 -allowProvisioningUpdates
+	xcodebuild -exportArchive -archivePath build/SFM.System-arm64.xcarchive -exportOptionsPlist $(SFM_SYSTEM_EXPORT_PLIST) -exportPath build/SFM.System-arm64 -allowProvisioningUpdates $(XCODE_AUTH_FLAGS)
 
 export_macos_standalone_intel: $(SFM_SYSTEM_EXPORT_PLIST)
 	rm -rf build/SFM.System-x86_64
-	xcodebuild -exportArchive -archivePath build/SFM.System-x86_64.xcarchive -exportOptionsPlist $(SFM_SYSTEM_EXPORT_PLIST) -exportPath build/SFM.System-x86_64 -allowProvisioningUpdates
+	xcodebuild -exportArchive -archivePath build/SFM.System-x86_64.xcarchive -exportOptionsPlist $(SFM_SYSTEM_EXPORT_PLIST) -exportPath build/SFM.System-x86_64 -allowProvisioningUpdates $(XCODE_AUTH_FLAGS)
 
 export_macos_standalone_universal: $(SFM_SYSTEM_EXPORT_PLIST)
 	rm -rf build/SFM.System-universal
-	xcodebuild -exportArchive -archivePath build/SFM.System-universal.xcarchive -exportOptionsPlist $(SFM_SYSTEM_EXPORT_PLIST) -exportPath build/SFM.System-universal -allowProvisioningUpdates
+	xcodebuild -exportArchive -archivePath build/SFM.System-universal.xcarchive -exportOptionsPlist $(SFM_SYSTEM_EXPORT_PLIST) -exportPath build/SFM.System-universal -allowProvisioningUpdates $(XCODE_AUTH_FLAGS)
 
 # DMG commands
 build_macos_dmg_apple: archive_macos_standalone_apple export_macos_standalone_apple
@@ -286,9 +293,6 @@ clean:
 	rm -rf build/SFM.System-arm64
 	rm -rf build/SFM.System-x86_64
 	rm -rf build/SFM.System-universal
-	rm -rf build/SFM.System-arm64.dd
-	rm -rf build/SFM.System-x86_64.dd
-	rm -rf build/SFM.System-universal.dd
 	rm -f build/SFM-Apple.dmg build/SFM-Intel.dmg build/SFM-Universal.dmg
 	rm -f build/SFM-Apple.pkg build/SFM-Intel.pkg build/SFM-Universal.pkg
 $(OVERLAY_HELPER_PLIST): HelperService/LaunchDaemons/HelperService.plist.in $(OVERLAY_CONFIG) $(OVERLAY_SETTING)
