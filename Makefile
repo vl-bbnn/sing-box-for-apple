@@ -16,7 +16,7 @@ SFM_SYSTEM_DISTRIBUTION_X86_64 := build/SFM.System-distribution-x86_64.xml
 SFM_SYSTEM_DISTRIBUTION_UNIVERSAL := build/SFM.System-distribution-universal.xml
 XCODE_AUTH_FLAGS :=
 IOS_ARCHIVE_FLAGS := APP_SHORTCUTS_ENABLE_FLEXIBLE_MATCHING=NO
-XCODE_ERROR_FILTER := rg -n "error:|warning:|AppIntentsSSUTraining|The following build commands failed" || true
+XCODE_ERROR_FILTER := grep -nE "error:|warning:|AppIntentsSSUTraining|The following build commands failed" || true
 
 ifneq ($(strip $(ASC_KEY_PATH)$(ASC_KEY_ID)$(ASC_KEY_ISSUER_ID)),)
 XCODE_AUTH_FLAGS += -authenticationKeyPath "$(ASC_KEY_PATH)"
