@@ -63,6 +63,7 @@ jobs:
     runs-on: macos-latest
     timeout-minutes: 120
     env:
+      DEVELOPER_DIR: /Applications/Xcode_26.3.app/Contents/Developer
       OVERLAY_BASE_PACKAGE_IDENTIFIER: ${{ vars.OVERLAY_BASE_PACKAGE_IDENTIFIER }}
       OVERLAY_DEVELOPMENT_TEAM: ${{ vars.OVERLAY_DEVELOPMENT_TEAM }}
       OVERLAY_MACOS_SYSTEM_PROFILE_SPECIFIER: ${{ vars.OVERLAY_MACOS_SYSTEM_PROFILE_SPECIFIER }}
@@ -90,6 +91,7 @@ jobs:
 
       - name: Install build tools
         run: |
+          xcodebuild -version
           if ! command -v xcbeautify >/dev/null 2>&1; then
             brew install xcbeautify
           fi
