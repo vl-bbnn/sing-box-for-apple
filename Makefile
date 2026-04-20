@@ -15,6 +15,7 @@ SFM_SYSTEM_DISTRIBUTION_ARM64 := build/SFM.System-distribution-arm64.xml
 SFM_SYSTEM_DISTRIBUTION_X86_64 := build/SFM.System-distribution-x86_64.xml
 SFM_SYSTEM_DISTRIBUTION_UNIVERSAL := build/SFM.System-distribution-universal.xml
 XCODE_AUTH_FLAGS :=
+XCODE_EXTRA_FLAGS :=
 IOS_ARCHIVE_FLAGS := APP_SHORTCUTS_ENABLE_FLEXIBLE_MATCHING=NO
 XCODE_ERROR_FILTER := grep -nE "error:|warning:|AppIntentsSSUTraining|The following build commands failed" || true
 
@@ -22,6 +23,10 @@ ifneq ($(strip $(ASC_KEY_PATH)$(ASC_KEY_ID)$(ASC_KEY_ISSUER_ID)),)
 XCODE_AUTH_FLAGS += -authenticationKeyPath "$(ASC_KEY_PATH)"
 XCODE_AUTH_FLAGS += -authenticationKeyID "$(ASC_KEY_ID)"
 XCODE_AUTH_FLAGS += -authenticationKeyIssuerID "$(ASC_KEY_ISSUER_ID)"
+endif
+
+ifneq ($(strip $(XCODEBUILD_EXTRA_FLAGS)),)
+XCODE_EXTRA_FLAGS += $(XCODEBUILD_EXTRA_FLAGS)
 endif
 
 $(SFM_SYSTEM_EXPORT_PLIST): SFM.System/Export.plist.in $(OVERLAY_CONFIG)
@@ -77,20 +82,20 @@ release_ios: archive_ios upload_ios
 archive_ios:
 	rm -rf build/SFI.xcarchive build/archive_ios.log
 	mkdir -p build
-	set -o pipefail; xcodebuild archive -scheme SFI -configuration Release -destination 'generic/platform=iOS' -archivePath build/SFI.xcarchive -allowProvisioningUpdates $(XCODE_AUTH_FLAGS) $(IOS_ARCHIVE_FLAGS) 2>&1 | tee build/archive_ios.log | xcbeautify | grep -A 10 -e "Archive Succeeded" -e "ARCHIVE FAILED" -e "❌" || { status=$$?; echo "---- raw xcodebuild diagnostics (archive_ios) ----"; bash -lc '$(XCODE_ERROR_FILTER)' < build/archive_ios.log; echo "---- raw xcodebuild tail (archive_ios) ----"; tail -n 200 build/archive_ios.log; exit $$status; }
+	set -o pipefail; xcodebuild archive -scheme SFI -configuration Release -destination 'generic/platform=iOS' -archivePath build/SFI.xcarchive -allowProvisioningUpdates $(XCODE_AUTH_FLAGS) $(XCODE_EXTRA_FLAGS) $(IOS_ARCHIVE_FLAGS) 2>&1 | tee build/archive_ios.log | xcbeautify | grep -A 10 -e "Archive Succeeded" -e "ARCHIVE FAILED" -e "❌" || { status=$$?; echo "---- raw xcodebuild diagnostics (archive_ios) ----"; bash -lc '$(XCODE_ERROR_FILTER)' < build/archive_ios.log; echo "---- raw xcodebuild tail (archive_ios) ----"; tail -n 200 build/archive_ios.log; exit $$status; }
 
 upload_ios:
-	set -o pipefail; xcodebuild -exportArchive -archivePath build/SFI.xcarchive -exportOptionsPlist SFI/Upload.plist -allowProvisioningUpdates $(XCODE_AUTH_FLAGS) 2>&1 | tee build/upload_ios.log
+	set -o pipefail; xcodebuild -exportArchive -archivePath build/SFI.xcarchive -exportOptionsPlist SFI/Upload.plist -allowProvisioningUpdates $(XCODE_AUTH_FLAGS) $(XCODE_EXTRA_FLAGS) 2>&1 | tee build/upload_ios.log
 
 release_macos: archive_macos upload_macos
 
 archive_macos:
 	rm -rf build/SFM.xcarchive build/archive_macos.log
 	mkdir -p build
-	set -o pipefail; xcodebuild archive -scheme SFM -configuration Release -archivePath build/SFM.xcarchive -allowProvisioningUpdates $(XCODE_AUTH_FLAGS) 2>&1 | tee build/archive_macos.log | xcbeautify | grep -A 10 -e "Archive Succeeded" -e "ARCHIVE FAILED" -e "❌" || { status=$$?; echo "---- raw xcodebuild tail (archive_macos) ----"; tail -n 200 build/archive_macos.log; exit $$status; }
+	set -o pipefail; xcodebuild archive -scheme SFM -configuration Release -archivePath build/SFM.xcarchive -allowProvisioningUpdates $(XCODE_AUTH_FLAGS) $(XCODE_EXTRA_FLAGS) 2>&1 | tee build/archive_macos.log | xcbeautify | grep -A 10 -e "Archive Succeeded" -e "ARCHIVE FAILED" -e "❌" || { status=$$?; echo "---- raw xcodebuild tail (archive_macos) ----"; tail -n 200 build/archive_macos.log; exit $$status; }
 
 upload_macos:
-	set -o pipefail; xcodebuild -exportArchive -archivePath build/SFM.xcarchive -exportOptionsPlist SFI/Upload.plist -allowProvisioningUpdates $(XCODE_AUTH_FLAGS) 2>&1 | tee build/upload_macos.log
+	set -o pipefail; xcodebuild -exportArchive -archivePath build/SFM.xcarchive -exportOptionsPlist SFI/Upload.plist -allowProvisioningUpdates $(XCODE_AUTH_FLAGS) $(XCODE_EXTRA_FLAGS) 2>&1 | tee build/upload_macos.log
 
 release_tvos: archive_tvos upload_tvos
 

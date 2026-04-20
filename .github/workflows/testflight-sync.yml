@@ -158,6 +158,7 @@ jobs:
     timeout-minutes: 90
     env:
       DEVELOPER_DIR: /Applications/Xcode_26.3.app/Contents/Developer
+      XCODEBUILD_EXTRA_FLAGS: -skipPackagePluginValidation
       ENABLE_LOCAL_SIGNING_ASSETS: ${{ vars.ENABLE_LOCAL_SIGNING_ASSETS }}
       OVERLAY_BASE_PACKAGE_IDENTIFIER: ${{ vars.OVERLAY_BASE_PACKAGE_IDENTIFIER }}
       OVERLAY_DEVELOPMENT_TEAM: ${{ vars.OVERLAY_DEVELOPMENT_TEAM }}
@@ -326,6 +327,7 @@ jobs:
     timeout-minutes: 90
     env:
       DEVELOPER_DIR: /Applications/Xcode_26.3.app/Contents/Developer
+      XCODEBUILD_EXTRA_FLAGS: -skipPackagePluginValidation
       ENABLE_LOCAL_SIGNING_ASSETS: ${{ vars.ENABLE_LOCAL_SIGNING_ASSETS }}
       OVERLAY_BASE_PACKAGE_IDENTIFIER: ${{ vars.OVERLAY_BASE_PACKAGE_IDENTIFIER }}
       OVERLAY_DEVELOPMENT_TEAM: ${{ vars.OVERLAY_DEVELOPMENT_TEAM }}
