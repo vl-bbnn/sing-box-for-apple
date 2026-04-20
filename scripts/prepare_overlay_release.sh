@@ -30,8 +30,42 @@ write_output() {
 	printf '%s=%s\n' "$key" "$value"
 }
 
+resolve_project_version_conflict() {
+	local overlay_commit="$1"
+	local conflicted_paths
+
+	conflicted_paths="$(git diff --name-only --diff-filter=U || true)"
+	if [[ "$version_changed" != "true" || "$conflicted_paths" != "$project_file" ]]; then
+		return 1
+	fi
+
+	git checkout "$overlay_commit" -- "$project_file"
+	python3 - "$project_file" "$current_version" "$upstream_version" <<'PY'
+from pathlib import Path
+import sys
+
+path = Path(sys.argv[1])
+current_version = sys.argv[2]
+upstream_version = sys.argv[3]
+old = f'MARKETING_VERSION = "{current_version}";'
+new = f'MARKETING_VERSION = "{upstream_version}";'
+text = path.read_text()
+if old not in text:
+    raise SystemExit(f"expected {old!r} in {path}")
+path.write_text(text.replace(old, new))
+PY
+	git add "$project_file"
+	git cherry-pick --continue >/dev/null
+}
+
 git fetch "$origin_remote" main overlay --prune
 git fetch "$upstream_remote" main --prune
+if ! git config user.name >/dev/null; then
+	git config user.name "${GIT_AUTHOR_NAME:-github-actions[bot]}"
+fi
+if ! git config user.email >/dev/null; then
+	git config user.email "${GIT_AUTHOR_EMAIL:-41898282+github-actions[bot]@users.noreply.github.com}"
+fi
 
 current_main_sha="$(git rev-parse "$origin_remote/main")"
 current_overlay_sha="$(git rev-parse "$origin_remote/overlay")"
@@ -90,7 +124,13 @@ git branch -f main "$upstream_remote/main" >/dev/null
 git checkout -B "$tmp_branch" "$upstream_remote/main" >/dev/null
 while IFS= read -r overlay_commit; do
 	[[ -n "$overlay_commit" ]] || continue
-	git cherry-pick --no-edit "$overlay_commit" >/dev/null
+	if ! git cherry-pick --no-edit "$overlay_commit" >/dev/null 2>&1; then
+		if ! resolve_project_version_conflict "$overlay_commit"; then
+			git cherry-pick --abort >/dev/null 2>&1 || true
+			echo "failed to cherry-pick overlay commit $overlay_commit" >&2
+			exit 1
+		fi
+	fi
 done <<< "$overlay_commits"
 
 new_overlay_sha="$(git rev-parse HEAD)"

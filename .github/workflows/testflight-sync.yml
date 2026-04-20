@@ -18,6 +18,10 @@ concurrency:
   group: testflight-sync
   cancel-in-progress: false
 
+env:
+  LIBBOX_APPLE_PLATFORMS: ios,macos
+  LIBBOX_APPLE_PLATFORMS_CACHE_KEY: ios-macos
+
 jobs:
   detect-release:
     runs-on: ubuntu-latest
@@ -78,6 +82,12 @@ jobs:
           fetch-depth: 0
           submodules: recursive
 
+      - name: Setup Go
+        uses: actions/setup-go@v6
+        with:
+          go-version: ~1.25.9
+          cache: false
+
       - name: Install build tools
         run: |
           if ! command -v xcbeautify >/dev/null 2>&1; then
@@ -129,6 +139,46 @@ jobs:
         run: |
           git submodule sync --recursive
           git submodule update --init --recursive
+
+      - name: Restore Go libbox cache
+        id: cache-go-libbox
+        uses: actions/cache/restore@v5
+        with:
+          path: |
+            ~/go/pkg/mod
+            ~/Library/Caches/go-build
+            ~/Library/Caches/gomobile
+          key: ${{ runner.os }}-go-libbox-${{ needs.detect-release.outputs.new_version }}
+          restore-keys: |
+            ${{ runner.os }}-go-libbox-
+
+      - name: Restore Libbox.xcframework cache
+        id: cache-libbox-xcframework
+        uses: actions/cache/restore@v5
+        with:
+          path: Libbox.xcframework
+          key: ${{ runner.os }}-libbox-xcframework-${{ env.LIBBOX_APPLE_PLATFORMS_CACHE_KEY }}-${{ needs.detect-release.outputs.new_version }}
+
+      - name: Build Libbox.xcframework
+        if: steps.cache-libbox-xcframework.outputs.cache-hit != 'true'
+        run: bash ./scripts/build_libbox.sh "${{ needs.detect-release.outputs.new_version }}" "$GITHUB_WORKSPACE/Libbox.xcframework"
+
+      - name: Save Go libbox cache
+        if: steps.cache-go-libbox.outputs.cache-hit != 'true'
+        uses: actions/cache/save@v5
+        with:
+          path: |
+            ~/go/pkg/mod
+            ~/Library/Caches/go-build
+            ~/Library/Caches/gomobile
+          key: ${{ steps.cache-go-libbox.outputs.cache-primary-key }}
+
+      - name: Save Libbox.xcframework cache
+        if: steps.cache-libbox-xcframework.outputs.cache-hit != 'true'
+        uses: actions/cache/save@v5
+        with:
+          path: Libbox.xcframework
+          key: ${{ steps.cache-libbox-xcframework.outputs.cache-primary-key }}
 
       - name: Install signing assets
         run: ./scripts/install_apple_signing_assets.sh

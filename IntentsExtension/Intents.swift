@@ -193,36 +193,69 @@ class RemoteProfileProvider: DynamicOptionsProvider {
 }
 
 struct ServiceShortcuts: AppShortcutsProvider {
+    private static let startPhrases: [AppShortcutPhrase<StartServiceIntent>] = ["Start \(.applicationName)"]
+    private static let stopPhrases: [AppShortcutPhrase<StopServiceIntent>] = ["Stop \(.applicationName)"]
+    private static let restartPhrases: [AppShortcutPhrase<RestartServiceIntent>] = ["Restart \(.applicationName)"]
+    private static let togglePhrases: [AppShortcutPhrase<ToggleServiceIntent>] = ["Toggle \(.applicationName)"]
+    private static let updatePhrases: [AppShortcutPhrase<UpdateProfileIntent>] = ["Update \(.applicationName) profile"]
+
     static var appShortcuts: [AppShortcut] {
-        AppShortcut(
-            intent: StartServiceIntent(),
-            phrases: ["Start \(.applicationName)"],
-            shortTitle: "Start",
-            systemImageName: "power"
-        )
-        AppShortcut(
-            intent: StopServiceIntent(),
-            phrases: ["Stop \(.applicationName)"],
-            shortTitle: "Stop",
-            systemImageName: "stop.fill"
-        )
-        AppShortcut(
-            intent: RestartServiceIntent(),
-            phrases: ["Restart \(.applicationName)"],
-            shortTitle: "Restart",
-            systemImageName: "arrow.clockwise"
-        )
-        AppShortcut(
-            intent: ToggleServiceIntent(),
-            phrases: ["Toggle \(.applicationName)"],
-            shortTitle: "Toggle",
-            systemImageName: "arrow.triangle.2.circlepath"
-        )
-        AppShortcut(
-            intent: UpdateProfileIntent(),
-            phrases: ["Update \(.applicationName) profile"],
-            shortTitle: "Update Profile",
-            systemImageName: "arrow.down.circle"
-        )
+        if #available(iOS 17.0, *) {
+            return [
+                AppShortcut(
+                    intent: StartServiceIntent(),
+                    phrases: startPhrases,
+                    shortTitle: "Start",
+                    systemImageName: "power"
+                ),
+                AppShortcut(
+                    intent: StopServiceIntent(),
+                    phrases: stopPhrases,
+                    shortTitle: "Stop",
+                    systemImageName: "stop.fill"
+                ),
+                AppShortcut(
+                    intent: RestartServiceIntent(),
+                    phrases: restartPhrases,
+                    shortTitle: "Restart",
+                    systemImageName: "arrow.clockwise"
+                ),
+                AppShortcut(
+                    intent: ToggleServiceIntent(),
+                    phrases: togglePhrases,
+                    shortTitle: "Toggle",
+                    systemImageName: "arrow.triangle.2.circlepath"
+                ),
+                AppShortcut(
+                    intent: UpdateProfileIntent(),
+                    phrases: updatePhrases,
+                    shortTitle: "Update Profile",
+                    systemImageName: "arrow.down.circle"
+                ),
+            ]
+        } else {
+            return [
+                AppShortcut(
+                    intent: StartServiceIntent(),
+                    phrases: startPhrases
+                ),
+                AppShortcut(
+                    intent: StopServiceIntent(),
+                    phrases: stopPhrases
+                ),
+                AppShortcut(
+                    intent: RestartServiceIntent(),
+                    phrases: restartPhrases
+                ),
+                AppShortcut(
+                    intent: ToggleServiceIntent(),
+                    phrases: togglePhrases
+                ),
+                AppShortcut(
+                    intent: UpdateProfileIntent(),
+                    phrases: updatePhrases
+                ),
+            ]
+        }
     }
 }

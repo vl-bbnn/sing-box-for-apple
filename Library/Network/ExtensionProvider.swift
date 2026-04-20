@@ -197,7 +197,7 @@ open class ExtensionProvider: NEPacketTunnelProvider {
         #endif
         #if os(iOS)
             if #available(iOS 18.0, *) {
-                ControlCenter.shared.reloadControls(ofKind: ExtensionProfile.controlKind)
+                await ControlCenter.shared.reloadControls(ofKind: ExtensionProfile.controlKind)
             }
         #endif
     }
