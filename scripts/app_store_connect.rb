@@ -15,6 +15,7 @@ class AppStoreConnectClient
     @key_id = key_id
     @issuer_id = issuer_id
     @private_key = OpenSSL::PKey.read(File.read(key_path))
+    @token_mode = :auto
   end
 
   def publish_testflight(bundle_id:, platform:, version:, beta_group_id:, whats_new:, locale:, timeout:)
@@ -27,10 +28,15 @@ class AppStoreConnectClient
 
   private
 
-  def token
+  def token(mode = @token_mode)
     now = Time.now.to_i
     header = { alg: "ES256", kid: @key_id, typ: "JWT" }
-    payload = { iss: @issuer_id, aud: "appstoreconnect-v1", exp: now + 20 * 60 }
+    payload = case mode
+              when :individual
+                { sub: "user", aud: "appstoreconnect-v1", iat: now, exp: now + 20 * 60 }
+              else
+                { iss: @issuer_id, aud: "appstoreconnect-v1", iat: now, exp: now + 20 * 60 }
+              end
     unsigned = [header, payload].map { |part| base64url(JSON.generate(part)) }.join(".")
     signature = @private_key.dsa_sign_asn1(OpenSSL::Digest::SHA256.digest(unsigned))
     "#{unsigned}.#{base64url(signature)}"
@@ -54,21 +60,36 @@ class AppStoreConnectClient
                       raise "unsupported method: #{method}"
                     end
 
-    req = request_class.new(uri)
-    req["Authorization"] = "Bearer #{token}"
-    req["Accept"] = "application/json"
-    if body
-      req["Content-Type"] = "application/json"
-      req.body = JSON.generate(body)
-    end
+    modes = case @token_mode
+            when :auto then [:team, :individual]
+            else [@token_mode]
+            end
 
-    response = http.request(req)
-    unless allowed_statuses.include?(response.code.to_i)
+    last_response = nil
+    modes.each do |mode|
+      req = request_class.new(uri)
+      req["Authorization"] = "Bearer #{token(mode)}"
+      req["Accept"] = "application/json"
+      if body
+        req["Content-Type"] = "application/json"
+        req.body = JSON.generate(body)
+      end
+
+      response = http.request(req)
+      if allowed_statuses.include?(response.code.to_i)
+        @token_mode = mode
+        return nil if response.body.nil? || response.body.empty?
+
+        return JSON.parse(response.body)
+      end
+
+      last_response = response
+      next if response.code.to_i == 401 && @token_mode == :auto
+
       raise "App Store Connect API #{method.upcase} #{uri} failed with #{response.code}: #{response.body}"
     end
-    return nil if response.body.nil? || response.body.empty?
 
-    JSON.parse(response.body)
+    raise "App Store Connect API #{method.upcase} #{uri} failed with #{last_response.code}: #{last_response.body}"
   end
 
   def find_app_id(bundle_id)
