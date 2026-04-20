@@ -124,6 +124,10 @@ jobs:
           test -n "$ASC_KEY_ID"
           test -n "$ASC_KEY_ISSUER_ID"
           test -n "$ASC_KEY_P8"
+          test -n "$BUILD_CERTIFICATE_BASE64"
+          test -n "$P12_PASSWORD"
+          test -n "$KEYCHAIN_PASSWORD"
+          test -n "$APPLE_PROVISIONING_PROFILES_ARCHIVE_BASE64"
 
       - name: Prepare release branch
         id: prepare
