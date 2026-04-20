@@ -26,6 +26,14 @@ class AppStoreConnectClient
     ensure_beta_review_submission(build.fetch("id"))
   end
 
+  def build_exists(bundle_id:, platform:, version:)
+    app_id = find_app_id(bundle_id)
+    build = latest_build(app_id: app_id, platform: platform_filter_value(platform), version: version)
+    return nil unless build
+
+    build
+  end
+
   private
 
   def token(mode = @token_mode)
@@ -247,26 +255,49 @@ end
 command = ARGV.shift
 parser.parse!(ARGV)
 
-unless command == "publish-testflight"
-  raise "unknown command: #{command}"
-end
-
-%i[bundle_id platform version beta_group_id whats_new].each do |key|
-  raise "missing #{key}" if options[key].nil? || options[key].empty?
-end
-
 client = AppStoreConnectClient.new(
   key_id: ENV.fetch("ASC_KEY_ID"),
   issuer_id: ENV.fetch("ASC_KEY_ISSUER_ID"),
   key_path: ENV.fetch("ASC_KEY_PATH")
 )
 
-client.publish_testflight(
-  bundle_id: options[:bundle_id],
-  platform: options[:platform],
-  version: options[:version],
-  beta_group_id: options[:beta_group_id],
-  whats_new: options[:whats_new],
-  locale: options[:locale],
-  timeout: options[:timeout]
-)
+case command
+when "publish-testflight"
+  %i[bundle_id platform version beta_group_id whats_new].each do |key|
+    raise "missing #{key}" if options[key].nil? || options[key].empty?
+  end
+
+  client.publish_testflight(
+    bundle_id: options[:bundle_id],
+    platform: options[:platform],
+    version: options[:version],
+    beta_group_id: options[:beta_group_id],
+    whats_new: options[:whats_new],
+    locale: options[:locale],
+    timeout: options[:timeout]
+  )
+when "build-exists"
+  %i[bundle_id platform version].each do |key|
+    raise "missing #{key}" if options[key].nil? || options[key].empty?
+  end
+
+  build = client.build_exists(
+    bundle_id: options[:bundle_id],
+    platform: options[:platform],
+    version: options[:version]
+  )
+
+  unless build
+    warn "#{options[:platform]} #{options[:version]} build not found for #{options[:bundle_id]}"
+    exit 3
+  end
+
+  puts JSON.generate(
+    id: build.fetch("id"),
+    processingState: build.dig("attributes", "processingState"),
+    uploadedDate: build.dig("attributes", "uploadedDate"),
+    version: build.dig("attributes", "version")
+  )
+else
+  raise "unknown command: #{command}"
+end
