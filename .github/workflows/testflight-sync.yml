@@ -62,14 +62,10 @@ jobs:
     if: needs.detect-release.outputs.should_release == 'true'
     runs-on: ubuntu-latest
     outputs:
-      ios_build_exists: ${{ steps.check-ios-build.outputs.exists }}
-      macos_build_exists: ${{ steps.check-macos-build.outputs.exists }}
+      ios_build_exists: ${{ steps.check-ios-marker.outputs.exists }}
+      macos_build_exists: ${{ steps.check-macos-marker.outputs.exists }}
     env:
-      OVERLAY_BASE_PACKAGE_IDENTIFIER: ${{ vars.OVERLAY_BASE_PACKAGE_IDENTIFIER }}
       OVERLAY_DEVELOPMENT_TEAM: ${{ vars.OVERLAY_DEVELOPMENT_TEAM }}
-      ASC_KEY_ID: ${{ secrets.ASC_KEY_ID }}
-      ASC_KEY_ISSUER_ID: ${{ secrets.ASC_KEY_ISSUER_ID }}
-      ASC_KEY_P8: ${{ secrets.ASC_KEY_P8 }}
     steps:
       - name: Checkout repository
         uses: actions/checkout@v5
@@ -89,21 +85,9 @@ jobs:
           git config user.name "github-actions[bot]"
           git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
 
-      - name: Write App Store Connect API key
-        run: |
-          mkdir -p "$RUNNER_TEMP/asc"
-          ASC_KEY_PATH="$RUNNER_TEMP/asc/AuthKey_${ASC_KEY_ID}.p8"
-          printf '%s' "$ASC_KEY_P8" > "$ASC_KEY_PATH"
-          chmod 600 "$ASC_KEY_PATH"
-          echo "ASC_KEY_PATH=$ASC_KEY_PATH" >> "$GITHUB_ENV"
-
       - name: Validate workflow configuration
         run: |
-          test -n "$OVERLAY_BASE_PACKAGE_IDENTIFIER"
           test -n "$OVERLAY_DEVELOPMENT_TEAM"
-          test -n "$ASC_KEY_ID"
-          test -n "$ASC_KEY_ISSUER_ID"
-          test -n "$ASC_KEY_P8"
 
       - name: Prepare release branch
         run: |
@@ -113,42 +97,32 @@ jobs:
             ./scripts/prepare_overlay_release.sh
           fi
 
-      - name: Check existing iOS build
-        id: check-ios-build
+      - name: Check existing iOS upload marker
+        id: check-ios-marker
         run: |
-          if ruby scripts/app_store_connect.rb build-exists \
-            --bundle-id "$OVERLAY_BASE_PACKAGE_IDENTIFIER" \
-            --platform ios \
-            --version "${{ needs.detect-release.outputs.new_version }}" > /tmp/ios-build.log 2>&1; then
+          if [[ "${{ github.event.inputs.force_release || 'false' }}" == "true" ]]; then
+            echo "exists=false" >> "$GITHUB_OUTPUT"
+            exit 0
+          fi
+          tag="testflight-upload-ios-${{ needs.detect-release.outputs.new_version }}"
+          if git ls-remote --exit-code --tags origin "refs/tags/$tag" >/dev/null 2>&1; then
             echo "exists=true" >> "$GITHUB_OUTPUT"
-            cat /tmp/ios-build.log
           else
-            status=$?
-            cat /tmp/ios-build.log
-            if [[ "$status" == "3" ]]; then
-              echo "exists=false" >> "$GITHUB_OUTPUT"
-            else
-              exit "$status"
-            fi
+            echo "exists=false" >> "$GITHUB_OUTPUT"
           fi
 
-      - name: Check existing macOS build
-        id: check-macos-build
+      - name: Check existing macOS upload marker
+        id: check-macos-marker
         run: |
-          if ruby scripts/app_store_connect.rb build-exists \
-            --bundle-id "$OVERLAY_BASE_PACKAGE_IDENTIFIER" \
-            --platform macos \
-            --version "${{ needs.detect-release.outputs.new_version }}" > /tmp/macos-build.log 2>&1; then
+          if [[ "${{ github.event.inputs.force_release || 'false' }}" == "true" ]]; then
+            echo "exists=false" >> "$GITHUB_OUTPUT"
+            exit 0
+          fi
+          tag="testflight-upload-macos-${{ needs.detect-release.outputs.new_version }}"
+          if git ls-remote --exit-code --tags origin "refs/tags/$tag" >/dev/null 2>&1; then
             echo "exists=true" >> "$GITHUB_OUTPUT"
-            cat /tmp/macos-build.log
           else
-            status=$?
-            cat /tmp/macos-build.log
-            if [[ "$status" == "3" ]]; then
-              echo "exists=false" >> "$GITHUB_OUTPUT"
-            else
-              exit "$status"
-            fi
+            echo "exists=false" >> "$GITHUB_OUTPUT"
           fi
 
   upload-ios:
@@ -285,6 +259,12 @@ jobs:
 
       - name: Upload iOS
         run: make upload_ios
+
+      - name: Mark iOS upload complete
+        run: |
+          tag="testflight-upload-ios-${{ needs.detect-release.outputs.new_version }}"
+          git tag -f "$tag"
+          git push origin "refs/tags/$tag"
 
   publish-ios-group:
     needs: [detect-release, prepare-release, upload-ios]
@@ -454,6 +434,12 @@ jobs:
 
       - name: Upload macOS
         run: make upload_macos
+
+      - name: Mark macOS upload complete
+        run: |
+          tag="testflight-upload-macos-${{ needs.detect-release.outputs.new_version }}"
+          git tag -f "$tag"
+          git push origin "refs/tags/$tag"
 
   publish-macos-group:
     needs: [detect-release, prepare-release, upload-macos]

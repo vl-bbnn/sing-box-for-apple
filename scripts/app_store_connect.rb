@@ -26,14 +26,6 @@ class AppStoreConnectClient
     ensure_beta_review_submission(build.fetch("id"))
   end
 
-  def build_exists(bundle_id:, platform:, version:)
-    app_id = find_app_id(bundle_id)
-    build = latest_build(app_id: app_id, platform: platform_filter_value(platform), version: version)
-    return nil unless build
-
-    build
-  end
-
   private
 
   def token(mode = @token_mode)
@@ -275,28 +267,6 @@ when "publish-testflight"
     whats_new: options[:whats_new],
     locale: options[:locale],
     timeout: options[:timeout]
-  )
-when "build-exists"
-  %i[bundle_id platform version].each do |key|
-    raise "missing #{key}" if options[key].nil? || options[key].empty?
-  end
-
-  build = client.build_exists(
-    bundle_id: options[:bundle_id],
-    platform: options[:platform],
-    version: options[:version]
-  )
-
-  unless build
-    warn "#{options[:platform]} #{options[:version]} build not found for #{options[:bundle_id]}"
-    exit 3
-  end
-
-  puts JSON.generate(
-    id: build.fetch("id"),
-    processingState: build.dig("attributes", "processingState"),
-    uploadedDate: build.dig("attributes", "uploadedDate"),
-    version: build.dig("attributes", "version")
   )
 else
   raise "unknown command: #{command}"
