@@ -187,13 +187,15 @@ jobs:
         if: env.ENABLE_LOCAL_SIGNING_ASSETS == 'true'
         run: ./scripts/install_apple_signing_assets.sh
 
-      - name: Archive and upload iOS
-        run: |
-          make archive_ios
-          make upload_ios
+      - name: Archive iOS
+        run: make archive_ios
 
-      - name: Publish iOS build to TestFlight
+      - name: Upload iOS
+        run: make upload_ios
+
+      - name: Publish iOS build to TestFlight group
         if: env.ASC_BETA_GROUP_ID != ''
+        continue-on-error: true
         run: |
           ruby scripts/app_store_connect.rb publish-testflight \
             --bundle-id "$OVERLAY_BASE_PACKAGE_IDENTIFIER" \
@@ -202,13 +204,15 @@ jobs:
             --beta-group-id "$ASC_BETA_GROUP_ID" \
             --whats-new "sing-box ${{ needs.detect-release.outputs.new_version }}"
 
-      - name: Archive and upload macOS
-        run: |
-          make archive_macos
-          make upload_macos
+      - name: Archive macOS
+        run: make archive_macos
 
-      - name: Publish macOS build to TestFlight
+      - name: Upload macOS
+        run: make upload_macos
+
+      - name: Publish macOS build to TestFlight group
         if: env.ASC_BETA_GROUP_ID != ''
+        continue-on-error: true
         run: |
           ruby scripts/app_store_connect.rb publish-testflight \
             --bundle-id "$OVERLAY_BASE_PACKAGE_IDENTIFIER" \
