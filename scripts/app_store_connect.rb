@@ -22,6 +22,8 @@ class AppStoreConnectClient
     app_id = find_app_id(bundle_id)
     build = wait_for_valid_build(app_id: app_id, platform: platform, version: version, timeout: timeout)
     update_localization(build.fetch("id"), locale: locale, whats_new: whats_new)
+    return if beta_group_id.nil? || beta_group_id.empty?
+
     add_build_to_beta_group(beta_group_id: beta_group_id, build_id: build.fetch("id"))
     ensure_beta_review_submission(build.fetch("id"))
   end
@@ -164,7 +166,30 @@ class AppStoreConnectClient
       }
     )
     localization = response.fetch("data", []).find { |item| item.dig("attributes", "locale") == locale }
-    return unless localization
+    unless localization
+      request(
+        :post,
+        "/v1/betaBuildLocalizations",
+        body: {
+          data: {
+            type: "betaBuildLocalizations",
+            attributes: {
+              locale: locale,
+              whatsNew: whats_new
+            },
+            relationships: {
+              build: {
+                data: {
+                  type: "builds",
+                  id: build_id
+                }
+              }
+            }
+          }
+        }
+      )
+      return
+    end
 
     current = localization.dig("attributes", "whatsNew")
     return if current == whats_new
@@ -255,7 +280,7 @@ client = AppStoreConnectClient.new(
 
 case command
 when "publish-testflight"
-  %i[bundle_id platform version beta_group_id whats_new].each do |key|
+  %i[bundle_id platform version whats_new].each do |key|
     raise "missing #{key}" if options[key].nil? || options[key].empty?
   end
 
