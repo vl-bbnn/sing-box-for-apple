@@ -134,7 +134,11 @@ subjects = subprocess.check_output(
     ["git", "log", "--reverse", "--pretty=format:%s", f"{current_main_sha}..{upstream_sha}"],
     text=True,
 ).splitlines()
-subjects = [subject.strip() for subject in subjects if subject.strip()]
+subjects = [
+    subject.strip()
+    for subject in subjects
+    if subject.strip() and not subject.strip().lower().startswith("bump version")
+]
 
 header = f"sing-box {version}"
 if not subjects:
