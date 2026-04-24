@@ -30,6 +30,20 @@ write_output() {
 	printf '%s=%s\n' "$key" "$value"
 }
 
+write_multiline_output() {
+	local key="$1"
+	local value="$2"
+	local delimiter="EOF_$(date +%s%N)"
+	if [[ -n "${GITHUB_OUTPUT:-}" ]]; then
+		{
+			printf '%s<<%s\n' "$key" "$delimiter"
+			printf '%s\n' "$value"
+			printf '%s\n' "$delimiter"
+		} >> "$GITHUB_OUTPUT"
+	fi
+	printf '%s:\n%s\n' "$key" "$value"
+}
+
 resolve_project_version_conflict() {
 	local overlay_commit="$1"
 	local conflicted_paths
@@ -91,6 +105,7 @@ upstream_changed=false
 version_changed=false
 should_release=false
 should_push=false
+release_notes=""
 
 if [[ "$upstream_sha" != "$current_main_sha" ]]; then
 	upstream_changed=true
@@ -105,6 +120,40 @@ if [[ "$force" == true || ( "$upstream_changed" == true && "$version_changed" ==
 	should_release=true
 fi
 
+release_notes="$(
+	VERSION="$upstream_version" CURRENT_MAIN_SHA="$current_main_sha" UPSTREAM_SHA="$upstream_sha" python3 <<'PY'
+import os
+import subprocess
+
+version = os.environ["VERSION"]
+current_main_sha = os.environ["CURRENT_MAIN_SHA"]
+upstream_sha = os.environ["UPSTREAM_SHA"]
+max_length = 3900
+
+subjects = subprocess.check_output(
+    ["git", "log", "--reverse", "--pretty=format:%s", f"{current_main_sha}..{upstream_sha}"],
+    text=True,
+).splitlines()
+subjects = [subject.strip() for subject in subjects if subject.strip()]
+
+header = f"sing-box {version}"
+if not subjects:
+    print(header)
+    raise SystemExit(0)
+
+notes = f"{header}\n\nChanges:"
+for subject in subjects:
+    line = f"\n- {subject}"
+    if len(notes) + len(line) > max_length:
+        if len(notes) + len("\n- ...") <= max_length:
+            notes += "\n- ..."
+        break
+    notes += line
+
+print(notes)
+PY
+)"
+
 write_output current_main_sha "$current_main_sha"
 write_output current_overlay_sha "$current_overlay_sha"
 write_output upstream_sha "$upstream_sha"
@@ -115,6 +164,7 @@ write_output upstream_changed "$upstream_changed"
 write_output version_changed "$version_changed"
 write_output should_release "$should_release"
 write_output should_push "$should_push"
+write_multiline_output release_notes "$release_notes"
 
 if [[ "$should_release" != "true" ]]; then
 	exit 0
