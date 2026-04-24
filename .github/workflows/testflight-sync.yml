@@ -30,6 +30,7 @@ jobs:
       should_push: ${{ steps.prepare.outputs.should_push }}
       upstream_sha: ${{ steps.prepare.outputs.upstream_sha }}
       new_version: ${{ steps.prepare.outputs.new_version }}
+      release_notes: ${{ steps.prepare.outputs.release_notes }}
     steps:
       - name: Checkout repository
         uses: actions/checkout@v5
@@ -276,12 +277,12 @@ jobs:
       ASC_KEY_ISSUER_ID: ${{ secrets.ASC_KEY_ISSUER_ID }}
       ASC_KEY_P8: ${{ secrets.ASC_KEY_P8 }}
       ASC_BETA_GROUP_ID: ${{ secrets.ASC_BETA_GROUP_ID }}
+      TESTFLIGHT_WHATS_NEW: ${{ needs.detect-release.outputs.release_notes }}
     steps:
       - name: Checkout repository
         uses: actions/checkout@v5
 
       - name: Write App Store Connect API key
-        if: env.ASC_BETA_GROUP_ID != ''
         run: |
           mkdir -p "$RUNNER_TEMP/asc"
           ASC_KEY_PATH="$RUNNER_TEMP/asc/AuthKey_${ASC_KEY_ID}.p8"
@@ -289,16 +290,20 @@ jobs:
           chmod 600 "$ASC_KEY_PATH"
           echo "ASC_KEY_PATH=$ASC_KEY_PATH" >> "$GITHUB_ENV"
 
-      - name: Publish iOS build to TestFlight group
-        if: env.ASC_BETA_GROUP_ID != ''
+      - name: Publish iOS TestFlight metadata
         continue-on-error: true
         run: |
-          ruby scripts/app_store_connect.rb publish-testflight \
-            --bundle-id "$OVERLAY_BASE_PACKAGE_IDENTIFIER" \
-            --platform ios \
-            --version "${{ needs.detect-release.outputs.new_version }}" \
-            --beta-group-id "$ASC_BETA_GROUP_ID" \
-            --whats-new "sing-box ${{ needs.detect-release.outputs.new_version }}"
+          cmd=(
+            ruby scripts/app_store_connect.rb publish-testflight
+            --bundle-id "$OVERLAY_BASE_PACKAGE_IDENTIFIER"
+            --platform ios
+            --version "${{ needs.detect-release.outputs.new_version }}"
+            --whats-new "$TESTFLIGHT_WHATS_NEW"
+          )
+          if [[ -n "$ASC_BETA_GROUP_ID" ]]; then
+            cmd+=(--beta-group-id "$ASC_BETA_GROUP_ID")
+          fi
+          "${cmd[@]}"
 
   upload-macos:
     needs: [detect-release, prepare-release]
@@ -451,12 +456,12 @@ jobs:
       ASC_KEY_ISSUER_ID: ${{ secrets.ASC_KEY_ISSUER_ID }}
       ASC_KEY_P8: ${{ secrets.ASC_KEY_P8 }}
       ASC_BETA_GROUP_ID: ${{ secrets.ASC_BETA_GROUP_ID }}
+      TESTFLIGHT_WHATS_NEW: ${{ needs.detect-release.outputs.release_notes }}
     steps:
       - name: Checkout repository
         uses: actions/checkout@v5
 
       - name: Write App Store Connect API key
-        if: env.ASC_BETA_GROUP_ID != ''
         run: |
           mkdir -p "$RUNNER_TEMP/asc"
           ASC_KEY_PATH="$RUNNER_TEMP/asc/AuthKey_${ASC_KEY_ID}.p8"
@@ -464,16 +469,20 @@ jobs:
           chmod 600 "$ASC_KEY_PATH"
           echo "ASC_KEY_PATH=$ASC_KEY_PATH" >> "$GITHUB_ENV"
 
-      - name: Publish macOS build to TestFlight group
-        if: env.ASC_BETA_GROUP_ID != ''
+      - name: Publish macOS TestFlight metadata
         continue-on-error: true
         run: |
-          ruby scripts/app_store_connect.rb publish-testflight \
-            --bundle-id "$OVERLAY_BASE_PACKAGE_IDENTIFIER" \
-            --platform macos \
-            --version "${{ needs.detect-release.outputs.new_version }}" \
-            --beta-group-id "$ASC_BETA_GROUP_ID" \
-            --whats-new "sing-box ${{ needs.detect-release.outputs.new_version }}"
+          cmd=(
+            ruby scripts/app_store_connect.rb publish-testflight
+            --bundle-id "$OVERLAY_BASE_PACKAGE_IDENTIFIER"
+            --platform macos
+            --version "${{ needs.detect-release.outputs.new_version }}"
+            --whats-new "$TESTFLIGHT_WHATS_NEW"
+          )
+          if [[ -n "$ASC_BETA_GROUP_ID" ]]; then
+            cmd+=(--beta-group-id "$ASC_BETA_GROUP_ID")
+          fi
+          "${cmd[@]}"
 
   finalize-release:
     needs: [detect-release, prepare-release, upload-ios, upload-macos]
