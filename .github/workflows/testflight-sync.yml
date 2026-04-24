@@ -508,5 +508,20 @@ jobs:
 
       - name: Push synced branches
         run: |
-          git push origin "${{ needs.detect-release.outputs.upstream_sha }}:refs/heads/main"
-          git push --force-with-lease origin HEAD:refs/heads/overlay
+          git fetch origin main overlay --prune
+
+          upstream_sha="${{ needs.detect-release.outputs.upstream_sha }}"
+          remote_main="$(git rev-parse origin/main)"
+          remote_overlay="$(git rev-parse origin/overlay)"
+
+          if [[ "$remote_main" == "$upstream_sha" ]]; then
+            echo "origin/main already points to $upstream_sha"
+          elif git merge-base --is-ancestor "$remote_main" "$upstream_sha"; then
+            git push origin "$upstream_sha:refs/heads/main"
+          elif git merge-base --is-ancestor "$upstream_sha" "$remote_main"; then
+            echo "origin/main already contains $upstream_sha; skipping main push"
+          else
+            git push --force-with-lease=refs/heads/main:"$remote_main" origin "$upstream_sha:refs/heads/main"
+          fi
+
+          git push --force-with-lease=refs/heads/overlay:"$remote_overlay" origin HEAD:refs/heads/overlay
