@@ -84,6 +84,17 @@ fi
 current_main_sha="$(git rev-parse "$origin_remote/main")"
 current_overlay_sha="$(git rev-parse "$origin_remote/overlay")"
 upstream_sha="$(git rev-parse "$upstream_remote/main")"
+checked_out_sha="$(git rev-parse HEAD)"
+release_overlay_ref="$origin_remote/overlay"
+
+if [[ "${GITHUB_EVENT_NAME:-}" == "workflow_dispatch" && "$checked_out_sha" != "$current_overlay_sha" ]]; then
+	if git merge-base --is-ancestor "$origin_remote/main" "$checked_out_sha"; then
+		release_overlay_ref="$checked_out_sha"
+		current_overlay_sha="$checked_out_sha"
+	else
+		echo "workflow_dispatch ref $checked_out_sha is not based on $origin_remote/main; using $origin_remote/overlay" >&2
+	fi
+fi
 
 current_version="$(
 	git show "$origin_remote/main:$project_file" \
@@ -94,13 +105,13 @@ upstream_version="$(
 	| python3 scripts/read_apple_project_setting.py --stdin --infoplist SFI/Info.plist --setting MARKETING_VERSION
 )"
 
-overlay_commit_count="$(git rev-list --count "$origin_remote/main..$origin_remote/overlay")"
+overlay_commit_count="$(git rev-list --count "$origin_remote/main..$release_overlay_ref")"
 if [[ "$overlay_commit_count" == "0" ]]; then
-	echo "expected origin/overlay to contain overlay commits relative to origin/main" >&2
+	echo "expected $release_overlay_ref to contain overlay commits relative to origin/main" >&2
 	exit 1
 fi
 
-overlay_commits="$(git rev-list --reverse "$origin_remote/main..$origin_remote/overlay")"
+overlay_commits="$(git rev-list --reverse "$origin_remote/main..$release_overlay_ref")"
 upstream_changed=false
 version_changed=false
 should_release=false
