@@ -110,10 +110,6 @@ jobs:
       - name: Check existing iOS upload marker
         id: check-ios-marker
         run: |
-          if [[ "${{ github.event.inputs.force_release || 'false' }}" == "true" ]]; then
-            echo "exists=false" >> "$GITHUB_OUTPUT"
-            exit 0
-          fi
           tag="testflight-upload-ios-${{ needs.detect-release.outputs.new_version }}"
           if git ls-remote --exit-code --tags origin "refs/tags/$tag" >/dev/null 2>&1; then
             echo "exists=true" >> "$GITHUB_OUTPUT"
@@ -124,10 +120,6 @@ jobs:
       - name: Check existing macOS upload marker
         id: check-macos-marker
         run: |
-          if [[ "${{ github.event.inputs.force_release || 'false' }}" == "true" ]]; then
-            echo "exists=false" >> "$GITHUB_OUTPUT"
-            exit 0
-          fi
           tag="testflight-upload-macos-${{ needs.detect-release.outputs.new_version }}"
           if git ls-remote --exit-code --tags origin "refs/tags/$tag" >/dev/null 2>&1; then
             echo "exists=true" >> "$GITHUB_OUTPUT"
