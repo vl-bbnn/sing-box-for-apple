@@ -125,7 +125,7 @@ public class LogDataModel: ObservableObject {
     }
 
     public func getLogsText() -> String {
-        filteredLogs.map(\.message).joined(separator: "\n")
+        filteredLogs.map { ANSIColors.stripAnsiCodes($0.message) }.joined(separator: "\n")
     }
 
     #if !os(tvOS)
@@ -150,17 +150,21 @@ public class LogDataModel: ObservableObject {
             try? FileManager.default.removeItem(at: url)
         }
 
-        public func prepareLogFile() {
+        @discardableResult
+        public func prepareLogFile() -> Bool {
             cleanupLogFile()
             do {
                 let text = getLogsText()
                 let dateString = Self.dateFormatter.string(from: Date())
-                let tempDirectory = FileManager.default.temporaryDirectory
-                let fileURL = tempDirectory.appendingPathComponent("logs-\(dateString).txt")
+                let exportDirectory = FilePath.cacheDirectory
+                try FileManager.default.createDirectory(at: exportDirectory, withIntermediateDirectories: true)
+                let fileURL = exportDirectory.appendingPathComponent("logs-\(dateString).txt")
                 try text.write(to: fileURL, atomically: true, encoding: .utf8)
                 logFileURL = fileURL
+                return true
             } catch {
                 viewModel?.alert = AlertState(action: "prepare log file", error: error)
+                return false
             }
         }
     #endif
@@ -168,7 +172,7 @@ public class LogDataModel: ObservableObject {
 
 @MainActor
 public class LogViewModel: BaseViewModel {
-    @Published public var selectedLogLevel: Int?
+    @Published public private(set) var selectedLogLevel: Int?
     @Published public var isPaused = false
     @Published public var searchText = ""
     @Published public var isSearching = false
@@ -181,7 +185,13 @@ public class LogViewModel: BaseViewModel {
         self.searchText = searchText
         isSearching = !searchText.isEmpty
         super.init()
+        selectedLogLevel = commandClient.selectedLogLevel
         dataModel = LogDataModel(commandClient: commandClient, viewModel: self)
+    }
+
+    public func selectLogLevel(_ level: Int?) {
+        selectedLogLevel = level
+        commandClient.selectedLogLevel = level
     }
 
     public func togglePause() {
