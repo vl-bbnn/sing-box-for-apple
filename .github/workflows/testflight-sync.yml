@@ -8,6 +8,15 @@ on:
         required: false
         default: false
         type: boolean
+      platform:
+        description: Platform to build and upload
+        required: false
+        default: all
+        type: choice
+        options:
+          - all
+          - ios
+          - macos
   schedule:
     - cron: "0 0 * * *"
 
@@ -128,7 +137,7 @@ jobs:
 
   upload-ios:
     needs: [detect-release, prepare-release]
-    if: needs.detect-release.outputs.should_release == 'true' && needs.prepare-release.outputs.ios_build_exists != 'true'
+    if: needs.detect-release.outputs.should_release == 'true' && needs.prepare-release.outputs.ios_build_exists != 'true' && (github.event_name != 'workflow_dispatch' || github.event.inputs.platform == 'all' || github.event.inputs.platform == 'ios')
     runs-on: macos-latest
     timeout-minutes: 90
     env:
@@ -265,11 +274,11 @@ jobs:
         run: |
           tag="testflight-upload-ios-${{ needs.detect-release.outputs.new_version }}"
           git tag -f "$tag"
-          git push origin "refs/tags/$tag"
+          git push --force-with-lease origin "refs/tags/$tag"
 
   publish-ios-group:
     needs: [detect-release, prepare-release, upload-ios]
-    if: needs.detect-release.outputs.should_release == 'true' && (needs.prepare-release.outputs.ios_build_exists == 'true' || needs.upload-ios.result == 'success')
+    if: needs.detect-release.outputs.should_release == 'true' && (github.event_name != 'workflow_dispatch' || github.event.inputs.platform == 'all' || github.event.inputs.platform == 'ios') && (needs.prepare-release.outputs.ios_build_exists == 'true' || needs.upload-ios.result == 'success')
     runs-on: ubuntu-latest
     env:
       OVERLAY_BASE_PACKAGE_IDENTIFIER: ${{ vars.OVERLAY_BASE_PACKAGE_IDENTIFIER }}
@@ -307,7 +316,7 @@ jobs:
 
   upload-macos:
     needs: [detect-release, prepare-release]
-    if: needs.detect-release.outputs.should_release == 'true' && needs.prepare-release.outputs.macos_build_exists != 'true'
+    if: needs.detect-release.outputs.should_release == 'true' && needs.prepare-release.outputs.macos_build_exists != 'true' && (github.event_name != 'workflow_dispatch' || github.event.inputs.platform == 'all' || github.event.inputs.platform == 'macos')
     runs-on: macos-latest
     timeout-minutes: 90
     env:
@@ -444,11 +453,11 @@ jobs:
         run: |
           tag="testflight-upload-macos-${{ needs.detect-release.outputs.new_version }}"
           git tag -f "$tag"
-          git push origin "refs/tags/$tag"
+          git push --force-with-lease origin "refs/tags/$tag"
 
   publish-macos-group:
     needs: [detect-release, prepare-release, upload-macos]
-    if: needs.detect-release.outputs.should_release == 'true' && (needs.prepare-release.outputs.macos_build_exists == 'true' || needs.upload-macos.result == 'success')
+    if: needs.detect-release.outputs.should_release == 'true' && (github.event_name != 'workflow_dispatch' || github.event.inputs.platform == 'all' || github.event.inputs.platform == 'macos') && (needs.prepare-release.outputs.macos_build_exists == 'true' || needs.upload-macos.result == 'success')
     runs-on: ubuntu-latest
     env:
       OVERLAY_BASE_PACKAGE_IDENTIFIER: ${{ vars.OVERLAY_BASE_PACKAGE_IDENTIFIER }}
@@ -486,7 +495,7 @@ jobs:
 
   finalize-release:
     needs: [detect-release, prepare-release, upload-ios, upload-macos]
-    if: needs.detect-release.outputs.should_push == 'true' && needs.upload-ios.result != 'failure' && needs.upload-macos.result != 'failure'
+    if: needs.detect-release.outputs.should_push == 'true' && (github.event_name != 'workflow_dispatch' || github.event.inputs.platform == 'all') && needs.upload-ios.result != 'failure' && needs.upload-macos.result != 'failure'
     runs-on: ubuntu-latest
     steps:
       - name: Checkout repository
