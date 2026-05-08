@@ -274,7 +274,7 @@ jobs:
         run: |
           tag="testflight-upload-ios-${{ needs.detect-release.outputs.new_version }}"
           git tag -f "$tag"
-          git push --force-with-lease origin "refs/tags/$tag"
+          git push --force origin "refs/tags/$tag"
 
   publish-ios-group:
     needs: [detect-release, prepare-release, upload-ios]
@@ -453,7 +453,7 @@ jobs:
         run: |
           tag="testflight-upload-macos-${{ needs.detect-release.outputs.new_version }}"
           git tag -f "$tag"
-          git push --force-with-lease origin "refs/tags/$tag"
+          git push --force origin "refs/tags/$tag"
 
   publish-macos-group:
     needs: [detect-release, prepare-release, upload-macos]
