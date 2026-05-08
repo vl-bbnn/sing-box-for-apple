@@ -278,7 +278,7 @@ jobs:
 
   publish-ios-group:
     needs: [detect-release, prepare-release, upload-ios]
-    if: needs.detect-release.outputs.should_release == 'true' && (github.event_name != 'workflow_dispatch' || github.event.inputs.platform == 'all' || github.event.inputs.platform == 'ios') && (needs.prepare-release.outputs.ios_build_exists == 'true' || needs.upload-ios.result == 'success')
+    if: always() && needs.detect-release.outputs.should_release == 'true' && (github.event_name != 'workflow_dispatch' || github.event.inputs.platform == 'all' || github.event.inputs.platform == 'ios') && (needs.prepare-release.outputs.ios_build_exists == 'true' || needs.upload-ios.result == 'success')
     runs-on: ubuntu-latest
     env:
       OVERLAY_BASE_PACKAGE_IDENTIFIER: ${{ vars.OVERLAY_BASE_PACKAGE_IDENTIFIER }}
@@ -457,7 +457,7 @@ jobs:
 
   publish-macos-group:
     needs: [detect-release, prepare-release, upload-macos]
-    if: needs.detect-release.outputs.should_release == 'true' && (github.event_name != 'workflow_dispatch' || github.event.inputs.platform == 'all' || github.event.inputs.platform == 'macos') && (needs.prepare-release.outputs.macos_build_exists == 'true' || needs.upload-macos.result == 'success')
+    if: always() && needs.detect-release.outputs.should_release == 'true' && (github.event_name != 'workflow_dispatch' || github.event.inputs.platform == 'all' || github.event.inputs.platform == 'macos') && (needs.prepare-release.outputs.macos_build_exists == 'true' || needs.upload-macos.result == 'success')
     runs-on: ubuntu-latest
     env:
       OVERLAY_BASE_PACKAGE_IDENTIFIER: ${{ vars.OVERLAY_BASE_PACKAGE_IDENTIFIER }}
@@ -495,7 +495,7 @@ jobs:
 
   finalize-release:
     needs: [detect-release, prepare-release, upload-ios, upload-macos]
-    if: needs.detect-release.outputs.should_push == 'true' && (github.event_name != 'workflow_dispatch' || github.event.inputs.platform == 'all') && needs.upload-ios.result != 'failure' && needs.upload-macos.result != 'failure'
+    if: always() && needs.detect-release.outputs.should_push == 'true' && (github.event_name != 'workflow_dispatch' || github.event.inputs.platform == 'all') && needs.upload-ios.result != 'failure' && needs.upload-macos.result != 'failure'
     runs-on: ubuntu-latest
     steps:
       - name: Checkout repository
