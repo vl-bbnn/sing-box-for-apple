@@ -138,11 +138,11 @@ are no broad direct or direct IP-CIDR rules. If Yandex/WB call underlays are
 added later, they should be added as equally scoped bootstrap exceptions, not as
 generic direct routes.
 
-FaceTime should also stay inside the WLT path. The current server profile emits
-`vless-wlt-eu-facetime` for diagnostic visibility and routes Apple-documented
-FaceTime UDP ranges plus TCP/5223 through it. After a refreshed profile, a
-FaceTime attempt should produce `outbound/vless[vless-wlt-eu-facetime]` lines;
-if no such lines appear, the traffic likely did not enter the packet tunnel.
+FaceTime should also stay inside the WLT path. The current server profile does
+not create a special FaceTime outbound: TCP follows `route.final`, and non-DNS
+UDP follows the generic UDP rule, so both should show up under
+`outbound/vless[vless-wlt-eu]`. If no FaceTime-related TCP/UDP activity appears
+there, the traffic likely did not enter the packet tunnel.
 
 The server profile no longer emits the deprecated `dns.independent_cache` flag.
 If that warning still appears after refreshing the remote profile, the device is
