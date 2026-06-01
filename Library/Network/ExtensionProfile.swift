@@ -262,23 +262,22 @@ public class ExtensionProfile: ObservableObject {
     options["excludeAPNsRoute"] = await NSNumber(value: SharedPreferences.excludeAPNsRoute.get())
 
     #if os(iOS)
-      if let bootstrapURL = WhitelistTransportConfig.bootstrapURL(for: profile.remoteURL) {
+      let needsWhitelistTransport = WhitelistTransportConfig.requiresWhitelistTransport(configContent)
+      if needsWhitelistTransport, let bootstrapURL = WhitelistTransportConfig.bootstrapURL(for: profile.remoteURL) {
         do {
           let bootstrapContent = try await HTTPClient.getStringAsync(bootstrapURL)
           for (key, value) in try WhitelistTransportConfig.parseBootstrapOptions(bootstrapContent) {
             options[key] = value
           }
         } catch {
-          if WhitelistTransportConfig.requiresWhitelistTransport(configContent) {
-            throw NSError(
-              domain: "WhitelistTransport", code: -1,
-              userInfo: [
-                NSLocalizedDescriptionKey:
-                  "Failed to load whitelist transport bootstrap: \(error.localizedDescription)"
-              ])
-          }
+          throw NSError(
+            domain: "WhitelistTransport", code: -1,
+            userInfo: [
+              NSLocalizedDescriptionKey:
+                "Failed to load whitelist transport bootstrap: \(error.localizedDescription)"
+            ])
         }
-      } else if WhitelistTransportConfig.requiresWhitelistTransport(configContent) {
+      } else if needsWhitelistTransport {
         throw NSError(
           domain: "WhitelistTransport", code: -1,
           userInfo: [

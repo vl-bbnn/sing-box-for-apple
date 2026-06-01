@@ -415,16 +415,24 @@ open class ExtensionProvider: NEPacketTunnelProvider {
       return "raw(\(event.rawValue))"
     }
 
-    private var isWhitelistTransportActive: Bool {
-      ((tunnelOptions?["whitelistTransportEnabled"] as? NSNumber)?.boolValue ?? false)
-        && whitelistTransportClient != nil
+    private var isWhitelistTransportProfileActive: Bool {
+      guard (tunnelOptions?["whitelistTransportEnabled"] as? NSNumber)?.boolValue ?? false else {
+        return false
+      }
+      if whitelistTransportClient != nil {
+        return true
+      }
+      guard let configContent = tunnelOptions?["configContent"] as? String else {
+        return false
+      }
+      return WhitelistTransportConfig.usesCoreWhitelistTransport(configContent)
     }
 
     private func scheduleWhitelistTransportMemoryRecoveryIfNeeded(
       memoryBytes: UInt64,
       reason: String
     ) {
-      guard isWhitelistTransportActive, commandServer != nil else {
+      guard isWhitelistTransportProfileActive, commandServer != nil else {
         return
       }
       guard memoryBytes >= Self.whitelistTransportMemoryRecoveryThreshold else {
