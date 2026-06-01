@@ -724,6 +724,13 @@ open class ExtensionProvider: NEPacketTunnelProvider {
       guard enabled else {
         return
       }
+      if let configContent = options["configContent"] as? String,
+        WhitelistTransportConfig.usesCoreWhitelistTransport(configContent)
+      {
+        writeLifecycleMessage(
+          "(packet-tunnel): core whitelist transport detected; sidecar skipped")
+        return
+      }
       let transportStartedAt = Date()
       let transport =
         ((options["whitelistTransportType"] as? String)?

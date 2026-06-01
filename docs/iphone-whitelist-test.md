@@ -1,6 +1,6 @@
 # iPhone Whitelist Transport Test
 
-Date: 2026-05-31
+Date: 2026-06-01
 
 This checklist is for the first real iPhone test of the Turnable-backed
 whitelist transport. Do not paste profile URLs, generated configs, cookies,
@@ -9,7 +9,10 @@ tokens, UUIDs, private IPs/domains, or production logs into public notes.
 ## Current Build State
 
 - Server-side whitelist profile generation is already updated:
-  - Turnable transport metadata is emitted through the remote bootstrap endpoint.
+  - Core WLT service/outbound is emitted in the sing-box profile:
+    `wlt-turnable`, `wlt-eu`, and `vless-wlt-eu.detour=wlt-eu`.
+  - Turnable transport metadata is still emitted through the remote bootstrap
+    endpoint for legacy sidecar fallback.
   - Turnable bootstrap now emits 1 peer by default for the iPhone gate.
   - Turnable bootstrap no longer sets `ignore_memory_limit=true`; iOS should
     keep sing-box's NetworkExtension memory guard enabled.
@@ -18,6 +21,10 @@ tokens, UUIDs, private IPs/domains, or production logs into public notes.
   - VLESS whitelist outbounds support TCP+UDP with xudp.
   - non-DNS UDP routes to `whitelist-exit`.
   - YouTube domain suffixes route to `vless-wlt-eu`.
+  - generated outbounds no longer use local WLT SOCKS/Turnable ports.
+- In core WLT mode the packet tunnel must skip
+  `LibboxStartWhitelistTransport`; sidecar mode is only a fallback for old
+  profiles/lab.
 - Turnable gateway is promoted to
   `0.4.1-2b2n-browser-pass-clean-20260531`.
 - `Libbox.xcframework` was rebuilt from the local
@@ -150,10 +157,14 @@ like:
 ```text
 (packet-tunnel): diagnostics session started ... [session=... uptime=...]
 (packet-tunnel): startup stage=... elapsed=... total=... memory=...
-(packet-tunnel): whitelist transport started elapsed=... memory=...
+(packet-tunnel): core whitelist transport detected; sidecar skipped
 (packet-tunnel): sing-box service started elapsed=... memory=...
 (packet-tunnel): heartbeat memory=... [session=... uptime=...]
 ```
+
+If `whitelist transport started` appears with a refreshed core profile, the
+device is still using an old sidecar config and should refresh the remote
+profile before testing memory behavior.
 
 If the VPN self-disconnects without a later
 `diagnostics session ended reason=stopTunnel completed ...` line for the same

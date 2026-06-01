@@ -25,11 +25,27 @@ public enum WhitelistTransportConfig {
   }
 
   public static func requiresWhitelistTransport(_ configContent: String) -> Bool {
-    configContent.contains("wlt-direct-detour")
+    usesCoreWhitelistTransport(configContent)
+      || configContent.contains("wlt-direct-detour")
       || configContent.contains("wlt-eu-detour")
       || configContent.contains("wlt-dns-detour")
       || configContent.contains("vless-wlt-direct")
       || configContent.contains("vless-wlt-eu")
+  }
+
+  public static func usesCoreWhitelistTransport(_ configContent: String) -> Bool {
+    if let data = configContent.data(using: .utf8),
+      let object = try? JSONSerialization.jsonObject(with: data),
+      containsCoreWLTType(object)
+    {
+      return true
+    }
+    let compact = configContent
+      .replacingOccurrences(of: " ", with: "")
+      .replacingOccurrences(of: "\n", with: "")
+      .replacingOccurrences(of: "\t", with: "")
+      .lowercased()
+    return compact.contains("\"type\":\"wlt\"")
   }
 
   private static func options(from metadata: [String: Any]?) -> [String: NSObject] {
@@ -123,5 +139,20 @@ public enum WhitelistTransportConfig {
       return Int(value)
     }
     return nil
+  }
+
+  private static func containsCoreWLTType(_ object: Any?) -> Bool {
+    if let dictionary = object as? [String: Any] {
+      if let type = stringValue(dictionary["type"]), type.lowercased() == "wlt" {
+        return true
+      }
+      if let services = dictionary["services"] as? [Any], services.contains(where: containsCoreWLTType) {
+        return true
+      }
+      if let outbounds = dictionary["outbounds"] as? [Any], outbounds.contains(where: containsCoreWLTType) {
+        return true
+      }
+    }
+    return false
   }
 }
