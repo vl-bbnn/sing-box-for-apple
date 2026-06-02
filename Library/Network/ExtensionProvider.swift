@@ -18,6 +18,7 @@ open class ExtensionProvider: NEPacketTunnelProvider {
   private static let whitelistTransportMemoryRecoveryThreshold: UInt64 = 42 * 1024 * 1024
   private static let whitelistTransportMemoryRecoveryUrgentThreshold: UInt64 = 44 * 1024 * 1024
   private static let whitelistTransportMemoryRecoveryCooldown: TimeInterval = 20
+  private static let whitelistTransportMemoryRecoveryUrgentCooldown: TimeInterval = 15
   private static let whitelistTransportMemoryRecoverySkipLogInterval: TimeInterval = 30
 
   public private(set) var commandServer: LibboxCommandServer?
@@ -451,8 +452,11 @@ open class ExtensionProvider: NEPacketTunnelProvider {
       }
       if let lastRecovery = diagnosticsLastMemoryRecoveryAt {
         let elapsed = now.timeIntervalSince(lastRecovery)
-        if !isUrgent && elapsed < Self.whitelistTransportMemoryRecoveryCooldown {
-          let remaining = Self.whitelistTransportMemoryRecoveryCooldown - elapsed
+        let cooldown = isUrgent
+          ? Self.whitelistTransportMemoryRecoveryUrgentCooldown
+          : Self.whitelistTransportMemoryRecoveryCooldown
+        if elapsed < cooldown {
+          let remaining = cooldown - elapsed
           recordMemoryRecoverySkipIfNeeded(
             now: now,
             reason: reason,
