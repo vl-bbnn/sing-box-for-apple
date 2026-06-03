@@ -50,10 +50,8 @@ public class ExtensionPlatformInterface: NSObject, LibboxPlatformInterfaceProtoc
       settings.mtu = NSNumber(value: options.getMTU())
 
       var dnsServers: [String] = []
-      let dnsServerIterator = try options.getDNSServerAddress()
-      while dnsServerIterator.hasNext() {
-        dnsServers.append(dnsServerIterator.next())
-      }
+      let dnsServerAddress = try options.getDNSServerAddress()
+      dnsServers.append(dnsServerAddress.value)
       let dnsSettings = NEDNSSettings(servers: dnsServers)
       settings.dnsSettings = dnsSettings
 

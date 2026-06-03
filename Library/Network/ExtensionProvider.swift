@@ -14,7 +14,6 @@ open class ExtensionProvider: NEPacketTunnelProvider {
   private static let logger = Logger(category: "ExtensionProvider")
   private static let defaultLogMaxLines = 3000
   private static let whitelistTransportLogMaxLines = 300
-  private static let whitelistTransportOOMMemoryLimit: Int64 = 44 * 1024 * 1024
   private static let whitelistTransportMemoryRecoveryThreshold: UInt64 = 42 * 1024 * 1024
   private static let whitelistTransportMemoryRecoveryUrgentThreshold: UInt64 = 44 * 1024 * 1024
   private static let whitelistTransportMemoryRecoveryCooldown: TimeInterval = 20
@@ -183,14 +182,11 @@ open class ExtensionProvider: NEPacketTunnelProvider {
       (effectiveOptions["whitelistTransportEnabled"] as? NSNumber)?.boolValue ?? false
     if whitelistTransportEnabled {
       options.logMaxLines = Self.whitelistTransportLogMaxLines
-      #if os(iOS)
-        options.oomMemoryLimit = Self.whitelistTransportOOMMemoryLimit
-      #endif
     } else {
       options.logMaxLines = Self.defaultLogMaxLines
     }
     recordLifecycleEvent(
-      "(packet-tunnel): libbox resource policy whitelistTransport=\(whitelistTransportEnabled) logMaxLines=\(options.logMaxLines) oomMemoryLimit=\(options.oomMemoryLimit)")
+      "(packet-tunnel): libbox resource policy whitelistTransport=\(whitelistTransportEnabled) logMaxLines=\(options.logMaxLines)")
 
     #if os(tvOS)
       if let port = effectiveOptions["commandServerPort"] as? NSNumber {
