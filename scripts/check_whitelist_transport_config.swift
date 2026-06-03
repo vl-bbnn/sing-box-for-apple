@@ -13,9 +13,10 @@ struct WhitelistTransportConfigCheck {
           ],
           "route": {"final": "ordinary-turnable-wlt-note"}
         }
-        """,
+      """,
       requires: false,
-      core: false
+      core: false,
+      legacy: false
     )
 
     assertDetection(
@@ -31,7 +32,8 @@ struct WhitelistTransportConfigCheck {
         }
         """,
       requires: true,
-      core: true
+      core: true,
+      legacy: false
     )
 
     assertDetection(
@@ -45,7 +47,8 @@ struct WhitelistTransportConfigCheck {
         }
         """,
       requires: false,
-      core: false
+      core: false,
+      legacy: false
     )
 
     assertDetection(
@@ -58,7 +61,8 @@ struct WhitelistTransportConfigCheck {
         }
         """,
       requires: true,
-      core: true
+      core: true,
+      legacy: false
     )
 
     assertDetection(
@@ -71,14 +75,34 @@ struct WhitelistTransportConfigCheck {
         }
         """,
       requires: true,
-      core: false
+      core: false,
+      legacy: true
+    )
+
+    assertDetection(
+      name: "core WLT with legacy-compatible generated tag",
+      config: """
+        {
+          "services": [
+            {"type": "wlt", "tag": "wlt-turnable", "transport": "turnable", "turnable_config": "{}"}
+          ],
+          "outbounds": [
+            {"type": "wlt", "tag": "wlt-eu", "service": "wlt-turnable", "route": "eu"},
+            {"type": "vless", "tag": "vless-wlt-eu", "detour": "wlt-eu"}
+          ]
+        }
+        """,
+      requires: true,
+      core: true,
+      legacy: false
     )
 
     assertDetection(
       name: "malformed config with wlt text",
       config: #"{"outbounds": [{"type": "direct", "tag": "direct"}], "note": "type\":\"wlt"}"#,
       requires: false,
-      core: false
+      core: false,
+      legacy: false
     )
   }
 
@@ -86,7 +110,8 @@ struct WhitelistTransportConfigCheck {
     name: String,
     config: String,
     requires: Bool,
-    core: Bool
+    core: Bool,
+    legacy: Bool
   ) {
     let detectedRequires = WhitelistTransportConfig.requiresWhitelistTransport(config)
     guard detectedRequires == requires else {
@@ -95,6 +120,10 @@ struct WhitelistTransportConfigCheck {
     let detectedCore = WhitelistTransportConfig.usesCoreWhitelistTransport(config)
     guard detectedCore == core else {
       fatalError("\(name): core=\(detectedCore), want \(core)")
+    }
+    let detectedLegacy = WhitelistTransportConfig.usesLegacyWhitelistTransport(config)
+    guard detectedLegacy == legacy else {
+      fatalError("\(name): legacy=\(detectedLegacy), want \(legacy)")
     }
   }
 }

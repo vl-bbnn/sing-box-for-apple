@@ -38,6 +38,13 @@ public enum WhitelistTransportConfig {
     return containsCoreWLTType(object)
   }
 
+  public static func usesLegacyWhitelistTransport(_ configContent: String) -> Bool {
+    guard let object = parseConfig(configContent) else {
+      return false
+    }
+    return !containsCoreWLTType(object) && containsLegacyWhitelistTransport(object)
+  }
+
   private static func options(from metadata: [String: Any]?) -> [String: NSObject] {
     guard let metadata else {
       return [:]
