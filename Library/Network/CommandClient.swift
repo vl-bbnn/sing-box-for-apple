@@ -297,9 +297,6 @@ public class CommandClient: ObservableObject {
     func connected() {
       DispatchQueue.main.async { [self] in
         guard isActiveConnection() else { return }
-        if commandClient.connectionTypes.contains(.log) {
-          commandClient.logList = []
-        }
         commandClient.isConnected = true
       }
     }
