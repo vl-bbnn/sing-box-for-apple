@@ -72,6 +72,53 @@ PY
 	git cherry-pick --continue >/dev/null
 }
 
+resolve_initial_overlay_conflict() {
+	local overlay_commit="$1"
+	local conflicted_paths
+	local subject
+
+	subject="$(git log -1 --format=%s "$overlay_commit")"
+	conflicted_paths="$(git diff --name-only --diff-filter=U | sort || true)"
+	if [[ "$subject" != "ci: automate TestFlight sync from upstream main" ]]; then
+		return 1
+	fi
+	case "$conflicted_paths" in
+		"Makefile")
+			git checkout --theirs -- Makefile
+			;;
+		$'.gitignore\nMakefile')
+			git checkout --theirs -- .gitignore Makefile
+			;;
+		*)
+			return 1
+			;;
+	esac
+
+	python3 <<'PY'
+from pathlib import Path
+
+path = Path("Makefile")
+text = path.read_text()
+replacements = {
+    "-archivePath build/SFM.System-arm64.xcarchive ARCHS=arm64":
+        "-archivePath build/SFM.System-arm64.xcarchive -derivedDataPath build/SFM.System-arm64.dd ARCHS=arm64",
+    "-archivePath build/SFM.System-x86_64.xcarchive ARCHS=x86_64":
+        "-archivePath build/SFM.System-x86_64.xcarchive -derivedDataPath build/SFM.System-x86_64.dd ARCHS=x86_64",
+    "-archivePath build/SFM.System-universal.xcarchive -allowProvisioningUpdates":
+        "-archivePath build/SFM.System-universal.xcarchive -derivedDataPath build/SFM.System-universal.dd -allowProvisioningUpdates",
+}
+for old, new in replacements.items():
+    if new in text:
+        continue
+    if old not in text:
+        raise SystemExit(f"expected Makefile fragment not found: {old}")
+    text = text.replace(old, new)
+path.write_text(text)
+PY
+	git add .gitignore Makefile
+	git cherry-pick --continue >/dev/null
+}
+
 git fetch "$origin_remote" main overlay --prune
 git fetch "$upstream_remote" main --prune
 if ! git config user.name >/dev/null; then
@@ -190,7 +237,7 @@ git checkout -B "$tmp_branch" "$upstream_remote/main" >/dev/null
 while IFS= read -r overlay_commit; do
 	[[ -n "$overlay_commit" ]] || continue
 	if ! git cherry-pick --no-edit "$overlay_commit" >/dev/null 2>&1; then
-		if ! resolve_project_version_conflict "$overlay_commit"; then
+		if ! resolve_project_version_conflict "$overlay_commit" && ! resolve_initial_overlay_conflict "$overlay_commit"; then
 			git cherry-pick --abort >/dev/null 2>&1 || true
 			echo "failed to cherry-pick overlay commit $overlay_commit" >&2
 			exit 1
