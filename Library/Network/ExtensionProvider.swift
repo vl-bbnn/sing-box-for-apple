@@ -14,16 +14,23 @@ open class ExtensionProvider: NEPacketTunnelProvider {
   private static let logger = Logger(category: "ExtensionProvider")
   private static let defaultLogMaxLines = 3000
   private static let whitelistTransportLogMaxLines = 3000
-  private static let whitelistTransportMemoryRecoveryThreshold: UInt64 = 42 * 1024 * 1024
-  private static let whitelistTransportMemoryRecoveryUrgentThreshold: UInt64 = 44 * 1024 * 1024
-  private static let whitelistTransportMemoryRecoveryCooldown: TimeInterval = 20
-  private static let whitelistTransportMemoryRecoveryUrgentCooldown: TimeInterval = 15
+  private static let whitelistTransportMemoryRecoveryThresholdDefault: UInt64 = 42 * 1024 * 1024
+  private static let whitelistTransportMemoryRecoveryUrgentThresholdDefault: UInt64 =
+    44 * 1024 * 1024
+  private static let whitelistTransportMemoryRecoveryThresholdCore: UInt64 = 48 * 1024 * 1024
+  private static let whitelistTransportMemoryRecoveryUrgentThresholdCore: UInt64 =
+    56 * 1024 * 1024
+  private static let whitelistTransportMemoryRecoveryCooldownDefault: TimeInterval = 20
+  private static let whitelistTransportMemoryRecoveryUrgentCooldownDefault: TimeInterval = 15
+  private static let whitelistTransportMemoryRecoveryCooldownCore: TimeInterval = 45
+  private static let whitelistTransportMemoryRecoveryUrgentCooldownCore: TimeInterval = 20
   private static let whitelistTransportMemoryRecoverySkipLogInterval: TimeInterval = 30
 
   public private(set) var commandServer: LibboxCommandServer?
   private lazy var platformInterface = ExtensionPlatformInterface(self)
   public var tunnelOptions: [String: NSObject]?
   private var startOptionsURL: URL?
+  private var whitelistTransportProfileIsCore = false
   #if os(iOS)
     private var whitelistTransportClient: LibboxWhitelistTransportClient?
     private var diagnosticsMemoryPressure: DispatchSourceMemoryPressure?
@@ -48,6 +55,12 @@ open class ExtensionProvider: NEPacketTunnelProvider {
 
   private func applyStartOptions(_ options: [String: NSObject]) {
     tunnelOptions = options
+    if let configContent = options["configContent"] as? String {
+      whitelistTransportProfileIsCore =
+        WhitelistTransportConfig.usesCoreWhitelistTransport(configContent)
+    } else {
+      whitelistTransportProfileIsCore = false
+    }
     overridePreferences = OverridePreferences(
       includeAllNetworks: (options["includeAllNetworks"] as? NSNumber)?.boolValue ?? false,
       systemProxyEnabled: (options["systemProxyEnabled"] as? NSNumber)?.boolValue ?? true,
@@ -187,6 +200,12 @@ open class ExtensionProvider: NEPacketTunnelProvider {
     }
     recordLifecycleEvent(
       "(packet-tunnel): libbox resource policy whitelistTransport=\(whitelistTransportEnabled) logMaxLines=\(options.logMaxLines)")
+    #if os(iOS)
+      if whitelistTransportEnabled {
+        recordLifecycleEvent(
+          "(packet-tunnel): whitelist transport recovery policy threshold=\(PacketTunnelDiagnostics.formatBytes(whitelistTransportMemoryRecoveryThreshold())) urgentThreshold=\(PacketTunnelDiagnostics.formatBytes(whitelistTransportMemoryRecoveryUrgentThreshold())) cooldown=\(formatDuration(whitelistTransportMemoryRecoveryCooldown(isUrgent: false))) urgentCooldown=\(formatDuration(whitelistTransportMemoryRecoveryCooldown(isUrgent: true)))")
+      }
+    #endif
 
     #if os(tvOS)
       if let port = effectiveOptions["commandServerPort"] as? NSNumber {
@@ -342,7 +361,9 @@ open class ExtensionProvider: NEPacketTunnelProvider {
       let memoryBytes = PacketTunnelDiagnostics.residentMemoryBytes()
       let memoryDescription = memoryBytes.map { PacketTunnelDiagnostics.formatBytes($0) }
         ?? "unknown"
-      self?.recordLifecycleEvent("(packet-tunnel): heartbeat memory=\(memoryDescription)")
+      let thermalDescription = self?.thermalStateDescription() ?? "unknown"
+      self?.recordLifecycleEvent(
+        "(packet-tunnel): heartbeat memory=\(memoryDescription) thermal=\(thermalDescription)")
       #if os(iOS)
         if let memoryBytes {
           self?.scheduleWhitelistTransportMemoryRecoveryIfNeeded(
@@ -381,8 +402,9 @@ open class ExtensionProvider: NEPacketTunnelProvider {
         let memoryBytes = PacketTunnelDiagnostics.residentMemoryBytes()
         let memoryDescription = memoryBytes.map { PacketTunnelDiagnostics.formatBytes($0) }
           ?? "unknown"
+        let thermalDescription = self.thermalStateDescription()
         self.recordLifecycleEvent(
-          "(packet-tunnel): memory pressure event=\(eventDescription) memory=\(memoryDescription)")
+          "(packet-tunnel): memory pressure event=\(eventDescription) memory=\(memoryDescription) thermal=\(thermalDescription)")
         if let memoryBytes {
           self.scheduleWhitelistTransportMemoryRecoveryIfNeeded(
             memoryBytes: memoryBytes,
@@ -419,10 +441,7 @@ open class ExtensionProvider: NEPacketTunnelProvider {
       if whitelistTransportClient != nil {
         return true
       }
-      guard let configContent = tunnelOptions?["configContent"] as? String else {
-        return false
-      }
-      return WhitelistTransportConfig.usesCoreWhitelistTransport(configContent)
+      return whitelistTransportProfileIsCore
     }
 
     private func scheduleWhitelistTransportMemoryRecoveryIfNeeded(
@@ -432,11 +451,23 @@ open class ExtensionProvider: NEPacketTunnelProvider {
       guard isWhitelistTransportProfileActive, commandServer != nil else {
         return
       }
-      guard memoryBytes >= Self.whitelistTransportMemoryRecoveryThreshold else {
+      let threshold = whitelistTransportMemoryRecoveryThreshold()
+      guard memoryBytes >= threshold else {
         return
       }
+      let urgentThreshold = whitelistTransportMemoryRecoveryUrgentThreshold()
       let now = Date()
-      let isUrgent = memoryBytes >= Self.whitelistTransportMemoryRecoveryUrgentThreshold
+      let isUrgent = memoryBytes >= urgentThreshold
+      if shouldDeferWhitelistTransportMemoryRecovery(isUrgent: isUrgent) {
+        recordMemoryRecoverySkipIfNeeded(
+          now: now,
+          reason: reason,
+          cause: "thermal=\(thermalStateDescription())",
+          memoryBytes: memoryBytes,
+          threshold: threshold
+        )
+        return
+      }
       if memoryRecoveryInProgress {
         recordMemoryRecoverySkipIfNeeded(
           now: now,
@@ -448,9 +479,7 @@ open class ExtensionProvider: NEPacketTunnelProvider {
       }
       if let lastRecovery = diagnosticsLastMemoryRecoveryAt {
         let elapsed = now.timeIntervalSince(lastRecovery)
-        let cooldown = isUrgent
-          ? Self.whitelistTransportMemoryRecoveryUrgentCooldown
-          : Self.whitelistTransportMemoryRecoveryCooldown
+        let cooldown = whitelistTransportMemoryRecoveryCooldown(isUrgent: isUrgent)
         if elapsed < cooldown {
           let remaining = cooldown - elapsed
           recordMemoryRecoverySkipIfNeeded(
@@ -467,7 +496,7 @@ open class ExtensionProvider: NEPacketTunnelProvider {
       diagnosticsLastMemoryRecoverySkipAt = nil
       let recoveryMode = isUrgent ? "urgent" : "normal"
       recordLifecycleEvent(
-        "(packet-tunnel): memory recovery scheduled mode=\(recoveryMode) reason=\(reason) memory=\(PacketTunnelDiagnostics.formatBytes(memoryBytes)) threshold=\(PacketTunnelDiagnostics.formatBytes(Self.whitelistTransportMemoryRecoveryThreshold)) urgentThreshold=\(PacketTunnelDiagnostics.formatBytes(Self.whitelistTransportMemoryRecoveryUrgentThreshold))")
+        "(packet-tunnel): memory recovery scheduled mode=\(recoveryMode) reason=\(reason) memory=\(PacketTunnelDiagnostics.formatBytes(memoryBytes)) threshold=\(PacketTunnelDiagnostics.formatBytes(threshold)) urgentThreshold=\(PacketTunnelDiagnostics.formatBytes(urgentThreshold)) thermal=\(thermalStateDescription())")
       Task { [weak self] in
         await self?.performWhitelistTransportMemoryRecovery(reason: reason)
       }
@@ -477,7 +506,8 @@ open class ExtensionProvider: NEPacketTunnelProvider {
       now: Date,
       reason: String,
       cause: String,
-      memoryBytes: UInt64
+      memoryBytes: UInt64,
+      threshold: UInt64? = nil
     ) {
       if let lastSkip = diagnosticsLastMemoryRecoverySkipAt,
         now.timeIntervalSince(lastSkip) < Self.whitelistTransportMemoryRecoverySkipLogInterval
@@ -485,8 +515,11 @@ open class ExtensionProvider: NEPacketTunnelProvider {
         return
       }
       diagnosticsLastMemoryRecoverySkipAt = now
+      let thresholdDescription = threshold.map { PacketTunnelDiagnostics.formatBytes($0) }
+        ?? PacketTunnelDiagnostics.formatBytes(
+          Self.whitelistTransportMemoryRecoveryThresholdDefault)
       recordLifecycleEvent(
-        "(packet-tunnel): memory recovery skipped reason=\(reason) cause=\(cause) memory=\(PacketTunnelDiagnostics.formatBytes(memoryBytes)) threshold=\(PacketTunnelDiagnostics.formatBytes(Self.whitelistTransportMemoryRecoveryThreshold))")
+        "(packet-tunnel): memory recovery skipped reason=\(reason) cause=\(cause) memory=\(PacketTunnelDiagnostics.formatBytes(memoryBytes)) threshold=\(thresholdDescription) thermal=\(thermalStateDescription())")
     }
 
     private func performWhitelistTransportMemoryRecovery(reason: String) async {
@@ -503,6 +536,92 @@ open class ExtensionProvider: NEPacketTunnelProvider {
       } catch {
         recordLifecycleEvent(
           "(packet-tunnel): memory recovery failed reason=\(reason) error=\(error.localizedDescription) elapsed=\(formatDuration(Date().timeIntervalSince(recoveryStartedAt))) memory=\(PacketTunnelDiagnostics.residentMemoryDescription())")
+      }
+    }
+
+    private func whitelistTransportMemoryRecoveryThreshold() -> UInt64 {
+      uint64Option("whitelistTransportMemoryRecoveryThreshold")
+        ?? (
+          isCoreWhitelistTransportProfile()
+            ? Self.whitelistTransportMemoryRecoveryThresholdCore
+            : Self.whitelistTransportMemoryRecoveryThresholdDefault
+        )
+    }
+
+    private func whitelistTransportMemoryRecoveryUrgentThreshold() -> UInt64 {
+      uint64Option("whitelistTransportMemoryRecoveryUrgentThreshold")
+        ?? (
+          isCoreWhitelistTransportProfile()
+            ? Self.whitelistTransportMemoryRecoveryUrgentThresholdCore
+            : Self.whitelistTransportMemoryRecoveryUrgentThresholdDefault
+        )
+    }
+
+    private func whitelistTransportMemoryRecoveryCooldown(isUrgent: Bool) -> TimeInterval {
+      if isUrgent {
+        return timeIntervalOption("whitelistTransportMemoryRecoveryUrgentCooldown")
+          ?? (
+            isCoreWhitelistTransportProfile()
+              ? Self.whitelistTransportMemoryRecoveryUrgentCooldownCore
+              : Self.whitelistTransportMemoryRecoveryUrgentCooldownDefault
+          )
+      }
+      return timeIntervalOption("whitelistTransportMemoryRecoveryCooldown")
+        ?? (
+          isCoreWhitelistTransportProfile()
+            ? Self.whitelistTransportMemoryRecoveryCooldownCore
+            : Self.whitelistTransportMemoryRecoveryCooldownDefault
+        )
+    }
+
+    private func uint64Option(_ key: String) -> UInt64? {
+      if let number = tunnelOptions?[key] as? NSNumber {
+        return number.uint64Value
+      }
+      if let string = tunnelOptions?[key] as? String, let value = UInt64(string) {
+        return value
+      }
+      return nil
+    }
+
+    private func timeIntervalOption(_ key: String) -> TimeInterval? {
+      if let number = tunnelOptions?[key] as? NSNumber {
+        return number.doubleValue
+      }
+      if let string = tunnelOptions?[key] as? String, let value = Double(string) {
+        return value
+      }
+      return nil
+    }
+
+    private func isCoreWhitelistTransportProfile() -> Bool {
+      whitelistTransportProfileIsCore
+    }
+
+    private func shouldDeferWhitelistTransportMemoryRecovery(isUrgent: Bool) -> Bool {
+      guard !isUrgent else {
+        return false
+      }
+      switch ProcessInfo.processInfo.thermalState {
+      case .serious, .critical:
+        return true
+      default:
+        return false
+      }
+    }
+
+    private func thermalStateDescription() -> String {
+      switch ProcessInfo.processInfo.thermalState {
+      case .nominal:
+        return "nominal"
+      case .fair:
+        return "fair"
+      case .serious:
+        return "serious"
+      case .critical:
+        return "critical"
+      @unknown default:
+        return "unknown(\(ProcessInfo.processInfo.thermalState.rawValue))"
       }
     }
   #endif
@@ -652,7 +771,7 @@ open class ExtensionProvider: NEPacketTunnelProvider {
     #endif
     #if os(iOS)
       if #available(iOS 18.0, *) {
-        ControlCenter.shared.reloadControls(ofKind: ExtensionProfile.controlKind)
+        await ControlCenter.shared.reloadControls(ofKind: ExtensionProfile.controlKind)
       }
     #endif
     endDiagnosticsSession("stopTunnel completed reason=\(reasonDescription)")
@@ -720,7 +839,7 @@ open class ExtensionProvider: NEPacketTunnelProvider {
       return "sleep"
     case .appUpdate:
       return "appUpdate"
-    @unknown default:
+    default:
       return "unknown(\(reason.rawValue))"
     }
   }

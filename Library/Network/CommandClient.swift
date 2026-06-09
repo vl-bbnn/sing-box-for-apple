@@ -319,10 +319,10 @@ public class CommandClient: ObservableObject {
     }
 
     func clearLogs() {
-      DispatchQueue.main.async { [self] in
-        guard isActiveConnection() else { return }
-        commandClient.clearLogs()
-      }
+      // The core can emit clear events during setup/startOrReloadService.
+      // Keep the UI buffer intact so early startup diagnostics are not lost;
+      // manual clearing still goes through CommandClient.clearLogs().
+      logger.debug("ignored remote clearLogs request")
     }
 
     func writeLogs(_ messageList: (any LibboxLogIteratorProtocol)?) {

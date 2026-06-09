@@ -266,6 +266,10 @@ public class ExtensionProfile: ObservableObject {
       let usesLegacyWhitelistTransport = WhitelistTransportConfig.usesLegacyWhitelistTransport(configContent)
       if usesCoreWhitelistTransport {
         options["whitelistTransportEnabled"] = NSNumber(value: true)
+        options["whitelistTransportMemoryRecoveryThreshold"] = NSNumber(value: 48 * 1024 * 1024)
+        options["whitelistTransportMemoryRecoveryUrgentThreshold"] = NSNumber(value: 56 * 1024 * 1024)
+        options["whitelistTransportMemoryRecoveryCooldown"] = NSNumber(value: 45)
+        options["whitelistTransportMemoryRecoveryUrgentCooldown"] = NSNumber(value: 20)
       }
       if usesLegacyWhitelistTransport, let bootstrapURL = WhitelistTransportConfig.bootstrapURL(for: profile.remoteURL) {
         do {
