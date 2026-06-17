@@ -5,21 +5,34 @@ import Foundation
 
 public enum PacketTunnelDiagnostics {
   private static let fileName = "packet-tunnel-diagnostics.log"
+  private static let incidentFileName = "packet-tunnel-incidents.log"
   private static let maxBytes = 128 * 1024
+  private static let maxIncidentBytes = 64 * 1024
   private static let queue = DispatchQueue(label: "PacketTunnelDiagnostics")
 
   public static var fileURL: URL {
     FilePath.cacheDirectory.appendingPathComponent(fileName)
   }
 
+  public static var incidentFileURL: URL {
+    FilePath.cacheDirectory.appendingPathComponent(incidentFileName)
+  }
+
   public static func append(_ message: String) {
+    append(message, to: fileURL, maxBytes: maxBytes)
+  }
+
+  public static func appendIncident(_ message: String) {
+    append(message, to: incidentFileURL, maxBytes: maxIncidentBytes)
+  }
+
+  private static func append(_ message: String, to url: URL, maxBytes: Int) {
     let timestamp = ISO8601DateFormatter().string(from: Date())
     let line = "\(timestamp) \(sanitize(message))\n"
     guard let data = line.data(using: .utf8) else {
       return
     }
     queue.sync {
-      let url = fileURL
       do {
         try FileManager.default.createDirectory(
           at: url.deletingLastPathComponent(),
@@ -35,7 +48,7 @@ public enum PacketTunnelDiagnostics {
         } else {
           try data.write(to: url, options: .atomic)
         }
-        trimIfNeeded(url)
+        trimIfNeeded(url, maxBytes: maxBytes)
       } catch {
         // Diagnostics must never interfere with tunnel startup or shutdown.
       }
@@ -44,13 +57,22 @@ public enum PacketTunnelDiagnostics {
 
   public static func readText() -> String {
     queue.sync {
-      (try? String(contentsOf: fileURL, encoding: .utf8)) ?? ""
+      let diagnostics = (try? String(contentsOf: fileURL, encoding: .utf8)) ?? ""
+      let incidents = (try? String(contentsOf: incidentFileURL, encoding: .utf8)) ?? ""
+      if incidents.isEmpty {
+        return diagnostics
+      }
+      if diagnostics.isEmpty {
+        return "=== packet-tunnel incidents ===\n\(incidents)"
+      }
+      return "\(diagnostics)\n=== packet-tunnel incidents ===\n\(incidents)"
     }
   }
 
   public static func clear() {
     queue.sync {
       try? FileManager.default.removeItem(at: fileURL)
+      try? FileManager.default.removeItem(at: incidentFileURL)
     }
   }
 
@@ -90,7 +112,7 @@ public enum PacketTunnelDiagnostics {
     return String(format: "%.1fMiB", mib)
   }
 
-  private static func trimIfNeeded(_ url: URL) {
+  private static func trimIfNeeded(_ url: URL, maxBytes: Int) {
     guard
       let size = (try? FileManager.default.attributesOfItem(atPath: url.path)[.size]) as? NSNumber,
       size.intValue > maxBytes * 2,

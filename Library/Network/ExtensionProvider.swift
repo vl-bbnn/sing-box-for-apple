@@ -25,6 +25,8 @@ open class ExtensionProvider: NEPacketTunnelProvider {
   private static let whitelistTransportMemoryRecoveryCooldownCore: TimeInterval = 45
   private static let whitelistTransportMemoryRecoveryUrgentCooldownCore: TimeInterval = 20
   private static let whitelistTransportMemoryRecoverySkipLogInterval: TimeInterval = 30
+  private let lifecycleStateLock = NSLock()
+  private var stopTunnelGeneration: UInt64 = 0
 
   public private(set) var commandServer: LibboxCommandServer?
   private lazy var platformInterface = ExtensionPlatformInterface(self)
@@ -42,6 +44,7 @@ open class ExtensionProvider: NEPacketTunnelProvider {
   private var diagnosticsStartedAt: Date?
   private var diagnosticsHeartbeat: DispatchSourceTimer?
   private var diagnosticsLastMemoryPressureAt: Date?
+  private var diagnosticsLastThermalState: String?
 
   public struct OverridePreferences {
     public var includeAllNetworks: Bool = false
@@ -129,6 +132,7 @@ open class ExtensionProvider: NEPacketTunnelProvider {
 
   private func startTunnelImpl(options startOptions: [String: NSObject]?) async throws {
     let startupStartedAt = Date()
+    let startStopGeneration = currentStopTunnelGeneration()
     let basePath: String
     let workingPath: String
     let tempPath: String
@@ -283,8 +287,10 @@ open class ExtensionProvider: NEPacketTunnelProvider {
     #endif
     do {
       stageStartedAt = Date()
+      try throwIfStopTunnelRequested(since: startStopGeneration)
       writeLifecycleMessage("(packet-tunnel): starting sing-box service")
       try await startService()
+      try throwIfStopTunnelRequested(since: startStopGeneration)
       writeLifecycleMessage(
         "(packet-tunnel): sing-box service started elapsed=\(formatDuration(Date().timeIntervalSince(stageStartedAt))) memory=\(PacketTunnelDiagnostics.residentMemoryDescription())")
       recordStartupStage(
@@ -323,6 +329,7 @@ open class ExtensionProvider: NEPacketTunnelProvider {
     diagnosticsSessionID = String(UUID().uuidString.prefix(8)).lowercased()
     diagnosticsStartedAt = Date()
     diagnosticsLastMemoryPressureAt = nil
+    diagnosticsLastThermalState = nil
     #if os(iOS)
       diagnosticsLastMemoryRecoveryAt = nil
       diagnosticsLastMemoryRecoverySkipAt = nil
@@ -332,13 +339,13 @@ open class ExtensionProvider: NEPacketTunnelProvider {
     #if os(iOS)
       startMemoryPressureDiagnostics()
     #endif
-    recordLifecycleEvent(
-      "(packet-tunnel): diagnostics session started memory=\(PacketTunnelDiagnostics.residentMemoryDescription())")
+    recordLifecycleIncident(
+      "(packet-tunnel): diagnostics session started memory=\(PacketTunnelDiagnostics.residentMemoryDescription()) thermal=\(thermalStateDescription())")
   }
 
   private func endDiagnosticsSession(_ reason: String) {
-    recordLifecycleEvent(
-      "(packet-tunnel): diagnostics session ended reason=\(reason) memory=\(PacketTunnelDiagnostics.residentMemoryDescription())")
+    recordLifecycleIncident(
+      "(packet-tunnel): diagnostics session ended reason=\(reason) memory=\(PacketTunnelDiagnostics.residentMemoryDescription()) thermal=\(thermalStateDescription())")
     stopDiagnosticsHeartbeat()
     #if os(iOS)
       stopMemoryPressureDiagnostics()
@@ -346,6 +353,7 @@ open class ExtensionProvider: NEPacketTunnelProvider {
     diagnosticsSessionID = nil
     diagnosticsStartedAt = nil
     diagnosticsLastMemoryPressureAt = nil
+    diagnosticsLastThermalState = nil
     #if os(iOS)
       diagnosticsLastMemoryRecoveryAt = nil
       diagnosticsLastMemoryRecoverySkipAt = nil
@@ -364,6 +372,12 @@ open class ExtensionProvider: NEPacketTunnelProvider {
       let thermalDescription = self?.thermalStateDescription() ?? "unknown"
       self?.recordLifecycleEvent(
         "(packet-tunnel): heartbeat memory=\(memoryDescription) thermal=\(thermalDescription)")
+      if let self, thermalDescription != self.diagnosticsLastThermalState {
+        let previousThermalState = self.diagnosticsLastThermalState ?? "unknown"
+        self.diagnosticsLastThermalState = thermalDescription
+        self.recordLifecycleIncident(
+          "(packet-tunnel): thermal state changed from=\(previousThermalState) to=\(thermalDescription) memory=\(memoryDescription)")
+      }
       #if os(iOS)
         if let memoryBytes {
           self?.scheduleWhitelistTransportMemoryRecoveryIfNeeded(
@@ -403,7 +417,7 @@ open class ExtensionProvider: NEPacketTunnelProvider {
         let memoryDescription = memoryBytes.map { PacketTunnelDiagnostics.formatBytes($0) }
           ?? "unknown"
         let thermalDescription = self.thermalStateDescription()
-        self.recordLifecycleEvent(
+        self.recordLifecycleIncident(
           "(packet-tunnel): memory pressure event=\(eventDescription) memory=\(memoryDescription) thermal=\(thermalDescription)")
         if let memoryBytes {
           self.scheduleWhitelistTransportMemoryRecoveryIfNeeded(
@@ -495,7 +509,7 @@ open class ExtensionProvider: NEPacketTunnelProvider {
       diagnosticsLastMemoryRecoveryAt = now
       diagnosticsLastMemoryRecoverySkipAt = nil
       let recoveryMode = isUrgent ? "urgent" : "normal"
-      recordLifecycleEvent(
+      recordLifecycleIncident(
         "(packet-tunnel): memory recovery scheduled mode=\(recoveryMode) reason=\(reason) memory=\(PacketTunnelDiagnostics.formatBytes(memoryBytes)) threshold=\(PacketTunnelDiagnostics.formatBytes(threshold)) urgentThreshold=\(PacketTunnelDiagnostics.formatBytes(urgentThreshold)) thermal=\(thermalStateDescription())")
       Task { [weak self] in
         await self?.performWhitelistTransportMemoryRecovery(reason: reason)
@@ -524,17 +538,17 @@ open class ExtensionProvider: NEPacketTunnelProvider {
 
     private func performWhitelistTransportMemoryRecovery(reason: String) async {
       let recoveryStartedAt = Date()
-      recordLifecycleEvent(
+      recordLifecycleIncident(
         "(packet-tunnel): memory recovery started reason=\(reason) memory=\(PacketTunnelDiagnostics.residentMemoryDescription())")
       defer {
         memoryRecoveryInProgress = false
       }
       do {
         try await reloadService()
-        recordLifecycleEvent(
+        recordLifecycleIncident(
           "(packet-tunnel): memory recovery completed reason=\(reason) elapsed=\(formatDuration(Date().timeIntervalSince(recoveryStartedAt))) memory=\(PacketTunnelDiagnostics.residentMemoryDescription())")
       } catch {
-        recordLifecycleEvent(
+        recordLifecycleIncident(
           "(packet-tunnel): memory recovery failed reason=\(reason) error=\(error.localizedDescription) elapsed=\(formatDuration(Date().timeIntervalSince(recoveryStartedAt))) memory=\(PacketTunnelDiagnostics.residentMemoryDescription())")
       }
     }
@@ -632,6 +646,13 @@ open class ExtensionProvider: NEPacketTunnelProvider {
     Self.logger.info("\(enrichedMessage, privacy: .public)")
   }
 
+  private func recordLifecycleIncident(_ message: String) {
+    let enrichedMessage = enrichDiagnosticsMessage(message)
+    PacketTunnelDiagnostics.append(enrichedMessage)
+    PacketTunnelDiagnostics.appendIncident(enrichedMessage)
+    Self.logger.warning("\(enrichedMessage, privacy: .public)")
+  }
+
   private func writeLifecycleMessage(_ message: String) {
     recordLifecycleEvent(message)
     writeMessage(message)
@@ -666,6 +687,26 @@ open class ExtensionProvider: NEPacketTunnelProvider {
 
   private func formatDuration(_ interval: TimeInterval) -> String {
     String(format: "%.3fs", max(0, interval))
+  }
+
+  private func currentStopTunnelGeneration() -> UInt64 {
+    lifecycleStateLock.lock()
+    defer {
+      lifecycleStateLock.unlock()
+    }
+    return stopTunnelGeneration
+  }
+
+  private func markStopTunnelRequested() {
+    lifecycleStateLock.lock()
+    stopTunnelGeneration &+= 1
+    lifecycleStateLock.unlock()
+  }
+
+  private func throwIfStopTunnelRequested(since generation: UInt64) throws {
+    if currentStopTunnelGeneration() != generation {
+      throw ExtensionStartupError("(packet-tunnel) error: start service canceled by stopTunnel")
+    }
   }
 
   private func startService() async throws {
@@ -744,6 +785,7 @@ open class ExtensionProvider: NEPacketTunnelProvider {
 
   override open func stopTunnel(with reason: NEProviderStopReason) async {
     let reasonDescription = stopReasonDescription(reason)
+    markStopTunnelRequested()
     writeLifecycleMessage("(packet-tunnel) stopping, reason: \(reasonDescription)")
     stopDiagnosticsHeartbeat()
     stopService()
