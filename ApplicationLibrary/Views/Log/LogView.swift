@@ -42,16 +42,8 @@ private struct LogViewContent: View {
             .alert($viewModel.alert)
             .background(
                 LogExportView(
-                    showFileExporter: Binding(
-                        get: { viewModel.dataModel.showFileExporter },
-                        set: { viewModel.dataModel.showFileExporter = $0 }
-                    ),
-                    logFileURL: Binding(
-                        get: { viewModel.dataModel.logFileURL },
-                        set: { viewModel.dataModel.logFileURL = $0 }
-                    ),
-                    alert: $viewModel.alert,
-                    cleanup: { viewModel.dataModel.cleanupLogFile() }
+                    dataModel: viewModel.dataModel,
+                    alert: $viewModel.alert
                 )
             )
         #endif
@@ -83,7 +75,7 @@ private struct LogViewContent: View {
 #if !os(tvOS)
     #if canImport(UIKit)
         private struct LogMenuButton: UIViewRepresentable {
-            let viewModel: LogViewModel
+            @ObservedObject var viewModel: LogViewModel
             @Environment(\.colorScheme) private var colorScheme
 
             func makeUIView(context _: Context) -> UIButton {
@@ -113,14 +105,14 @@ private struct LogViewContent: View {
                         title: NSLocalizedString("Default", comment: "Log level filter default option"),
                         state: viewModel.selectedLogLevel == nil ? .on : .off
                     ) { _ in
-                        viewModel.selectedLogLevel = nil
+                        viewModel.selectLogLevel(nil)
                     },
                 ] + LogLevel.allCases.map { level in
                     UIAction(
                         title: level.name,
                         state: viewModel.selectedLogLevel == level.rawValue ? .on : .off
                     ) { _ in
-                        viewModel.selectedLogLevel = level.rawValue
+                        viewModel.selectLogLevel(level.rawValue)
                     }
                 }
 
@@ -141,8 +133,9 @@ private struct LogViewContent: View {
                         title: NSLocalizedString("To File", comment: ""),
                         image: UIImage(systemName: "arrow.down.doc")
                     ) { _ in
-                        viewModel.dataModel.prepareLogFile()
-                        viewModel.dataModel.showFileExporter = true
+                        if viewModel.dataModel.prepareLogFile() {
+                            viewModel.dataModel.showFileExporter = true
+                        }
                     },
                     UIAction(
                         title: NSLocalizedString("Share", comment: ""),
@@ -173,13 +166,13 @@ private struct LogViewContent: View {
 
     #if canImport(AppKit)
         private struct LogMenuView: View {
-            let viewModel: LogViewModel
+            @ObservedObject var viewModel: LogViewModel
 
             var body: some View {
                 Menu {
                     Picker(selection: Binding(
                         get: { viewModel.selectedLogLevel },
-                        set: { viewModel.selectedLogLevel = $0 }
+                        set: { viewModel.selectLogLevel($0) }
                     )) {
                         Text(NSLocalizedString("Default", comment: "Log level filter default option")).tag(Int?.none)
                         ForEach(LogLevel.allCases) { level in
@@ -195,8 +188,9 @@ private struct LogViewContent: View {
                             Label("To Clipboard", systemImage: "doc.on.clipboard")
                         }
                         Button {
-                            viewModel.dataModel.prepareLogFile()
-                            viewModel.dataModel.showFileExporter = true
+                            if viewModel.dataModel.prepareLogFile() {
+                                viewModel.dataModel.showFileExporter = true
+                            }
                         } label: {
                             Label("To File", systemImage: "arrow.down.doc")
                         }
@@ -386,28 +380,26 @@ private struct LogContentInnerView: View {
     }
 
     private struct LogExportView: View {
-        @Binding var showFileExporter: Bool
-        @Binding var logFileURL: URL?
+        @ObservedObject var dataModel: LogDataModel
         @Binding var alert: AlertState?
         @State private var showShareSheet = false
-        let cleanup: () -> Void
 
         var body: some View {
             Color.clear
                 .fileExporter(
-                    isPresented: $showFileExporter,
-                    document: logFileURL.map { LogTextDocument(url: $0) },
+                    isPresented: $dataModel.showFileExporter,
+                    document: dataModel.logFileURL.map { LogTextDocument(url: $0) },
                     contentType: .plainText,
                     defaultFilename: "logs.txt"
                 ) { result in
-                    cleanup()
-                    logFileURL = nil
+                    dataModel.cleanupLogFile()
+                    dataModel.logFileURL = nil
                     if case let .failure(error) = result {
                         alert = AlertState(action: "export log file", error: error)
                     }
                 }
                 .sheet(isPresented: $showShareSheet) {
-                    if let url = logFileURL {
+                    if let url = dataModel.logFileURL {
                         #if os(iOS)
                             ShareViewController(activityItems: [url])
                         #elseif os(macOS)
@@ -415,15 +407,15 @@ private struct LogContentInnerView: View {
                         #endif
                     }
                 }
-                .onChange(of: logFileURL) { newValue in
-                    if newValue != nil, !showFileExporter {
+                .onChange(of: dataModel.logFileURL) { newValue in
+                    if newValue != nil, !dataModel.showFileExporter {
                         showShareSheet = true
                     }
                 }
                 .onChange(of: showShareSheet) { newValue in
                     if !newValue {
-                        cleanup()
-                        logFileURL = nil
+                        dataModel.cleanupLogFile()
+                        dataModel.logFileURL = nil
                     }
                 }
         }

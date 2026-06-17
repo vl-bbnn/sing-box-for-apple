@@ -21,6 +21,24 @@ public enum ANSIColors {
         cache.removeAllObjects()
     }
 
+    public static func stripAnsiCodes(_ text: String) -> String {
+        let nsString = text as NSString
+        let matches = ansiRegex.matches(in: text, range: NSRange(location: 0, length: nsString.length))
+        return stripAnsiCodes(text, nsString: nsString, matches: matches)
+    }
+
+    private static func stripAnsiCodes(_ text: String, nsString: NSString, matches: [NSTextCheckingResult]) -> String {
+        guard !matches.isEmpty else {
+            return text
+        }
+
+        var cleanText = text
+        for match in matches.reversed() {
+            cleanText = (cleanText as NSString).replacingCharacters(in: match.range, with: "") as String
+        }
+        return cleanText
+    }
+
     public static func parseAnsiString(_ text: String) -> AttributedString {
         let nsString = text as NSString
         if let cached = cache.object(forKey: nsString) {
@@ -34,11 +52,7 @@ public enum ANSIColors {
             return plain
         }
 
-        var cleanText = text
-        for match in matches.reversed() {
-            cleanText = (cleanText as NSString).replacingCharacters(in: match.range, with: "") as String
-        }
-
+        let cleanText = stripAnsiCodes(text, nsString: nsString, matches: matches)
         var attributedString = AttributedString(cleanText)
         var currentStyle: AttributeContainer?
         var currentStart = 0

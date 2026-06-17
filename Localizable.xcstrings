@@ -1091,9 +1091,6 @@
         }
       }
     },
-    "Beta Settings" : {
-
-    },
     "Browse" : {
       "localizations" : {
         "fa" : {
@@ -6591,9 +6588,6 @@
         }
       }
     },
-    "Reasserting" : {
-
-    },
     "Reboot required." : {
       "localizations" : {
         "fa" : {
@@ -7705,12 +7699,6 @@
         }
       }
     },
-    "Started" : {
-
-    },
-    "Starting" : {
-
-    },
     "State" : {
       "localizations" : {
         "fa" : {
@@ -7850,12 +7838,6 @@
           }
         }
       }
-    },
-    "Stopped" : {
-
-    },
-    "Stopping" : {
-
     },
     "System Default" : {
       "localizations" : {
