@@ -69,7 +69,7 @@ public class CommandClient: ObservableObject {
   }
 
   private let connectionTypes: [ConnectionType]
-  private let logMaxLines: Int
+  private let logMaxLines: Int?
   private var commandClient: LibboxCommandClient?
   private var connectTask: Task<Void, Never>?
   private var activeConnectionToken: UInt64 = 0
@@ -113,7 +113,7 @@ public class CommandClient: ObservableObject {
   private var logBatchTimer: DispatchWorkItem?
   private let logBatchInterval: TimeInterval = 0.1  // 100ms batch window
 
-  public init(_ connectionTypes: [ConnectionType], logMaxLines: Int = 3000) {
+  public init(_ connectionTypes: [ConnectionType], logMaxLines: Int? = nil) {
     self.connectionTypes = connectionTypes
     self.logMaxLines = logMaxLines
     logList = []
@@ -178,7 +178,7 @@ public class CommandClient: ObservableObject {
     pendingLogs.removeAll()
 
     // Trim to max lines if needed
-    if logList.count > logMaxLines {
+    if let logMaxLines, logList.count > logMaxLines {
       let removeCount = logList.count - logMaxLines
       logList.removeFirst(removeCount)
     }

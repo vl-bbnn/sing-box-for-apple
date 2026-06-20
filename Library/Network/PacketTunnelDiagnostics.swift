@@ -6,8 +6,8 @@ import Foundation
 public enum PacketTunnelDiagnostics {
   private static let fileName = "packet-tunnel-diagnostics.log"
   private static let incidentFileName = "packet-tunnel-incidents.log"
-  private static let maxBytes = 128 * 1024
-  private static let maxIncidentBytes = 64 * 1024
+  private static let maxBytes = 2 * 1024 * 1024
+  private static let maxIncidentBytes = 512 * 1024
   private static let queue = DispatchQueue(label: "PacketTunnelDiagnostics")
 
   public static var fileURL: URL {

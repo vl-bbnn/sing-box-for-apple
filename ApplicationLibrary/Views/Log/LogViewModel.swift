@@ -25,8 +25,6 @@ public class LogDataModel: ObservableObject {
     private var lastSearchText = ""
     private var cancellables = Set<AnyCancellable>()
 
-    private static let maxVisibleLogs = 1000
-
     public var isEmpty: Bool {
         commandClient.logList.isEmpty
     }
@@ -36,11 +34,7 @@ public class LogDataModel: ObservableObject {
     }
 
     private func updateVisibleLogs() {
-        if filteredLogs.count <= Self.maxVisibleLogs {
-            visibleLogs = filteredLogs
-        } else {
-            visibleLogs = Array(filteredLogs.suffix(Self.maxVisibleLogs))
-        }
+        visibleLogs = filteredLogs
     }
 
     public init(commandClient: CommandClient, viewModel: LogViewModel) {
