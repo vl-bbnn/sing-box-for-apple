@@ -13,7 +13,7 @@ derived_data_path="${SFI_DERIVED_DATA_PATH:-$build_dir/DerivedData-iPhone}"
 app_name="${SFI_APP_NAME:-sing-box.app}"
 sing_box_version="${SING_BOX_VERSION:-1.13.12}"
 sing_box_repo="${SING_BOX_REPO:-$workspace_root/sing-box}"
-libbox_platforms="${LIBBOX_APPLE_PLATFORMS:-ios,iossimulator}"
+libbox_platforms="${LIBBOX_APPLE_PLATFORMS:-ios,macos}"
 
 mkdir -p "$build_dir"
 
@@ -216,7 +216,7 @@ Environment:
   DEVICE_ID                Override auto-selected iPhone identifier.
   SING_BOX_REPO            Local sing-box repo; defaults to ../sing-box.
   SING_BOX_VERSION         Apple app/libbox version; defaults to 1.13.12.
-  LIBBOX_APPLE_PLATFORMS   Defaults to ios,iossimulator.
+  LIBBOX_APPLE_PLATFORMS   Defaults to ios,macos.
 USAGE
 }
 

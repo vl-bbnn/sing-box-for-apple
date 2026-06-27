@@ -50,8 +50,14 @@ fi
 
 cd "$repo_dir"
 rm -rf Libbox.xcframework
+IFS=',' read -r -a platform_list <<<"$platforms"
+for platform in "${platform_list[@]}"; do
+	rm -rf "build/${platform}-"*
+done
 
-make lib_install
+if [[ "${LIBBOX_SKIP_TOOL_INSTALL:-0}" != "1" ]]; then
+	make lib_install
+fi
 export PATH="$PATH:$(go env GOPATH)/bin"
 go run ./cmd/internal/build_libbox -target apple -platform "$platforms"
 
