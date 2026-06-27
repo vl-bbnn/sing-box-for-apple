@@ -624,21 +624,22 @@ open class ExtensionProvider: NEPacketTunnelProvider {
       }
     }
 
-    private func thermalStateDescription() -> String {
-      switch ProcessInfo.processInfo.thermalState {
-      case .nominal:
-        return "nominal"
-      case .fair:
-        return "fair"
-      case .serious:
-        return "serious"
-      case .critical:
-        return "critical"
-      @unknown default:
-        return "unknown(\(ProcessInfo.processInfo.thermalState.rawValue))"
-      }
-    }
   #endif
+
+  private func thermalStateDescription() -> String {
+    switch ProcessInfo.processInfo.thermalState {
+    case .nominal:
+      return "nominal"
+    case .fair:
+      return "fair"
+    case .serious:
+      return "serious"
+    case .critical:
+      return "critical"
+    @unknown default:
+      return "unknown(\(ProcessInfo.processInfo.thermalState.rawValue))"
+    }
+  }
 
   private func recordLifecycleEvent(_ message: String) {
     let enrichedMessage = enrichDiagnosticsMessage(message)
