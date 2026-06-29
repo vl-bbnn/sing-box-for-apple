@@ -30,6 +30,8 @@ concurrency:
 env:
   LIBBOX_APPLE_PLATFORMS: ios,macos
   LIBBOX_APPLE_PLATFORMS_CACHE_KEY: ios-macos
+  SING_BOX_REPO_URL: https://github.com/vl-bbnn/sing-box.git
+  SING_BOX_REPO_REF: overlay
 
 jobs:
   detect-release:
@@ -220,6 +222,17 @@ jobs:
           git submodule sync --recursive
           git submodule update --init --recursive
 
+      - name: Resolve sing-box source
+        id: sing-box-source
+        run: |
+          sha="$(git ls-remote "$SING_BOX_REPO_URL" "refs/heads/$SING_BOX_REPO_REF" | awk '{print $1}')"
+          if [[ -z "$sha" ]]; then
+            echo "Unable to resolve $SING_BOX_REPO_URL refs/heads/$SING_BOX_REPO_REF" >&2
+            exit 1
+          fi
+          echo "sha=$sha" >> "$GITHUB_OUTPUT"
+          echo "Using sing-box source $SING_BOX_REPO_URL@$SING_BOX_REPO_REF ($sha)"
+
       - name: Restore Go libbox cache
         id: cache-go-libbox
         uses: actions/cache/restore@v5
@@ -228,8 +241,9 @@ jobs:
             ~/go/pkg/mod
             ~/Library/Caches/go-build
             ~/Library/Caches/gomobile
-          key: ${{ runner.os }}-go-libbox-${{ needs.detect-release.outputs.new_version }}
+          key: ${{ runner.os }}-go-libbox-${{ steps.sing-box-source.outputs.sha }}-${{ needs.detect-release.outputs.new_version }}
           restore-keys: |
+            ${{ runner.os }}-go-libbox-${{ steps.sing-box-source.outputs.sha }}-
             ${{ runner.os }}-go-libbox-
 
       - name: Restore Libbox.xcframework cache
@@ -237,7 +251,7 @@ jobs:
         uses: actions/cache/restore@v5
         with:
           path: Libbox.xcframework
-          key: ${{ runner.os }}-libbox-xcframework-${{ env.LIBBOX_APPLE_PLATFORMS_CACHE_KEY }}-${{ needs.detect-release.outputs.new_version }}
+          key: ${{ runner.os }}-libbox-xcframework-${{ env.LIBBOX_APPLE_PLATFORMS_CACHE_KEY }}-${{ steps.sing-box-source.outputs.sha }}-${{ needs.detect-release.outputs.new_version }}
 
       - name: Build Libbox.xcframework
         if: steps.cache-libbox-xcframework.outputs.cache-hit != 'true'
@@ -399,6 +413,17 @@ jobs:
           git submodule sync --recursive
           git submodule update --init --recursive
 
+      - name: Resolve sing-box source
+        id: sing-box-source
+        run: |
+          sha="$(git ls-remote "$SING_BOX_REPO_URL" "refs/heads/$SING_BOX_REPO_REF" | awk '{print $1}')"
+          if [[ -z "$sha" ]]; then
+            echo "Unable to resolve $SING_BOX_REPO_URL refs/heads/$SING_BOX_REPO_REF" >&2
+            exit 1
+          fi
+          echo "sha=$sha" >> "$GITHUB_OUTPUT"
+          echo "Using sing-box source $SING_BOX_REPO_URL@$SING_BOX_REPO_REF ($sha)"
+
       - name: Restore Go libbox cache
         id: cache-go-libbox
         uses: actions/cache/restore@v5
@@ -407,8 +432,9 @@ jobs:
             ~/go/pkg/mod
             ~/Library/Caches/go-build
             ~/Library/Caches/gomobile
-          key: ${{ runner.os }}-go-libbox-${{ needs.detect-release.outputs.new_version }}
+          key: ${{ runner.os }}-go-libbox-${{ steps.sing-box-source.outputs.sha }}-${{ needs.detect-release.outputs.new_version }}
           restore-keys: |
+            ${{ runner.os }}-go-libbox-${{ steps.sing-box-source.outputs.sha }}-
             ${{ runner.os }}-go-libbox-
 
       - name: Restore Libbox.xcframework cache
@@ -416,7 +442,7 @@ jobs:
         uses: actions/cache/restore@v5
         with:
           path: Libbox.xcframework
-          key: ${{ runner.os }}-libbox-xcframework-${{ env.LIBBOX_APPLE_PLATFORMS_CACHE_KEY }}-${{ needs.detect-release.outputs.new_version }}
+          key: ${{ runner.os }}-libbox-xcframework-${{ env.LIBBOX_APPLE_PLATFORMS_CACHE_KEY }}-${{ steps.sing-box-source.outputs.sha }}-${{ needs.detect-release.outputs.new_version }}
 
       - name: Build Libbox.xcframework
         if: steps.cache-libbox-xcframework.outputs.cache-hit != 'true'
