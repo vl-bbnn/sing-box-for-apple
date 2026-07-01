@@ -8,7 +8,11 @@ if [[ $# -lt 1 || $# -gt 2 ]]; then
 fi
 
 version="$1"
-destination="${2:-$(pwd)/Libbox.xcframework}"
+client_root="$(pwd)"
+destination="${2:-Libbox.xcframework}"
+if [[ "$destination" != /* ]]; then
+	destination="$client_root/$destination"
+fi
 workspace_root="${RUNNER_TEMP:-$(pwd)/build}"
 build_root="$workspace_root/libbox-build"
 repo_dir="${SING_BOX_REPO:-}"
@@ -55,8 +59,51 @@ fi
 
 cd "$repo_dir"
 
+extra_tag_list=()
+split_tags() {
+	local value="$1"
+	[[ -n "$value" ]] || return 0
+	local tag
+	while IFS= read -r tag; do
+		[[ -n "$tag" ]] || continue
+		extra_tag_list+=("$tag")
+	done < <(printf '%s\n' "$value" | tr ', \t' '\n')
+}
+
+if [[ "${SING_BOX_LX:-}" == "1" ]]; then
+	if [[ ! -f Makefile.lx ]]; then
+		echo "SING_BOX_LX=1 requires Makefile.lx in $repo_dir" >&2
+		exit 1
+	fi
+	split_tags "$(make -f Makefile.lx -s lx-print-tags)"
+fi
+split_tags "${SING_BOX_BUILD_TAGS:-}"
+split_tags "${SING_BOX_EXTRA_TAGS:-}"
+
+if [[ "${#extra_tag_list[@]}" -gt 0 ]]; then
+	extra_tags="$(
+		printf '%s\n' "${extra_tag_list[@]}" \
+			| awk '!seen[$0]++' \
+			| paste -sd, -
+	)"
+	export SING_BOX_EXTRA_TAGS="$extra_tags"
+	echo "using extra sing-box build tags: $SING_BOX_EXTRA_TAGS"
+fi
+
 make lib_install
 export PATH="$PATH:$(go env GOPATH)/bin"
 go run ./cmd/internal/build_libbox -target apple -platform "$platforms"
 
-mv Libbox.xcframework "$destination"
+source_xcframework="$repo_dir/Libbox.xcframework"
+if [[ ! -d "$source_xcframework" && -d "$client_root/Libbox.xcframework" ]]; then
+	source_xcframework="$client_root/Libbox.xcframework"
+fi
+if [[ ! -d "$source_xcframework" ]]; then
+	echo "Libbox.xcframework was not produced" >&2
+	exit 1
+fi
+if [[ "$source_xcframework" != "$destination" ]]; then
+	rm -rf "$destination"
+	mkdir -p "$(dirname "$destination")"
+	mv "$source_xcframework" "$destination"
+fi
