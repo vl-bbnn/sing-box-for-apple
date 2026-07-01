@@ -90,7 +90,9 @@ if [[ "${#extra_tag_list[@]}" -gt 0 ]]; then
 	echo "using extra sing-box build tags: $SING_BOX_EXTRA_TAGS"
 fi
 
-make lib_install
+if [[ "${LIBBOX_SKIP_TOOL_INSTALL:-0}" != "1" ]]; then
+	make lib_install
+fi
 export PATH="$PATH:$(go env GOPATH)/bin"
 go run ./cmd/internal/build_libbox -target apple -platform "$platforms"
 
