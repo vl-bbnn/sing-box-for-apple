@@ -17,6 +17,7 @@ on:
           - all
           - ios
           - macos
+          - metadata
   schedule:
     - cron: "0 0 * * *"
 
@@ -60,7 +61,7 @@ jobs:
       - name: Detect upstream version bump
         id: prepare
         run: |
-          if [[ "${{ github.event.inputs.force_release || 'false' }}" == "true" ]]; then
+          if [[ "${{ github.event.inputs.force_release || 'false' }}" == "true" || "${{ github.event.inputs.platform || 'all' }}" == "metadata" ]]; then
             ./scripts/prepare_overlay_release.sh --force
           else
             ./scripts/prepare_overlay_release.sh
@@ -104,7 +105,7 @@ jobs:
 
       - name: Prepare release branch
         run: |
-          if [[ "${{ github.event.inputs.force_release || 'false' }}" == "true" ]]; then
+          if [[ "${{ github.event.inputs.force_release || 'false' }}" == "true" || "${{ github.event.inputs.platform || 'all' }}" == "metadata" ]]; then
             ./scripts/prepare_overlay_release.sh --force
           else
             ./scripts/prepare_overlay_release.sh
@@ -293,7 +294,7 @@ jobs:
 
   publish-ios-group:
     needs: [detect-release, prepare-release, upload-ios]
-    if: always() && needs.detect-release.outputs.should_release == 'true' && (github.event_name != 'workflow_dispatch' || github.event.inputs.platform == 'all' || github.event.inputs.platform == 'ios') && (needs.prepare-release.outputs.ios_build_exists == 'true' || needs.upload-ios.result == 'success')
+    if: always() && needs.detect-release.outputs.should_release == 'true' && (github.event_name != 'workflow_dispatch' || github.event.inputs.platform == 'all' || github.event.inputs.platform == 'ios' || github.event.inputs.platform == 'metadata') && (needs.prepare-release.outputs.ios_build_exists == 'true' || needs.upload-ios.result == 'success')
     runs-on: ubuntu-latest
     env:
       OVERLAY_BASE_PACKAGE_IDENTIFIER: ${{ vars.OVERLAY_BASE_PACKAGE_IDENTIFIER }}
@@ -484,7 +485,7 @@ jobs:
 
   publish-macos-group:
     needs: [detect-release, prepare-release, upload-macos]
-    if: always() && needs.detect-release.outputs.should_release == 'true' && (github.event_name != 'workflow_dispatch' || github.event.inputs.platform == 'all' || github.event.inputs.platform == 'macos') && (needs.prepare-release.outputs.macos_build_exists == 'true' || needs.upload-macos.result == 'success')
+    if: always() && needs.detect-release.outputs.should_release == 'true' && (github.event_name != 'workflow_dispatch' || github.event.inputs.platform == 'all' || github.event.inputs.platform == 'macos' || github.event.inputs.platform == 'metadata') && (needs.prepare-release.outputs.macos_build_exists == 'true' || needs.upload-macos.result == 'success')
     runs-on: ubuntu-latest
     env:
       OVERLAY_BASE_PACKAGE_IDENTIFIER: ${{ vars.OVERLAY_BASE_PACKAGE_IDENTIFIER }}
