@@ -1,3 +1,5 @@
+require_relative "overlay_config"
+
 # iOS Screenshots
 # App Store requirements:
 # - iPhone 6.5" Display
@@ -14,7 +16,7 @@ languages([
 
 project("./sing-box.xcodeproj")
 scheme("SFI")
-app_identifier("io.nekohasekai.sfavt")
+app_identifier(OverlayConfig.setting("OVERLAY_BASE_PACKAGE_IDENTIFIER"))
 output_directory("./screenshots/ios")
 clear_previous_screenshots(true)
 reinstall_app(true)
