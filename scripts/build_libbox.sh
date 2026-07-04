@@ -59,6 +59,15 @@ fi
 
 cd "$repo_dir"
 
+wireguard_submodule="$(
+	git config -f .gitmodules --get submodule.submodules/wireguard-go.path 2>/dev/null \
+		|| true
+)"
+if [[ -n "$wireguard_submodule" ]]; then
+	git submodule sync -- "$wireguard_submodule"
+	git submodule update --init --depth=1 --recursive -- "$wireguard_submodule"
+fi
+
 extra_tag_list=()
 split_tags() {
 	local value="$1"
