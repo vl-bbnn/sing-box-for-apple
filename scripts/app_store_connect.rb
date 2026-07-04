@@ -40,8 +40,15 @@ class AppStoreConnectClient
                 { iss: @issuer_id, aud: "appstoreconnect-v1", iat: now, exp: now + 20 * 60 }
               end
     unsigned = [header, payload].map { |part| base64url(JSON.generate(part)) }.join(".")
-    signature = @private_key.dsa_sign_asn1(OpenSSL::Digest::SHA256.digest(unsigned))
+    signature = raw_ecdsa_signature(
+      @private_key.dsa_sign_asn1(OpenSSL::Digest::SHA256.digest(unsigned))
+    )
     "#{unsigned}.#{base64url(signature)}"
+  end
+
+  def raw_ecdsa_signature(der_signature)
+    r, s = OpenSSL::ASN1.decode(der_signature).value.map(&:value)
+    [r, s].map { |component| component.to_s(2).rjust(32, "\0") }.join
   end
 
   def base64url(value)
