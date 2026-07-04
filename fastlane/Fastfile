@@ -1,8 +1,11 @@
+require_relative "overlay_config"
+
 default_platform(:ios)
 
 ENV["FASTLANE_XCODEBUILD_SETTINGS_RETRIES"] = "0"
 ENV["FASTLANE_XCODEBUILD_SETTINGS_TIMEOUT"] = "30"
 
+BASE_PACKAGE_IDENTIFIER = OverlayConfig.setting("OVERLAY_BASE_PACKAGE_IDENTIFIER").freeze
 SCREENSHOT_LANGUAGES = ["en-US", "zh-Hans"].freeze
 SCREENSHOT_LOCALES = {
   "zh-Hans" => "zh_CN"
@@ -49,7 +52,7 @@ platform :mac do
     output_base_dir = File.expand_path("../screenshots/macos", __dir__)
     screenshots_cache_candidates = [
       File.expand_path("~/Library/Caches/tools.fastlane/screenshots"),
-      File.expand_path("~/Library/Containers/io.nekohasekai.sfavt.SFMUITests.xctrunner/Data/Library/Caches/tools.fastlane/screenshots")
+      File.expand_path("~/Library/Containers/#{BASE_PACKAGE_IDENTIFIER}.SFMUITests.xctrunner/Data/Library/Caches/tools.fastlane/screenshots")
     ].uniq
     ENV["DISABLE_SWIFTLINT"] = "1"
     ENV["SCREENSHOT_WINDOW_PIXEL_HEIGHT"] = "1000"
@@ -77,7 +80,7 @@ platform :mac do
         destination: "platform=macOS",
         result_bundle: false,
         reinstall_app: false,
-        app_identifier: "io.nekohasekai.sfavt",
+        app_identifier: BASE_PACKAGE_IDENTIFIER,
         only_testing: ["SFMUITests/SnapshotTests"],
         number_of_retries: 0
       )
@@ -245,7 +248,7 @@ platform :tvos do
         devices: ["Apple TV 4K (3rd generation)"],
         result_bundle: false,
         reinstall_app: true,
-        app_identifier: "io.nekohasekai.sfavt",
+        app_identifier: BASE_PACKAGE_IDENTIFIER,
         only_testing: ["SFTUITests/SnapshotTests"],
         number_of_retries: 0,
         cloned_source_packages_path: "/tmp/fastlane_source_packages",
