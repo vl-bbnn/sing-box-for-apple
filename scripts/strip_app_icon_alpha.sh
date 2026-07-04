@@ -18,15 +18,26 @@ if [ ! -x "$pngcrush" ]; then
   exit 0
 fi
 
-find "$resources_dir" -maxdepth 1 -type f -name "${icon_name}*.png" -exec sh -c '
-pngcrush="$1"
-shift
+for icon_suffix in \
+  "20x20@2x.png" \
+  "20x20@3x.png" \
+  "29x29@2x.png" \
+  "29x29@3x.png" \
+  "40x40@2x.png" \
+  "40x40@3x.png" \
+  "60x60@2x.png" \
+  "60x60@3x.png" \
+  "76x76@2x~ipad.png" \
+  "83.5x83.5@2x~ipad.png"
+do
+  icon_path="${resources_dir}/${icon_name}${icon_suffix}"
+  if [ ! -f "$icon_path" ]; then
+    continue
+  fi
 
-for icon_path do
   if /usr/bin/sips -g hasAlpha "$icon_path" 2>/dev/null | /usr/bin/grep -q "hasAlpha: yes"; then
     tmp_path="${icon_path}.noalpha"
     "$pngcrush" -q -rem alla -reduce "$icon_path" "$tmp_path"
     /bin/mv "$tmp_path" "$icon_path"
   fi
 done
-' sh "$pngcrush" {} +
