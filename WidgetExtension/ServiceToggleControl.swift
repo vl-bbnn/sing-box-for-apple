@@ -5,11 +5,11 @@ import WidgetKit
 struct ServiceToggleControl: ControlWidget {
     var body: some ControlWidgetConfiguration {
         StaticControlConfiguration(
-            kind: WidgetAppConfiguration.widgetControlKind,
+            kind: AppConfiguration.widgetControlKind,
             provider: Provider()
         ) { value in
             ControlWidgetToggle(
-                "sing-box",
+                LocalizedStringResource(stringLiteral: AppConfiguration.applicationName),
                 isOn: value,
                 action: ToggleServiceControlIntent()
             ) { isOn in
@@ -19,7 +19,7 @@ struct ServiceToggleControl: ControlWidget {
             .tint(.init(red: CGFloat(Double(69) / 255), green: CGFloat(Double(90) / 255), blue: CGFloat(Double(100) / 255)))
         }
         .displayName("Toggle")
-        .description("Start or stop sing-box service.")
+        .description(LocalizedStringResource(stringLiteral: "Start or stop \(AppConfiguration.applicationName) service."))
     }
 }
 
@@ -36,7 +36,7 @@ extension ServiceToggleControl {
 }
 
 struct ToggleServiceControlIntent: SetValueIntent {
-    static var title: LocalizedStringResource = "Toggle sing-box"
+    static let title: LocalizedStringResource = "Toggle"
 
     @Parameter(title: "Running")
     var value: Bool

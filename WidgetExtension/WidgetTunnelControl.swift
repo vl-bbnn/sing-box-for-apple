@@ -1,7 +1,16 @@
 import Foundation
 import NetworkExtension
 
-enum WidgetAppConfiguration {
+enum AppConfiguration {
+    private static func overlayValue(_ key: String, fallback: String) -> String {
+        let value = Bundle.main.object(forInfoDictionaryKey: key) as? String
+        return value.flatMap { $0.isEmpty ? nil : $0 } ?? fallback
+    }
+
+    static var applicationName: String {
+        overlayValue("OverlayApplicationName", fallback: "sing-box")
+    }
+
     static let packageName: String = {
         guard let value = Bundle.main.object(forInfoDictionaryKey: "BasePackageIdentifier") as? String else {
             fatalError("Missing BasePackageIdentifier in Info.plist")

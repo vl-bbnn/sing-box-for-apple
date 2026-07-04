@@ -30,6 +30,8 @@ public enum AppConfiguration {
         overlayValue("OverlayReleasesLink", fallback: "https://github.com/SagerNet/sing-box/releases")
     }
 
+    public static let iCloudDirectoryName = "sing-box"
+
     public static let packageName: String = {
         guard let value = Bundle.main.object(forInfoDictionaryKey: "BasePackageIdentifier") as? String else {
             fatalError("Missing BasePackageIdentifier in Info.plist")

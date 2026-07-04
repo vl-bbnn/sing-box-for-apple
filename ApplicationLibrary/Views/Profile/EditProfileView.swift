@@ -59,7 +59,7 @@ public struct EditProfileView: View {
             } footer: {
                 if profile.type == .icloud {
                     let fileName = profile.path.isEmpty ? String(localized: "FileName") : profile.path
-                    Text("File will be located at iCloud Drive/sing-box/\(fileName)")
+                    Text("File will be located at iCloud Drive/\(AppConfiguration.iCloudDirectoryName)/\(fileName)")
                 }
             }
             if profile.type == .remote {

@@ -1,6 +1,17 @@
 import FileProvider
 import UniformTypeIdentifiers
 
+enum AppConfiguration {
+    private static func overlayValue(_ key: String, fallback: String) -> String {
+        let value = Bundle.main.object(forInfoDictionaryKey: key) as? String
+        return value.flatMap { $0.isEmpty ? nil : $0 } ?? fallback
+    }
+
+    static var applicationName: String {
+        overlayValue("OverlayApplicationName", fallback: "sing-box")
+    }
+}
+
 class FileProviderItem: NSObject, NSFileProviderItem {
     private let url: URL
     private let fileAttributes: [FileAttributeKey: Any]
@@ -44,7 +55,7 @@ class FileProviderItem: NSObject, NSFileProviderItem {
 
     var filename: String {
         if isRoot {
-            return "sing-box"
+            return AppConfiguration.applicationName
         }
         return url.lastPathComponent
     }
