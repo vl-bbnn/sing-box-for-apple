@@ -2,7 +2,7 @@ SHELL := /bin/bash
 .SHELLFLAGS := -o pipefail -c
 .SILENT:
 
-INSTALLER_SIGN_IDENTITY := 16480CA444F481F8DEAF9421FAD2CCE590FC54E4
+INSTALLER_SIGN_IDENTITY ?=
 OVERLAY_CONFIG := Config/Overlay.xcconfig
 OVERLAY_SETTING := ./scripts/overlay_setting.sh
 BASE_PACKAGE_IDENTIFIER := $(shell $(OVERLAY_SETTING) OVERLAY_BASE_PACKAGE_IDENTIFIER)
@@ -194,7 +194,7 @@ release_macos_dmg_universal: build_macos_dmg_universal notarize_macos_dmg_univer
 release_macos_dmg: release_macos_dmg_apple release_macos_dmg_intel release_macos_dmg_universal
 
 # PKG commands
-build_macos_pkg_apple: archive_macos_standalone_apple export_macos_standalone_apple $(SFM_SYSTEM_DISTRIBUTION_ARM64)
+build_macos_pkg_apple: check_installer_sign_identity archive_macos_standalone_apple export_macos_standalone_apple $(SFM_SYSTEM_DISTRIBUTION_ARM64)
 	rm -f build/SFM-Apple.pkg
 	rm -rf build/pkgroot-arm64
 	mkdir -p build/pkgroot-arm64
@@ -214,7 +214,7 @@ build_macos_pkg_apple: archive_macos_standalone_apple export_macos_standalone_ap
 	rm -rf build/pkgroot-arm64
 	rm -f build/component-arm64.pkg
 
-build_macos_pkg_intel: archive_macos_standalone_intel export_macos_standalone_intel $(SFM_SYSTEM_DISTRIBUTION_X86_64)
+build_macos_pkg_intel: check_installer_sign_identity archive_macos_standalone_intel export_macos_standalone_intel $(SFM_SYSTEM_DISTRIBUTION_X86_64)
 	rm -f build/SFM-Intel.pkg
 	rm -rf build/pkgroot-x86_64
 	mkdir -p build/pkgroot-x86_64
@@ -234,7 +234,7 @@ build_macos_pkg_intel: archive_macos_standalone_intel export_macos_standalone_in
 	rm -rf build/pkgroot-x86_64
 	rm -f build/component-x86_64.pkg
 
-build_macos_pkg_universal: archive_macos_standalone_universal export_macos_standalone_universal $(SFM_SYSTEM_DISTRIBUTION_UNIVERSAL)
+build_macos_pkg_universal: check_installer_sign_identity archive_macos_standalone_universal export_macos_standalone_universal $(SFM_SYSTEM_DISTRIBUTION_UNIVERSAL)
 	rm -f build/SFM-Universal.pkg
 	rm -rf build/pkgroot-universal
 	mkdir -p build/pkgroot-universal
@@ -255,6 +255,10 @@ build_macos_pkg_universal: archive_macos_standalone_universal export_macos_stand
 	rm -f build/component-universal.pkg
 
 build_macos_pkg: build_macos_pkg_apple build_macos_pkg_intel build_macos_pkg_universal
+
+.PHONY: check_installer_sign_identity
+check_installer_sign_identity:
+	test -n "$(INSTALLER_SIGN_IDENTITY)" || { echo "INSTALLER_SIGN_IDENTITY is required for standalone macOS PKG builds" >&2; exit 1; }
 
 # PKG notarize commands
 notarize_macos_pkg_apple:

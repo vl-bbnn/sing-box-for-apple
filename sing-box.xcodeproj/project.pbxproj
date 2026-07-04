@@ -453,7 +453,6 @@
 		3AE595A32F08C4ED00C13426 /* UserNotifications.framework */ = {isa = PBXFileReference; lastKnownFileType = wrapper.framework; name = UserNotifications.framework; path = System/Library/Frameworks/UserNotifications.framework; sourceTree = SDKROOT; };
 		3B1D24E53020260000000001 /* Config/Overlay.xcconfig */ = {isa = PBXFileReference; lastKnownFileType = text.xcconfig; path = Config/Overlay.xcconfig; sourceTree = "<group>"; };
 		3AE595AE2F08D00000C13426 /* HelperService/LaunchDaemons/HelperService.plist */ = {isa = PBXFileReference; lastKnownFileType = text.plist.xml; path = HelperService/LaunchDaemons/HelperService.plist; sourceTree = "<group>"; };
-		3AE595AF2F08D00000C13426 /* UserHelper/LaunchAgents/io.nekohasekai.sfavt.userhelper.plist */ = {isa = PBXFileReference; lastKnownFileType = text.plist.xml; path = UserHelper/LaunchAgents/io.nekohasekai.sfavt.userhelper.plist; sourceTree = "<group>"; };
 		3AEC20DB2A4599D000A63465 /* Libbox.xcframework */ = {isa = PBXFileReference; lastKnownFileType = wrapper.xcframework; path = Libbox.xcframework; sourceTree = "<group>"; };
 		3AEC20F32A459AB400A63465 /* sing-box.app */ = {isa = PBXFileReference; explicitFileType = wrapper.application; includeInIndex = 0; path = "sing-box.app"; sourceTree = BUILT_PRODUCTS_DIR; };
 		3AEC21092A459B1900A63465 /* sing-box.app */ = {isa = PBXFileReference; explicitFileType = wrapper.application; includeInIndex = 0; path = "sing-box.app"; sourceTree = BUILT_PRODUCTS_DIR; };
@@ -783,7 +782,6 @@
 			isa = PBXGroup;
 			children = (
 				3AE595AE2F08D00000C13426 /* HelperService/LaunchDaemons/HelperService.plist */,
-				3AE595AF2F08D00000C13426 /* UserHelper/LaunchAgents/io.nekohasekai.sfavt.userhelper.plist */,
 			);
 			name = "Recovered References";
 			sourceTree = "<group>";
@@ -2038,6 +2036,7 @@
 				CURRENT_PROJECT_VERSION = 1;
 				DEVELOPMENT_TEAM = "$(OVERLAY_DEVELOPMENT_TEAM)";
 				GENERATE_INFOPLIST_FILE = YES;
+				INFOPLIST_KEY_BasePackageIdentifier = "$(BASE_PACKAGE_IDENTIFIER)";
 				MACOSX_DEPLOYMENT_TARGET = 26.2;
 				MARKETING_VERSION = 1.0;
 				PRODUCT_BUNDLE_IDENTIFIER = "$(BASE_PACKAGE_IDENTIFIER).SFMUITests";
@@ -2059,6 +2058,7 @@
 				CURRENT_PROJECT_VERSION = 1;
 				DEVELOPMENT_TEAM = "$(OVERLAY_DEVELOPMENT_TEAM)";
 				GENERATE_INFOPLIST_FILE = YES;
+				INFOPLIST_KEY_BasePackageIdentifier = "$(BASE_PACKAGE_IDENTIFIER)";
 				MACOSX_DEPLOYMENT_TARGET = 26.2;
 				MARKETING_VERSION = 1.0;
 				PRODUCT_BUNDLE_IDENTIFIER = "$(BASE_PACKAGE_IDENTIFIER).SFMUITests";
