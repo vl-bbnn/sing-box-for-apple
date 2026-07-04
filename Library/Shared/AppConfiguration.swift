@@ -1,6 +1,35 @@
 import Foundation
 
 public enum AppConfiguration {
+    private static func overlayValue(_ key: String, fallback: String) -> String {
+        let value = Bundle.main.object(forInfoDictionaryKey: key) as? String
+        return value.flatMap { $0.isEmpty ? nil : $0 } ?? fallback
+    }
+
+    public static var applicationName: String {
+        overlayValue("OverlayApplicationName", fallback: "sing-box")
+    }
+
+    public static var applicationLink: String {
+        overlayValue("OverlayApplicationLink", fallback: "https://sing-box.sagernet.org/")
+    }
+
+    public static var changelogLink: String {
+        overlayValue("OverlayChangelogLink", fallback: "https://sing-box.sagernet.org/changelog/")
+    }
+
+    public static var configurationLink: String {
+        overlayValue("OverlayConfigurationLink", fallback: "https://sing-box.sagernet.org/configuration/")
+    }
+
+    public static var sourceLink: String {
+        overlayValue("OverlaySourceLink", fallback: "https://github.com/SagerNet/sing-box")
+    }
+
+    public static var releasesLink: String {
+        overlayValue("OverlayReleasesLink", fallback: "https://github.com/SagerNet/sing-box/releases")
+    }
+
     public static let packageName: String = {
         guard let value = Bundle.main.object(forInfoDictionaryKey: "BasePackageIdentifier") as? String else {
             fatalError("Missing BasePackageIdentifier in Info.plist")

@@ -32,7 +32,7 @@ env:
   LIBBOX_APPLE_PLATFORMS: ios,macos
   LIBBOX_APPLE_PLATFORMS_CACHE_KEY: ios-macos
   SING_BOX_REPO_URL: https://github.com/vl-bbnn/sing-box.git
-  SING_BOX_REPO_REF: lx/overlay
+  SING_BOX_REPO_REF: ef1d02148a66158e23fc22d4e372f4f3bf855bc1
   SING_BOX_LX: "1"
 
 jobs:
@@ -227,7 +227,11 @@ jobs:
       - name: Resolve sing-box source
         id: sing-box-source
         run: |
-          sha="$(git ls-remote "$SING_BOX_REPO_URL" "refs/heads/$SING_BOX_REPO_REF" | awk '{print $1}')"
+          if [[ "$SING_BOX_REPO_REF" =~ ^[0-9a-f]{40}$ ]]; then
+            sha="$SING_BOX_REPO_REF"
+          else
+            sha="$(git ls-remote "$SING_BOX_REPO_URL" "refs/heads/$SING_BOX_REPO_REF" | awk '{print $1}')"
+          fi
           if [[ -z "$sha" ]]; then
             echo "Unable to resolve $SING_BOX_REPO_URL refs/heads/$SING_BOX_REPO_REF" >&2
             exit 1
@@ -418,7 +422,11 @@ jobs:
       - name: Resolve sing-box source
         id: sing-box-source
         run: |
-          sha="$(git ls-remote "$SING_BOX_REPO_URL" "refs/heads/$SING_BOX_REPO_REF" | awk '{print $1}')"
+          if [[ "$SING_BOX_REPO_REF" =~ ^[0-9a-f]{40}$ ]]; then
+            sha="$SING_BOX_REPO_REF"
+          else
+            sha="$(git ls-remote "$SING_BOX_REPO_URL" "refs/heads/$SING_BOX_REPO_REF" | awk '{print $1}')"
+          fi
           if [[ -z "$sha" ]]; then
             echo "Unable to resolve $SING_BOX_REPO_URL refs/heads/$SING_BOX_REPO_REF" >&2
             exit 1

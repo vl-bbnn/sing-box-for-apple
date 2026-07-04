@@ -5,6 +5,22 @@ set -eu
 config_path="Config/Overlay.local.xcconfig"
 base_package_identifier="${OVERLAY_BASE_PACKAGE_IDENTIFIER:-}"
 development_team="${OVERLAY_DEVELOPMENT_TEAM:-}"
+application_name="${OVERLAY_APPLICATION_NAME:-$(./scripts/overlay_setting.sh OVERLAY_APPLICATION_NAME)}"
+application_link="${OVERLAY_APPLICATION_LINK:-$(./scripts/overlay_setting.sh OVERLAY_APPLICATION_LINK)}"
+changelog_link="${OVERLAY_CHANGELOG_LINK:-$(./scripts/overlay_setting.sh OVERLAY_CHANGELOG_LINK)}"
+configuration_link="${OVERLAY_CONFIGURATION_LINK:-$(./scripts/overlay_setting.sh OVERLAY_CONFIGURATION_LINK)}"
+source_link="${OVERLAY_SOURCE_LINK:-$(./scripts/overlay_setting.sh OVERLAY_SOURCE_LINK)}"
+releases_link="${OVERLAY_RELEASES_LINK:-$(./scripts/overlay_setting.sh OVERLAY_RELEASES_LINK)}"
+
+xcconfig_url() {
+    printf '%s' "$1" | sed 's|://|:/$()/|'
+}
+
+application_link="$(xcconfig_url "$application_link")"
+changelog_link="$(xcconfig_url "$changelog_link")"
+configuration_link="$(xcconfig_url "$configuration_link")"
+source_link="$(xcconfig_url "$source_link")"
+releases_link="$(xcconfig_url "$releases_link")"
 
 if [ -z "$base_package_identifier" ] || [ -z "$development_team" ]; then
     if [ -x "./scripts/overlay_setting.sh" ]; then
@@ -30,6 +46,12 @@ OVERLAY_BASE_PACKAGE_IDENTIFIER = $base_package_identifier
 OVERLAY_DEVELOPMENT_TEAM = $development_team
 OVERLAY_MACOS_SYSTEM_PROFILE_SPECIFIER = $macos_system_profile_specifier
 OVERLAY_MACOS_STANDALONE_PROFILE_SPECIFIER = $macos_standalone_profile_specifier
+OVERLAY_APPLICATION_NAME = $application_name
+OVERLAY_APPLICATION_LINK = $application_link
+OVERLAY_CHANGELOG_LINK = $changelog_link
+OVERLAY_CONFIGURATION_LINK = $configuration_link
+OVERLAY_SOURCE_LINK = $source_link
+OVERLAY_RELEASES_LINK = $releases_link
 EOF
 
 helper_plist_path="HelperService/LaunchDaemons/HelperService.plist"

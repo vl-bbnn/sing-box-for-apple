@@ -19,6 +19,7 @@ done
 origin_remote="${ORIGIN_REMOTE:-origin}"
 upstream_remote="${UPSTREAM_REMOTE:-upstream}"
 project_file="sing-box.xcodeproj/project.pbxproj"
+version_ceiling="$(tr -d '[:space:]' < Config/Overlay.version-ceiling)"
 tmp_branch="ci/overlay-release"
 
 write_output() {
@@ -151,6 +152,24 @@ upstream_version="$(
 	git show "$upstream_remote/main:$project_file" \
 	| python3 scripts/read_apple_project_setting.py --stdin --infoplist SFI/Info.plist --setting MARKETING_VERSION
 )"
+
+if ! python3 - "$upstream_version" "$version_ceiling" <<'PY'
+import sys
+
+def version(value):
+    core = value.split("-", 1)[0]
+    return tuple(int(part) for part in core.split("."))
+
+raise SystemExit(0 if version(sys.argv[1]) <= version(sys.argv[2]) else 1)
+PY
+then
+	echo "upstream version $upstream_version exceeds overlay ceiling $version_ceiling; skipping" >&2
+	write_output upstream_version "$upstream_version"
+	write_output version_ceiling "$version_ceiling"
+	write_output should_release false
+	write_output should_push false
+	exit 0
+fi
 
 overlay_commit_count="$(git rev-list --count "$origin_remote/main..$release_overlay_ref")"
 if [[ "$overlay_commit_count" == "0" ]]; then

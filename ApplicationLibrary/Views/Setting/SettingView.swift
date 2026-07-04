@@ -160,26 +160,26 @@ public struct SettingView: View {
             }
             #if !os(tvOS)
                 Section("About") {
-                    Link(destination: URL(string: String(localized: "https://sing-box.sagernet.org/"))!) {
+                    Link(destination: URL(string: AppConfiguration.applicationLink)!) {
                         Label("Documentation", systemImage: "doc.on.doc.fill")
                     }
                     .buttonStyle(.plain)
                     .foregroundColor(.accentColor)
                     .contextMenu {
-                        Link(destination: URL(string: String(localized: "https://sing-box.sagernet.org/changelog/"))!) {
+                        Link(destination: URL(string: AppConfiguration.changelogLink)!) {
                             Text("Changelog")
                         }
-                        Link(destination: URL(string: String(localized: "https://sing-box.sagernet.org/configuration/"))!) {
+                        Link(destination: URL(string: AppConfiguration.configurationLink)!) {
                             Text("Configuration")
                         }
                     }
-                    Link(destination: URL(string: String("https://github.com/SagerNet/sing-box"))!) {
+                    Link(destination: URL(string: AppConfiguration.sourceLink)!) {
                         Label("Source Code", systemImage: "pills.fill")
                     }
                     .buttonStyle(.plain)
                     .foregroundColor(.accentColor)
                     .contextMenu {
-                        Link(destination: URL(string: String("https://github.com/SagerNet/sing-box/releases"))!) {
+                        Link(destination: URL(string: AppConfiguration.releasesLink)!) {
                             Text("Releases")
                         }
                     }

@@ -17,7 +17,7 @@ workspace_root="${RUNNER_TEMP:-$(pwd)/build}"
 build_root="$workspace_root/libbox-build"
 repo_dir="${SING_BOX_REPO:-}"
 repo_url="${SING_BOX_REPO_URL:-https://github.com/SagerNet/sing-box.git}"
-repo_ref="${SING_BOX_REPO_REF:-}"
+repo_ref="${SING_BOX_REPO_REF:-ef1d02148a66158e23fc22d4e372f4f3bf855bc1}"
 platforms="${LIBBOX_APPLE_PLATFORMS:-ios,macos}"
 
 rm -rf "$destination"
