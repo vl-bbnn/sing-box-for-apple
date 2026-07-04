@@ -1136,6 +1136,7 @@
 				3AEC20EF2A459AB400A63465 /* Sources */,
 				3AEC20F02A459AB400A63465 /* Frameworks */,
 				3AEC20F12A459AB400A63465 /* Resources */,
+				3B2B2B042F410001002B2B2B /* Strip App Icon Alpha */,
 				3A44BB782A4DC17000E4C9F8 /* Embed Foundation Extensions */,
 				3A9759222A4EB69C00E4404B /* Embed Frameworks */,
 				3A8655172A4FA26600B7181F /* Embed ExtensionKit Extensions */,
@@ -1170,6 +1171,7 @@
 				3AEC21052A459B1900A63465 /* Sources */,
 				3AEC21062A459B1900A63465 /* Frameworks */,
 				3AEC21072A459B1900A63465 /* Resources */,
+				3B2B2B052F410001002B2B2B /* Strip App Icon Alpha */,
 				3A096F762A4ED1A600D4A2ED /* Embed Foundation Extensions */,
 				3A8655132A4FA25C00B7181F /* Embed ExtensionKit Extensions */,
 				3A5F26CA2A503D4B00C27EDF /* Embed Frameworks */,
@@ -1241,6 +1243,7 @@
 				3AEECC002A6DF9CA006A0E0C /* Sources */,
 				3AEECC012A6DF9CA006A0E0C /* Frameworks */,
 				3AEECC022A6DF9CA006A0E0C /* Resources */,
+				3B2B2B062F410001002B2B2B /* Strip App Icon Alpha */,
 				3AEECC212A6DFA79006A0E0C /* Embed Frameworks */,
 				3AEECC232A6DFA79006A0E0C /* Embed System Extensions */,
 				3AE595A92F08C5E200C13426 /* Copy Helpers */,
@@ -1513,6 +1516,69 @@
 			runOnlyForDeploymentPostprocessing = 0;
 		};
 /* End PBXResourcesBuildPhase section */
+
+/* Begin PBXShellScriptBuildPhase section */
+		3B2B2B042F410001002B2B2B /* Strip App Icon Alpha */ = {
+			isa = PBXShellScriptBuildPhase;
+			alwaysOutOfDate = 1;
+			buildActionMask = 2147483647;
+			files = (
+			);
+			inputFileListPaths = (
+			);
+			inputPaths = (
+				"$(SRCROOT)/scripts/strip_app_icon_alpha.sh",
+			);
+			name = "Strip App Icon Alpha";
+			outputFileListPaths = (
+			);
+			outputPaths = (
+			);
+			runOnlyForDeploymentPostprocessing = 0;
+			shellPath = /bin/sh;
+			shellScript = "\"${SRCROOT}/scripts/strip_app_icon_alpha.sh\"\n";
+		};
+		3B2B2B052F410001002B2B2B /* Strip App Icon Alpha */ = {
+			isa = PBXShellScriptBuildPhase;
+			alwaysOutOfDate = 1;
+			buildActionMask = 2147483647;
+			files = (
+			);
+			inputFileListPaths = (
+			);
+			inputPaths = (
+				"$(SRCROOT)/scripts/strip_app_icon_alpha.sh",
+			);
+			name = "Strip App Icon Alpha";
+			outputFileListPaths = (
+			);
+			outputPaths = (
+			);
+			runOnlyForDeploymentPostprocessing = 0;
+			shellPath = /bin/sh;
+			shellScript = "\"${SRCROOT}/scripts/strip_app_icon_alpha.sh\"\n";
+		};
+		3B2B2B062F410001002B2B2B /* Strip App Icon Alpha */ = {
+			isa = PBXShellScriptBuildPhase;
+			alwaysOutOfDate = 1;
+			buildActionMask = 2147483647;
+			files = (
+			);
+			inputFileListPaths = (
+			);
+			inputPaths = (
+				"$(SRCROOT)/scripts/strip_app_icon_alpha.sh",
+			);
+			name = "Strip App Icon Alpha";
+			outputFileListPaths = (
+			);
+			outputPaths = (
+			);
+			runOnlyForDeploymentPostprocessing = 0;
+			shellPath = /bin/sh;
+			shellScript = "\"${SRCROOT}/scripts/strip_app_icon_alpha.sh\"\n";
+		};
+/* End PBXShellScriptBuildPhase section */
 
 /* Begin PBXSourcesBuildPhase section */
 		3A096F822A4ED3DE00D4A2ED /* Sources */ = {
