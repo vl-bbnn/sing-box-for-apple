@@ -80,8 +80,8 @@
               "appearance" : "light",
               "value" : {
                 "linear-gradient" : [
-                  "extended-gray:1.00000,1.00000",
-                  "extended-gray:0.75000,1.00000"
+                  "extended-gray:0.00000,1.00000",
+                  "extended-gray:0.25000,1.00000"
                 ]
               }
             },
@@ -125,7 +125,7 @@
             {
               "appearance" : "light",
               "value" : {
-                "solid" : "extended-gray:0.50000,0.50393"
+                "solid" : "extended-gray:0.25000,0.74577"
               }
             },
             {
