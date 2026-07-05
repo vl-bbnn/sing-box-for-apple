@@ -18,6 +18,8 @@ if [ ! -x "$pngcrush" ]; then
   exit 0
 fi
 
+tmp_dir="${TARGET_TEMP_DIR:-${DERIVED_FILE_DIR:-${TMPDIR:-/tmp}}}"
+
 for icon_suffix in \
   "20x20@2x.png" \
   "20x20@3x.png" \
@@ -36,7 +38,8 @@ do
   fi
 
   if /usr/bin/sips -g hasAlpha "$icon_path" 2>/dev/null | /usr/bin/grep -q "hasAlpha: yes"; then
-    tmp_path="${icon_path}.noalpha"
+    tmp_path="${tmp_dir}/${icon_name}${icon_suffix}.noalpha"
+    /bin/rm -f "$tmp_path"
     "$pngcrush" -q -rem alla -reduce "$icon_path" "$tmp_path"
     /bin/mv "$tmp_path" "$icon_path"
   fi
