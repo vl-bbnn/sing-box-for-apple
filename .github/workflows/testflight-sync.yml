@@ -149,9 +149,41 @@ jobs:
             echo "exists=false" >> "$GITHUB_OUTPUT"
           fi
 
-  upload-ios:
+  prune-development-certificates:
     needs: [detect-release, prepare-release]
-    if: needs.detect-release.outputs.should_release == 'true' && needs.prepare-release.outputs.ios_build_exists != 'true' && (github.event_name != 'workflow_dispatch' || github.event.inputs.platform == 'all' || github.event.inputs.platform == 'ios')
+    if: needs.detect-release.outputs.should_release == 'true' && (github.event_name != 'workflow_dispatch' || github.event.inputs.platform == 'all' || github.event.inputs.platform == 'ios' || github.event.inputs.platform == 'macos')
+    runs-on: ubuntu-latest
+    env:
+      ASC_KEY_ID: ${{ secrets.ASC_KEY_ID }}
+      ASC_KEY_ISSUER_ID: ${{ secrets.ASC_KEY_ISSUER_ID }}
+      ASC_KEY_P8: ${{ secrets.ASC_KEY_P8 }}
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v5
+
+      - name: Write App Store Connect API key
+        run: |
+          mkdir -p "$RUNNER_TEMP/asc"
+          ASC_KEY_PATH="$RUNNER_TEMP/asc/AuthKey_${ASC_KEY_ID}.p8"
+          printf '%s' "$ASC_KEY_P8" > "$ASC_KEY_PATH"
+          chmod 600 "$ASC_KEY_PATH"
+          echo "ASC_KEY_PATH=$ASC_KEY_PATH" >> "$GITHUB_ENV"
+
+      - name: Validate App Store Connect credentials
+        run: |
+          test -n "$ASC_KEY_ID"
+          test -n "$ASC_KEY_ISSUER_ID"
+          test -n "$ASC_KEY_P8"
+
+      - name: Prune automatic development certificates
+        run: |
+          ruby scripts/app_store_connect.rb prune-development-certificates \
+            --certificate-type DEVELOPMENT \
+            --keep-newest 0
+
+  upload-ios:
+    needs: [detect-release, prepare-release, prune-development-certificates]
+    if: always() && needs.detect-release.outputs.should_release == 'true' && needs.prepare-release.result == 'success' && needs.prune-development-certificates.result == 'success' && needs.prepare-release.outputs.ios_build_exists != 'true' && (github.event_name != 'workflow_dispatch' || github.event.inputs.platform == 'all' || github.event.inputs.platform == 'ios')
     runs-on: macos-latest
     timeout-minutes: 90
     env:
@@ -285,12 +317,6 @@ jobs:
         with:
           path: Libbox.xcframework
           key: ${{ steps.cache-libbox-xcframework.outputs.cache-primary-key }}
-
-      - name: Prune automatic iOS development certificates
-        run: |
-          ruby scripts/app_store_connect.rb prune-development-certificates \
-            --certificate-type DEVELOPMENT \
-            --keep-newest 0
 
       - name: Archive iOS
         run: make archive_ios
@@ -343,8 +369,8 @@ jobs:
           "${cmd[@]}"
 
   upload-macos:
-    needs: [detect-release, prepare-release]
-    if: needs.detect-release.outputs.should_release == 'true' && needs.prepare-release.outputs.macos_build_exists != 'true' && (github.event_name != 'workflow_dispatch' || github.event.inputs.platform == 'all' || github.event.inputs.platform == 'macos')
+    needs: [detect-release, prepare-release, prune-development-certificates]
+    if: always() && needs.detect-release.outputs.should_release == 'true' && needs.prepare-release.result == 'success' && needs.prune-development-certificates.result == 'success' && needs.prepare-release.outputs.macos_build_exists != 'true' && (github.event_name != 'workflow_dispatch' || github.event.inputs.platform == 'all' || github.event.inputs.platform == 'macos')
     runs-on: macos-latest
     timeout-minutes: 90
     env:
@@ -478,12 +504,6 @@ jobs:
         with:
           path: Libbox.xcframework
           key: ${{ steps.cache-libbox-xcframework.outputs.cache-primary-key }}
-
-      - name: Prune automatic macOS development certificates
-        run: |
-          ruby scripts/app_store_connect.rb prune-development-certificates \
-            --certificate-type DEVELOPMENT \
-            --keep-newest 0
 
       - name: Archive macOS
         run: make archive_macos

@@ -159,6 +159,10 @@ class AppStoreConnectClient
 
   def delete_certificate(certificate_id)
     request(:delete, "/v1/certificates/#{certificate_id}", allowed_statuses: [204, 404])
+  rescue RuntimeError => e
+    raise unless e.message.include?("failed with 409")
+
+    warn "Skipping certificate #{certificate_id}: #{e.message.lines.first.strip}"
   end
 
   def wait_for_valid_build(app_id:, platform:, version:, timeout:)
