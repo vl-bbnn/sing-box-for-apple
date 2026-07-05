@@ -34,6 +34,12 @@ env:
   SING_BOX_REPO_URL: https://github.com/vl-bbnn/sing-box.git
   SING_BOX_REPO_REF: ef1d02148a66158e23fc22d4e372f4f3bf855bc1
   SING_BOX_LX: "1"
+  OVERLAY_APPLICATION_NAME: ${{ vars.OVERLAY_APPLICATION_NAME }}
+  OVERLAY_APPLICATION_LINK: ${{ vars.OVERLAY_APPLICATION_LINK }}
+  OVERLAY_CHANGELOG_LINK: ${{ vars.OVERLAY_CHANGELOG_LINK }}
+  OVERLAY_CONFIGURATION_LINK: ${{ vars.OVERLAY_CONFIGURATION_LINK }}
+  OVERLAY_SOURCE_LINK: ${{ vars.OVERLAY_SOURCE_LINK }}
+  OVERLAY_RELEASES_LINK: ${{ vars.OVERLAY_RELEASES_LINK }}
 
 jobs:
   detect-release:
@@ -57,6 +63,9 @@ jobs:
           else
             git remote add upstream https://github.com/SagerNet/sing-box-for-apple.git
           fi
+
+      - name: Validate overlay identity
+        run: test -n "$OVERLAY_APPLICATION_NAME"
 
       - name: Detect upstream version bump
         id: prepare
@@ -101,6 +110,7 @@ jobs:
 
       - name: Validate workflow configuration
         run: |
+          test -n "$OVERLAY_APPLICATION_NAME"
           test -n "$OVERLAY_DEVELOPMENT_TEAM"
 
       - name: Prepare release branch
@@ -202,6 +212,7 @@ jobs:
 
       - name: Validate workflow configuration
         run: |
+          test -n "$OVERLAY_APPLICATION_NAME"
           test -n "$OVERLAY_BASE_PACKAGE_IDENTIFIER"
           test -n "$OVERLAY_DEVELOPMENT_TEAM"
           test -n "$ASC_KEY_ID"
@@ -397,6 +408,7 @@ jobs:
 
       - name: Validate workflow configuration
         run: |
+          test -n "$OVERLAY_APPLICATION_NAME"
           test -n "$OVERLAY_BASE_PACKAGE_IDENTIFIER"
           test -n "$OVERLAY_DEVELOPMENT_TEAM"
           test -n "$ASC_KEY_ID"

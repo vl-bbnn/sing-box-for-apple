@@ -20,6 +20,7 @@ origin_remote="${ORIGIN_REMOTE:-origin}"
 upstream_remote="${UPSTREAM_REMOTE:-upstream}"
 project_file="sing-box.xcodeproj/project.pbxproj"
 version_ceiling="$(tr -d '[:space:]' < Config/Overlay.version-ceiling)"
+application_name="${OVERLAY_APPLICATION_NAME:-$(./scripts/overlay_setting.sh OVERLAY_APPLICATION_NAME)}"
 tmp_branch="ci/overlay-release"
 
 write_output() {
@@ -198,11 +199,12 @@ if [[ "$force" == true || ( "$upstream_changed" == true && "$version_changed" ==
 fi
 
 release_notes="$(
-	VERSION="$upstream_version" CURRENT_MAIN_SHA="$current_main_sha" UPSTREAM_SHA="$upstream_sha" python3 <<'PY'
+	VERSION="$upstream_version" APPLICATION_NAME="$application_name" CURRENT_MAIN_SHA="$current_main_sha" UPSTREAM_SHA="$upstream_sha" python3 <<'PY'
 import os
 import subprocess
 
 version = os.environ["VERSION"]
+application_name = os.environ["APPLICATION_NAME"]
 current_main_sha = os.environ["CURRENT_MAIN_SHA"]
 upstream_sha = os.environ["UPSTREAM_SHA"]
 max_length = 3900
@@ -217,7 +219,7 @@ subjects = [
     if subject.strip() and not subject.strip().lower().startswith("bump version")
 ]
 
-header = f"sing-box {version}"
+header = f"{application_name} {version}"
 if not subjects:
     print(header)
     raise SystemExit(0)
