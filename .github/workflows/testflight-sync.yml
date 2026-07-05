@@ -289,8 +289,8 @@ jobs:
       - name: Prune automatic iOS development certificates
         run: |
           ruby scripts/app_store_connect.rb prune-development-certificates \
-            --certificate-type IOS_DEVELOPMENT \
-            --keep-newest 1
+            --certificate-type DEVELOPMENT \
+            --keep-newest 0
 
       - name: Archive iOS
         run: make archive_ios
@@ -482,8 +482,8 @@ jobs:
       - name: Prune automatic macOS development certificates
         run: |
           ruby scripts/app_store_connect.rb prune-development-certificates \
-            --certificate-type MAC_APP_DEVELOPMENT \
-            --keep-newest 1
+            --certificate-type DEVELOPMENT \
+            --keep-newest 0
 
       - name: Archive macOS
         run: make archive_macos
