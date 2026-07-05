@@ -11,6 +11,7 @@ MACOS_SYSTEM_PROFILE_SPECIFIER := $(shell $(OVERLAY_SETTING) OVERLAY_MACOS_SYSTE
 MACOS_STANDALONE_PROFILE_SPECIFIER := $(shell $(OVERLAY_SETTING) OVERLAY_MACOS_STANDALONE_PROFILE_SPECIFIER)
 OVERLAY_HELPER_PLIST := HelperService/LaunchDaemons/HelperService.plist
 SFM_SYSTEM_EXPORT_PLIST := build/SFM.System-Export.plist
+APP_STORE_UPLOAD_PLIST := build/AppStoreConnectUpload.plist
 SFM_SYSTEM_DISTRIBUTION_ARM64 := build/SFM.System-distribution-arm64.xml
 SFM_SYSTEM_DISTRIBUTION_X86_64 := build/SFM.System-distribution-x86_64.xml
 SFM_SYSTEM_DISTRIBUTION_UNIVERSAL := build/SFM.System-distribution-universal.xml
@@ -86,7 +87,8 @@ archive_ios:
 	set -o pipefail; xcodebuild archive -scheme SFI -configuration Release -destination 'generic/platform=iOS' -archivePath build/SFI.xcarchive -allowProvisioningUpdates $(XCODE_AUTH_FLAGS) $(XCODE_EXTRA_FLAGS) $(IOS_ARCHIVE_FLAGS) $(APP_STORE_ARCHIVE_SIGNING_FLAGS) 2>&1 | tee build/archive_ios.log | xcbeautify | grep -A 10 -e "Archive Succeeded" -e "ARCHIVE FAILED" -e "❌" || { status=$$?; echo "---- raw xcodebuild diagnostics (archive_ios) ----"; bash -lc '$(XCODE_ERROR_FILTER)' < build/archive_ios.log; echo "---- raw xcodebuild tail (archive_ios) ----"; tail -n 200 build/archive_ios.log; exit $$status; }
 
 upload_ios:
-	set -o pipefail; xcodebuild -exportArchive -archivePath build/SFI.xcarchive -exportOptionsPlist SFI/Upload.plist -allowProvisioningUpdates $(XCODE_AUTH_FLAGS) $(XCODE_EXTRA_FLAGS) 2>&1 | tee build/upload_ios.log
+	$(MAKE) $(APP_STORE_UPLOAD_PLIST)
+	set -o pipefail; xcodebuild -exportArchive -archivePath build/SFI.xcarchive -exportOptionsPlist $(APP_STORE_UPLOAD_PLIST) -allowProvisioningUpdates $(XCODE_AUTH_FLAGS) $(XCODE_EXTRA_FLAGS) 2>&1 | tee build/upload_ios.log
 
 release_macos: archive_macos upload_macos
 
@@ -96,7 +98,14 @@ archive_macos:
 	set -o pipefail; xcodebuild archive -scheme SFM -configuration Release -archivePath build/SFM.xcarchive -allowProvisioningUpdates $(XCODE_AUTH_FLAGS) $(XCODE_EXTRA_FLAGS) $(APP_STORE_ARCHIVE_SIGNING_FLAGS) 2>&1 | tee build/archive_macos.log | xcbeautify | grep -A 10 -e "Archive Succeeded" -e "ARCHIVE FAILED" -e "❌" || { status=$$?; echo "---- raw xcodebuild tail (archive_macos) ----"; tail -n 200 build/archive_macos.log; exit $$status; }
 
 upload_macos:
-	set -o pipefail; xcodebuild -exportArchive -archivePath build/SFM.xcarchive -exportOptionsPlist SFI/Upload.plist -allowProvisioningUpdates $(XCODE_AUTH_FLAGS) $(XCODE_EXTRA_FLAGS) 2>&1 | tee build/upload_macos.log
+	$(MAKE) $(APP_STORE_UPLOAD_PLIST)
+	set -o pipefail; xcodebuild -exportArchive -archivePath build/SFM.xcarchive -exportOptionsPlist $(APP_STORE_UPLOAD_PLIST) -allowProvisioningUpdates $(XCODE_AUTH_FLAGS) $(XCODE_EXTRA_FLAGS) 2>&1 | tee build/upload_macos.log
+
+$(APP_STORE_UPLOAD_PLIST):
+	mkdir -p build
+	cp SFI/Upload.plist $@
+	/usr/libexec/PlistBuddy -c "Delete :teamID" $@ >/dev/null 2>&1 || true
+	/usr/libexec/PlistBuddy -c "Add :teamID string $(DEVELOPMENT_TEAM)" $@
 
 release_tvos: archive_tvos upload_tvos
 
