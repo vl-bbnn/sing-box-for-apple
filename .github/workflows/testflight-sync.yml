@@ -371,10 +371,10 @@ jobs:
   upload-macos:
     needs: [detect-release, prepare-release, prune-development-certificates]
     if: always() && needs.detect-release.outputs.should_release == 'true' && needs.prepare-release.result == 'success' && needs.prune-development-certificates.result == 'success' && needs.prepare-release.outputs.macos_build_exists != 'true' && (github.event_name != 'workflow_dispatch' || github.event.inputs.platform == 'all' || github.event.inputs.platform == 'macos')
-    runs-on: macos-latest
+    runs-on: macos-26
     timeout-minutes: 90
     env:
-      DEVELOPER_DIR: /Applications/Xcode_26.3.app/Contents/Developer
+      DEVELOPER_DIR: /Applications/Xcode_26.6.app/Contents/Developer
       XCODEBUILD_EXTRA_FLAGS: -skipPackagePluginValidation
       OVERLAY_BASE_PACKAGE_IDENTIFIER: ${{ vars.OVERLAY_BASE_PACKAGE_IDENTIFIER }}
       OVERLAY_DEVELOPMENT_TEAM: ${{ vars.OVERLAY_DEVELOPMENT_TEAM }}
