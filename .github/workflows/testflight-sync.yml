@@ -157,7 +157,6 @@ jobs:
     env:
       DEVELOPER_DIR: /Applications/Xcode_26.3.app/Contents/Developer
       XCODEBUILD_EXTRA_FLAGS: -skipPackagePluginValidation
-      ENABLE_LOCAL_SIGNING_ASSETS: ${{ vars.ENABLE_LOCAL_SIGNING_ASSETS }}
       OVERLAY_BASE_PACKAGE_IDENTIFIER: ${{ vars.OVERLAY_BASE_PACKAGE_IDENTIFIER }}
       OVERLAY_DEVELOPMENT_TEAM: ${{ vars.OVERLAY_DEVELOPMENT_TEAM }}
       OVERLAY_MACOS_SYSTEM_PROFILE_SPECIFIER: ${{ vars.OVERLAY_MACOS_SYSTEM_PROFILE_SPECIFIER }}
@@ -165,10 +164,6 @@ jobs:
       ASC_KEY_ID: ${{ secrets.ASC_KEY_ID }}
       ASC_KEY_ISSUER_ID: ${{ secrets.ASC_KEY_ISSUER_ID }}
       ASC_KEY_P8: ${{ secrets.ASC_KEY_P8 }}
-      BUILD_CERTIFICATE_BASE64: ${{ secrets.BUILD_CERTIFICATE_BASE64 }}
-      P12_PASSWORD: ${{ secrets.P12_PASSWORD }}
-      KEYCHAIN_PASSWORD: ${{ secrets.KEYCHAIN_PASSWORD }}
-      APPLE_PROVISIONING_PROFILES_ARCHIVE_BASE64: ${{ secrets.APPLE_PROVISIONING_PROFILES_ARCHIVE_BASE64 }}
     steps:
       - name: Checkout repository
         uses: actions/checkout@v5
@@ -291,9 +286,11 @@ jobs:
           path: Libbox.xcframework
           key: ${{ steps.cache-libbox-xcframework.outputs.cache-primary-key }}
 
-      - name: Install signing assets
-        if: env.ENABLE_LOCAL_SIGNING_ASSETS == 'true'
-        run: ./scripts/install_apple_signing_assets.sh
+      - name: Prune automatic iOS development certificates
+        run: |
+          ruby scripts/app_store_connect.rb prune-development-certificates \
+            --certificate-type IOS_DEVELOPMENT \
+            --keep-newest 1
 
       - name: Archive iOS
         run: make archive_ios
@@ -353,7 +350,6 @@ jobs:
     env:
       DEVELOPER_DIR: /Applications/Xcode_26.3.app/Contents/Developer
       XCODEBUILD_EXTRA_FLAGS: -skipPackagePluginValidation
-      ENABLE_LOCAL_SIGNING_ASSETS: ${{ vars.ENABLE_LOCAL_SIGNING_ASSETS }}
       OVERLAY_BASE_PACKAGE_IDENTIFIER: ${{ vars.OVERLAY_BASE_PACKAGE_IDENTIFIER }}
       OVERLAY_DEVELOPMENT_TEAM: ${{ vars.OVERLAY_DEVELOPMENT_TEAM }}
       OVERLAY_MACOS_SYSTEM_PROFILE_SPECIFIER: ${{ vars.OVERLAY_MACOS_SYSTEM_PROFILE_SPECIFIER }}
@@ -361,10 +357,6 @@ jobs:
       ASC_KEY_ID: ${{ secrets.ASC_KEY_ID }}
       ASC_KEY_ISSUER_ID: ${{ secrets.ASC_KEY_ISSUER_ID }}
       ASC_KEY_P8: ${{ secrets.ASC_KEY_P8 }}
-      BUILD_CERTIFICATE_BASE64: ${{ secrets.BUILD_CERTIFICATE_BASE64 }}
-      P12_PASSWORD: ${{ secrets.P12_PASSWORD }}
-      KEYCHAIN_PASSWORD: ${{ secrets.KEYCHAIN_PASSWORD }}
-      APPLE_PROVISIONING_PROFILES_ARCHIVE_BASE64: ${{ secrets.APPLE_PROVISIONING_PROFILES_ARCHIVE_BASE64 }}
     steps:
       - name: Checkout repository
         uses: actions/checkout@v5
@@ -487,9 +479,11 @@ jobs:
           path: Libbox.xcframework
           key: ${{ steps.cache-libbox-xcframework.outputs.cache-primary-key }}
 
-      - name: Install signing assets
-        if: env.ENABLE_LOCAL_SIGNING_ASSETS == 'true'
-        run: ./scripts/install_apple_signing_assets.sh
+      - name: Prune automatic macOS development certificates
+        run: |
+          ruby scripts/app_store_connect.rb prune-development-certificates \
+            --certificate-type MAC_APP_DEVELOPMENT \
+            --keep-newest 1
 
       - name: Archive macOS
         run: make archive_macos

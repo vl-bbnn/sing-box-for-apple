@@ -28,6 +28,32 @@ class AppStoreConnectClient
     ensure_beta_review_submission(build.fetch("id"))
   end
 
+  def prune_development_certificates(certificate_types:, keep_newest:)
+    certificate_types.each do |certificate_type|
+      certificates = list_certificates(certificate_type)
+      removable = certificates.sort_by do |certificate|
+        [
+          Time.parse(certificate.dig("attributes", "expirationDate").to_s),
+          certificate.fetch("id")
+        ]
+      rescue ArgumentError
+        [Time.at(0), certificate.fetch("id")]
+      end
+      removable = removable[0...[removable.length - keep_newest, 0].max]
+
+      if removable.empty?
+        warn "No #{certificate_type} certificates to prune; found #{certificates.length}, keeping #{keep_newest}."
+        next
+      end
+
+      removable.each do |certificate|
+        attributes = certificate.fetch("attributes", {})
+        warn "Deleting #{certificate_type} certificate #{certificate.fetch('id')} #{attributes['name']} #{attributes['expirationDate']}"
+        delete_certificate(certificate.fetch("id"))
+      end
+    end
+  end
+
   private
 
   def token(mode = @token_mode)
@@ -65,6 +91,7 @@ class AppStoreConnectClient
                     when :get then Net::HTTP::Get
                     when :post then Net::HTTP::Post
                     when :patch then Net::HTTP::Patch
+                    when :delete then Net::HTTP::Delete
                     else
                       raise "unsupported method: #{method}"
                     end
@@ -115,6 +142,23 @@ class AppStoreConnectClient
     raise "no App Store Connect app found for #{bundle_id}" unless app
 
     app.fetch("id")
+  end
+
+  def list_certificates(certificate_type)
+    response = request(
+      :get,
+      "/v1/certificates",
+      params: {
+        "filter[certificateType]" => certificate_type,
+        "fields[certificates]" => "certificateType,displayName,expirationDate,name,serialNumber",
+        "limit" => "200"
+      }
+    )
+    response.fetch("data", [])
+  end
+
+  def delete_certificate(certificate_id)
+    request(:delete, "/v1/certificates/#{certificate_id}", allowed_statuses: [204, 404])
   end
 
   def wait_for_valid_build(app_id:, platform:, version:, timeout:)
@@ -262,6 +306,8 @@ class AppStoreConnectClient
 end
 
 options = {
+  certificate_types: [],
+  keep_newest: 1,
   locale: "en-US",
   timeout: 1800
 }
@@ -271,6 +317,8 @@ parser = OptionParser.new do |opts|
   opts.on("--platform VALUE") { |value| options[:platform] = value }
   opts.on("--version VALUE") { |value| options[:version] = value }
   opts.on("--beta-group-id VALUE") { |value| options[:beta_group_id] = value }
+  opts.on("--certificate-type VALUE") { |value| options[:certificate_types] << value }
+  opts.on("--keep-newest VALUE", Integer) { |value| options[:keep_newest] = value }
   opts.on("--whats-new VALUE") { |value| options[:whats_new] = value }
   opts.on("--locale VALUE") { |value| options[:locale] = value }
   opts.on("--timeout VALUE", Integer) { |value| options[:timeout] = value }
@@ -299,6 +347,14 @@ when "publish-testflight"
     whats_new: options[:whats_new],
     locale: options[:locale],
     timeout: options[:timeout]
+  )
+when "prune-development-certificates"
+  raise "missing certificate type" if options[:certificate_types].empty?
+  raise "keep_newest must be non-negative" if options[:keep_newest].negative?
+
+  client.prune_development_certificates(
+    certificate_types: options[:certificate_types],
+    keep_newest: options[:keep_newest]
   )
 else
   raise "unknown command: #{command}"
