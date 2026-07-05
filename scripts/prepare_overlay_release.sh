@@ -179,7 +179,7 @@ fi
 
 if ! version_lte "$upstream_version" "$version_ceiling"; then
 	if [[ "$manual_checked_out_release" == "true" ]]; then
-		release_notes="sing-box $release_overlay_version"
+		release_notes="$application_name $release_overlay_version"
 
 		write_output current_main_sha "$current_main_sha"
 		write_output current_overlay_sha "$current_overlay_sha"
