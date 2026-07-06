@@ -19,6 +19,16 @@ if [[ ! -d "$xcframework" ]]; then
 	echo "missing libbox artifact: $xcframework" >&2
 	exit 1
 fi
+if [[ ! -f "$xcframework/.libbox-variant" || ! -f "$xcframework/.libbox-source-ref" ]]; then
+	echo "libbox artifact lacks variant/source provenance manifests: $xcframework" >&2
+	exit 1
+fi
+actual_variant="$(cat "$xcframework/.libbox-variant")"
+source_ref="$(cat "$xcframework/.libbox-source-ref")"
+if [[ "$actual_variant" != "$expected" || ! "$source_ref" =~ ^[0-9a-f]{40}$ ]]; then
+	echo "libbox provenance mismatch: expected=$expected actual=$actual_variant source=$source_ref" >&2
+	exit 1
+fi
 
 found_wlt=0
 if LC_ALL=C grep -R -a -q -E 'with_wlt|LibboxStartWhitelistTransport|wlt-carrier' "$xcframework"; then
@@ -35,4 +45,4 @@ if [[ "$expected" == "dev" && "$require_wlt" == "YES" && "$found_wlt" != "1" ]];
 	exit 1
 fi
 
-echo "libbox variant ok: expected=$expected require_wlt=$require_wlt artifact=$xcframework"
+echo "libbox variant ok: expected=$expected require_wlt=$require_wlt source=$source_ref artifact=$xcframework"

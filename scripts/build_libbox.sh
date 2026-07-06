@@ -132,6 +132,8 @@ if [[ "$source_xcframework" != "$destination" ]]; then
 	mkdir -p "$(dirname "$destination")"
 	mv "$source_xcframework" "$destination"
 fi
+printf '%s\n' "$variant" > "$destination/.libbox-variant"
+git rev-parse HEAD > "$destination/.libbox-source-ref"
 if [[ "${LIBBOX_ACTIVATE:-1}" == "1" ]]; then
 	rm -rf "$client_root/Libbox.xcframework"
 	cp -R "$destination" "$client_root/Libbox.xcframework"
