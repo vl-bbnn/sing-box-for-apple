@@ -59,6 +59,9 @@
 		3B2B2B012F410001002B2B2B /* OverlayAppIcon.icon in Resources */ = {isa = PBXBuildFile; fileRef = 3B2B2B002F410001002B2B2B /* OverlayAppIcon.icon */; };
 		3B2B2B022F410001002B2B2B /* OverlayAppIcon.icon in Resources */ = {isa = PBXBuildFile; fileRef = 3B2B2B002F410001002B2B2B /* OverlayAppIcon.icon */; };
 		3B2B2B032F410001002B2B2B /* OverlayAppIcon.icon in Resources */ = {isa = PBXBuildFile; fileRef = 3B2B2B002F410001002B2B2B /* OverlayAppIcon.icon */; };
+		3B2B2B112F410001002B2B2B /* OverlayDevAppIcon.icon in Resources */ = {isa = PBXBuildFile; fileRef = 3B2B2B102F410001002B2B2B /* OverlayDevAppIcon.icon */; };
+		3B2B2B122F410001002B2B2B /* OverlayDevAppIcon.icon in Resources */ = {isa = PBXBuildFile; fileRef = 3B2B2B102F410001002B2B2B /* OverlayDevAppIcon.icon */; };
+		3B2B2B132F410001002B2B2B /* OverlayDevAppIcon.icon in Resources */ = {isa = PBXBuildFile; fileRef = 3B2B2B102F410001002B2B2B /* OverlayDevAppIcon.icon */; };
 		9C37F17D2C131100001B9FA8 /* Localizable.xcstrings in Resources */ = {isa = PBXBuildFile; fileRef = 9C37F17C2C131100001B9FA8 /* Localizable.xcstrings */; };
 		9C37F17E2C131100001B9FA8 /* Localizable.xcstrings in Resources */ = {isa = PBXBuildFile; fileRef = 9C37F17C2C131100001B9FA8 /* Localizable.xcstrings */; };
 		9C37F17F2C131100001B9FA8 /* Localizable.xcstrings in Resources */ = {isa = PBXBuildFile; fileRef = 9C37F17C2C131100001B9FA8 /* Localizable.xcstrings */; };
@@ -456,6 +459,7 @@
 		3AE595A32F08C4ED00C13426 /* UserNotifications.framework */ = {isa = PBXFileReference; lastKnownFileType = wrapper.framework; name = UserNotifications.framework; path = System/Library/Frameworks/UserNotifications.framework; sourceTree = SDKROOT; };
 		3B1D24E53020260000000001 /* Config/Overlay.xcconfig */ = {isa = PBXFileReference; lastKnownFileType = text.xcconfig; path = Config/Overlay.xcconfig; sourceTree = "<group>"; };
 		3B2B2B002F410001002B2B2B /* OverlayAppIcon.icon */ = {isa = PBXFileReference; explicitFileType = folder.iconcomposer.icon; path = OverlayAppIcon.icon; sourceTree = "<group>"; };
+		3B2B2B102F410001002B2B2B /* OverlayDevAppIcon.icon */ = {isa = PBXFileReference; explicitFileType = folder.iconcomposer.icon; path = OverlayDevAppIcon.icon; sourceTree = "<group>"; };
 		3AE595AE2F08D00000C13426 /* HelperService/LaunchDaemons/HelperService.plist */ = {isa = PBXFileReference; lastKnownFileType = text.plist.xml; path = HelperService/LaunchDaemons/HelperService.plist; sourceTree = "<group>"; };
 		3AEC20DB2A4599D000A63465 /* Libbox.xcframework */ = {isa = PBXFileReference; lastKnownFileType = wrapper.xcframework; path = "$(LIBBOX_XCFRAMEWORK_PATH)"; sourceTree = SOURCE_ROOT; };
 		3AEC20F32A459AB400A63465 /* sing-box.app */ = {isa = PBXFileReference; explicitFileType = wrapper.application; includeInIndex = 0; path = "sing-box.app"; sourceTree = BUILT_PRODUCTS_DIR; };
@@ -796,6 +800,7 @@
 				9C37F17C2C131100001B9FA8 /* Localizable.xcstrings */,
 				3B1D24E53020260000000001 /* Config/Overlay.xcconfig */,
 				3B2B2B002F410001002B2B2B /* OverlayAppIcon.icon */,
+				3B2B2B102F410001002B2B2B /* OverlayDevAppIcon.icon */,
 				3AEC20DB2A4599D000A63465 /* Libbox.xcframework */,
 				3ADDCEB42E8B723B009ACE1D /* SFI */,
 				3ADDCEC02E8B7240009ACE1D /* SFM */,
@@ -1470,6 +1475,7 @@
 			buildActionMask = 2147483647;
 			files = (
 				3B2B2B012F410001002B2B2B /* OverlayAppIcon.icon in Resources */,
+				3B2B2B112F410001002B2B2B /* OverlayDevAppIcon.icon in Resources */,
 				9C37F17D2C131100001B9FA8 /* Localizable.xcstrings in Resources */,
 			);
 			runOnlyForDeploymentPostprocessing = 0;
@@ -1479,6 +1485,7 @@
 			buildActionMask = 2147483647;
 			files = (
 				3B2B2B022F410001002B2B2B /* OverlayAppIcon.icon in Resources */,
+				3B2B2B122F410001002B2B2B /* OverlayDevAppIcon.icon in Resources */,
 				9C37F17E2C131100001B9FA8 /* Localizable.xcstrings in Resources */,
 			);
 			runOnlyForDeploymentPostprocessing = 0;
@@ -1503,6 +1510,7 @@
 			buildActionMask = 2147483647;
 			files = (
 				3B2B2B032F410001002B2B2B /* OverlayAppIcon.icon in Resources */,
+				3B2B2B132F410001002B2B2B /* OverlayDevAppIcon.icon in Resources */,
 				9C37F17F2C131100001B9FA8 /* Localizable.xcstrings in Resources */,
 			);
 			runOnlyForDeploymentPostprocessing = 0;
@@ -2980,7 +2988,7 @@
 				APP_GROUP_IDENTIFIER = "group.$(BASE_PACKAGE_IDENTIFIER)";
 				LIBBOX_XCFRAMEWORK_PATH = "build/libbox/ordinary/Libbox.xcframework";
 				ASSETCATALOG_COMPILER_GENERATE_SWIFT_ASSET_SYMBOL_EXTENSIONS = YES;
-				SFI_APP_ICON_NAME = AppIcon;
+				SFI_APP_ICON_NAME = OverlayAppIcon;
 				SFI_REQUIRE_WLT_LIBBOX = NO;
 				BASE_PACKAGE_IDENTIFIER = "$(OVERLAY_BASE_PACKAGE_IDENTIFIER)";
 				INFOPLIST_KEY_OverlayApplicationLink = "$(OVERLAY_APPLICATION_LINK)";
@@ -3060,7 +3068,7 @@
 				APP_GROUP_IDENTIFIER = "group.$(BASE_PACKAGE_IDENTIFIER)";
 				LIBBOX_XCFRAMEWORK_PATH = "build/libbox/dev/Libbox.xcframework";
 				ASSETCATALOG_COMPILER_GENERATE_SWIFT_ASSET_SYMBOL_EXTENSIONS = YES;
-				SFI_APP_ICON_NAME = AppIcon;
+				SFI_APP_ICON_NAME = OverlayDevAppIcon;
 				SFI_REQUIRE_WLT_LIBBOX = NO;
 				BASE_PACKAGE_IDENTIFIER = "$(OVERLAY_BASE_PACKAGE_IDENTIFIER).dev";
 				INFOPLIST_KEY_OverlayApplicationLink = "$(OVERLAY_APPLICATION_LINK)";
@@ -3140,7 +3148,7 @@
 				APP_GROUP_IDENTIFIER = "group.$(BASE_PACKAGE_IDENTIFIER)";
 				LIBBOX_XCFRAMEWORK_PATH = "build/libbox/ordinary/Libbox.xcframework";
 				ASSETCATALOG_COMPILER_GENERATE_SWIFT_ASSET_SYMBOL_EXTENSIONS = YES;
-				SFI_APP_ICON_NAME = AppIcon;
+				SFI_APP_ICON_NAME = OverlayAppIcon;
 				SFI_REQUIRE_WLT_LIBBOX = NO;
 				BASE_PACKAGE_IDENTIFIER = "$(OVERLAY_BASE_PACKAGE_IDENTIFIER)";
 				INFOPLIST_KEY_OverlayApplicationLink = "$(OVERLAY_APPLICATION_LINK)";
