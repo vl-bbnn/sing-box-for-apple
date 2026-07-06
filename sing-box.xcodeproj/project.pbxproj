@@ -1817,6 +1817,46 @@
 			};
 			name = Debug;
 		};
+		B4A57D3EB3CDE8EE81D31F4F /* Dev */ = {
+			isa = XCBuildConfiguration;
+			buildSettings = {
+				CLANG_ENABLE_MODULES = YES;
+				CODE_SIGN_ENTITLEMENTS = Extension/Extension.entitlements;
+				CODE_SIGN_IDENTITY = "Apple Development";
+				CODE_SIGN_STYLE = Automatic;
+				CURRENT_PROJECT_VERSION = 1;
+				DEVELOPMENT_TEAM = "$(OVERLAY_DEVELOPMENT_TEAM)";
+				ENABLE_HARDENED_RUNTIME = YES;
+				GENERATE_INFOPLIST_FILE = YES;
+				INFOPLIST_FILE = Extension/Info.plist;
+				INFOPLIST_KEY_CFBundleDisplayName = Extension;
+				INFOPLIST_KEY_NSHumanReadableCopyright = "";
+				INFOPLIST_KEY_UIRequiredDeviceCapabilities = arm64;
+				LD_RUNPATH_SEARCH_PATHS = (
+					"$(inherited)",
+					"@executable_path/../Frameworks",
+					"@executable_path/../../Frameworks",
+					"@executable_path/../../../../Frameworks",
+				);
+				MACOSX_DEPLOYMENT_TARGET = 13.0;
+				MARKETING_VERSION = 1.0;
+				OTHER_CODE_SIGN_FLAGS = "";
+				PRODUCT_BUNDLE_IDENTIFIER = "$(BASE_PACKAGE_IDENTIFIER).extension";
+				PRODUCT_NAME = "$(TARGET_NAME)";
+				PROVISIONING_PROFILE_SPECIFIER = "";
+				SDKROOT = macosx;
+				SKIP_INSTALL = YES;
+				SUPPORTED_PLATFORMS = "iphoneos iphonesimulator macosx";
+				SUPPORTS_MACCATALYST = NO;
+				SUPPORTS_MAC_DESIGNED_FOR_IPHONE_IPAD = NO;
+				SUPPORTS_XR_DESIGNED_FOR_IPHONE_IPAD = NO;
+				SWIFT_EMIT_LOC_STRINGS = YES;
+				SWIFT_OPTIMIZATION_LEVEL = "-Onone";
+				SWIFT_VERSION = 5.0;
+				TARGETED_DEVICE_FAMILY = "1,2";
+			};
+			name = Dev;
+		};
 		3A096F922A4ED3DE00D4A2ED /* Release */ = {
 			isa = XCBuildConfiguration;
 			buildSettings = {
@@ -1898,6 +1938,48 @@
 			};
 			name = Debug;
 		};
+		0FF8C8E9AFA05A007D50905D /* Dev */ = {
+			isa = XCBuildConfiguration;
+			buildSettings = {
+				CLANG_ENABLE_MODULES = YES;
+				CODE_SIGN_IDENTITY = "Apple Development";
+				"CODE_SIGN_IDENTITY[sdk=macosx*]" = "Apple Development";
+				CODE_SIGN_STYLE = Manual;
+				CURRENT_PROJECT_VERSION = 1;
+				DEFINES_MODULE = YES;
+				DEVELOPMENT_TEAM = "";
+				DYLIB_COMPATIBILITY_VERSION = 1;
+				DYLIB_CURRENT_VERSION = 1;
+				DYLIB_INSTALL_NAME_BASE = "@rpath";
+				GENERATE_INFOPLIST_FILE = YES;
+				INFOPLIST_KEY_NSHumanReadableCopyright = "";
+				INSTALL_PATH = "$(LOCAL_LIBRARY_DIR)/Frameworks";
+				IPHONEOS_DEPLOYMENT_TARGET = 15.0;
+				LD_RUNPATH_SEARCH_PATHS = (
+					"$(inherited)",
+					"@executable_path/../Frameworks",
+				);
+				MACH_O_TYPE = staticlib;
+				MACOSX_DEPLOYMENT_TARGET = 13.0;
+				MARKETING_VERSION = 1.0;
+				MODULE_VERIFIER_SUPPORTED_LANGUAGES = "objective-c objective-c++";
+				MODULE_VERIFIER_SUPPORTED_LANGUAGE_STANDARDS = "gnu17 gnu++20";
+				PRODUCT_BUNDLE_IDENTIFIER = "$(BASE_PACKAGE_IDENTIFIER).application";
+				PRODUCT_NAME = "$(TARGET_NAME:c99extidentifier)";
+				PROVISIONING_PROFILE_SPECIFIER = "";
+				SDKROOT = iphoneos;
+				SKIP_INSTALL = YES;
+				SUPPORTED_PLATFORMS = "appletvos appletvsimulator iphoneos iphonesimulator macosx";
+				SUPPORTS_MACCATALYST = NO;
+				SUPPORTS_MAC_DESIGNED_FOR_IPHONE_IPAD = NO;
+				SWIFT_EMIT_LOC_STRINGS = YES;
+				SWIFT_OPTIMIZATION_LEVEL = "-Onone";
+				SWIFT_VERSION = 5.0;
+				TARGETED_DEVICE_FAMILY = "1,2,3";
+				TVOS_DEPLOYMENT_TARGET = 17.0;
+			};
+			name = Dev;
+		};
 		3A4EAD1A2A4FEAE6005435B3 /* Release */ = {
 			isa = XCBuildConfiguration;
 			buildSettings = {
@@ -1961,6 +2043,28 @@
 			};
 			name = Debug;
 		};
+		87643D4FC1067F646391D052 /* Dev */ = {
+			isa = XCBuildConfiguration;
+			buildSettings = {
+				CODE_SIGN_STYLE = Automatic;
+				CURRENT_PROJECT_VERSION = 1;
+				DEVELOPMENT_TEAM = "$(OVERLAY_DEVELOPMENT_TEAM)";
+				GENERATE_INFOPLIST_FILE = YES;
+				IPHONEOS_DEPLOYMENT_TARGET = 26.2;
+				MARKETING_VERSION = 1.0;
+				PRODUCT_BUNDLE_IDENTIFIER = "$(BASE_PACKAGE_IDENTIFIER).SFIUITests";
+				PRODUCT_NAME = "$(TARGET_NAME)";
+				SDKROOT = iphoneos;
+				STRING_CATALOG_GENERATE_SYMBOLS = NO;
+				SWIFT_APPROACHABLE_CONCURRENCY = YES;
+				SWIFT_EMIT_LOC_STRINGS = NO;
+				SWIFT_UPCOMING_FEATURE_MEMBER_IMPORT_VISIBILITY = YES;
+				SWIFT_VERSION = 5.0;
+				TARGETED_DEVICE_FAMILY = "1,2";
+				TEST_TARGET_NAME = SFI;
+			};
+			name = Dev;
+		};
 		3A63137C2F0CEF3D0060A550 /* Release */ = {
 			isa = XCBuildConfiguration;
 			buildSettings = {
@@ -2006,6 +2110,28 @@
 			};
 			name = Debug;
 		};
+		3F28B94CE6FD3AB9A64FB403 /* Dev */ = {
+			isa = XCBuildConfiguration;
+			buildSettings = {
+				CODE_SIGN_STYLE = Automatic;
+				CURRENT_PROJECT_VERSION = 1;
+				DEVELOPMENT_TEAM = "$(OVERLAY_DEVELOPMENT_TEAM)";
+				GENERATE_INFOPLIST_FILE = YES;
+				MARKETING_VERSION = 1.0;
+				PRODUCT_BUNDLE_IDENTIFIER = "$(BASE_PACKAGE_IDENTIFIER).SFTUITests";
+				PRODUCT_NAME = "$(TARGET_NAME)";
+				SDKROOT = appletvos;
+				STRING_CATALOG_GENERATE_SYMBOLS = NO;
+				SWIFT_APPROACHABLE_CONCURRENCY = YES;
+				SWIFT_EMIT_LOC_STRINGS = NO;
+				SWIFT_UPCOMING_FEATURE_MEMBER_IMPORT_VISIBILITY = YES;
+				SWIFT_VERSION = 5.0;
+				TARGETED_DEVICE_FAMILY = 3;
+				TEST_TARGET_NAME = SFT;
+				TVOS_DEPLOYMENT_TARGET = 26.2;
+			};
+			name = Dev;
+		};
 		3A63139E2F0CEF740060A550 /* Release */ = {
 			isa = XCBuildConfiguration;
 			buildSettings = {
@@ -2050,6 +2176,28 @@
 				TEST_TARGET_NAME = SFM;
 			};
 			name = Debug;
+		};
+		F5E628E0435388B7B3DDFFB6 /* Dev */ = {
+			isa = XCBuildConfiguration;
+			buildSettings = {
+				CODE_SIGN_STYLE = Automatic;
+				CURRENT_PROJECT_VERSION = 1;
+				DEVELOPMENT_TEAM = "$(OVERLAY_DEVELOPMENT_TEAM)";
+				GENERATE_INFOPLIST_FILE = YES;
+				INFOPLIST_KEY_BasePackageIdentifier = "$(BASE_PACKAGE_IDENTIFIER)";
+				MACOSX_DEPLOYMENT_TARGET = 26.2;
+				MARKETING_VERSION = 1.0;
+				PRODUCT_BUNDLE_IDENTIFIER = "$(BASE_PACKAGE_IDENTIFIER).SFMUITests";
+				PRODUCT_NAME = "$(TARGET_NAME)";
+				SDKROOT = macosx;
+				STRING_CATALOG_GENERATE_SYMBOLS = NO;
+				SWIFT_APPROACHABLE_CONCURRENCY = YES;
+				SWIFT_EMIT_LOC_STRINGS = NO;
+				SWIFT_UPCOMING_FEATURE_MEMBER_IMPORT_VISIBILITY = YES;
+				SWIFT_VERSION = 5.0;
+				TEST_TARGET_NAME = SFM;
+			};
+			name = Dev;
 		};
 		3A6313B12F0CEFDD0060A550 /* Release */ = {
 			isa = XCBuildConfiguration;
@@ -2111,6 +2259,45 @@
 				TARGETED_DEVICE_FAMILY = "1,2";
 			};
 			name = Debug;
+		};
+		9DBF08945833D89481CD2DF0 /* Dev */ = {
+			isa = XCBuildConfiguration;
+			buildSettings = {
+				CODE_SIGN_ENTITLEMENTS = IntentsExtension/IntentsExtension.entitlements;
+				CODE_SIGN_IDENTITY = "Apple Development";
+				CODE_SIGN_STYLE = Automatic;
+				CURRENT_PROJECT_VERSION = 1;
+				DEVELOPMENT_TEAM = "$(OVERLAY_DEVELOPMENT_TEAM)";
+				GENERATE_INFOPLIST_FILE = YES;
+				INFOPLIST_FILE = IntentsExtension/Info.plist;
+				INFOPLIST_KEY_CFBundleDisplayName = IntentsExtension;
+				INFOPLIST_KEY_NSHumanReadableCopyright = "";
+				IPHONEOS_DEPLOYMENT_TARGET = 16.0;
+				LD_RUNPATH_SEARCH_PATHS = (
+					"$(inherited)",
+					"@executable_path/Frameworks",
+					"@executable_path/../../Frameworks",
+					"@executable_path/../../../../Frameworks",
+				);
+				LINK_WITH_STANDARD_LIBRARIES = YES;
+				MACOSX_DEPLOYMENT_TARGET = 13.0;
+				MARKETING_VERSION = 1.0;
+				OTHER_CODE_SIGN_FLAGS = "";
+				PRODUCT_BUNDLE_IDENTIFIER = "$(BASE_PACKAGE_IDENTIFIER).intents";
+				PRODUCT_NAME = "$(TARGET_NAME)";
+				PROVISIONING_PROFILE_SPECIFIER = "";
+				REEXPORTED_LIBRARY_PATHS = "";
+				SDKROOT = iphoneos;
+				SKIP_INSTALL = YES;
+				SUPPORTED_PLATFORMS = "iphoneos iphonesimulator macosx";
+				SUPPORTS_MACCATALYST = NO;
+				SUPPORTS_MAC_DESIGNED_FOR_IPHONE_IPAD = NO;
+				SUPPORTS_XR_DESIGNED_FOR_IPHONE_IPAD = NO;
+				SWIFT_EMIT_LOC_STRINGS = YES;
+				SWIFT_VERSION = 5.0;
+				TARGETED_DEVICE_FAMILY = "1,2";
+			};
+			name = Dev;
 		};
 		3A7701792A4E6B34008F031F /* Release */ = {
 			isa = XCBuildConfiguration;
@@ -2185,6 +2372,39 @@
 			};
 			name = Debug;
 		};
+		418AB023572A47506A73E25C /* Dev */ = {
+			isa = XCBuildConfiguration;
+			buildSettings = {
+				APP_GROUP_IDENTIFIER = "group.$(BASE_PACKAGE_IDENTIFIER)";
+				CODE_SIGN_ENTITLEMENTS = FileProviderExtension/FileProviderExtension.entitlements;
+				CODE_SIGN_IDENTITY = "Apple Development";
+				CODE_SIGN_STYLE = Automatic;
+				CURRENT_PROJECT_VERSION = 1;
+				DEVELOPMENT_TEAM = "$(OVERLAY_DEVELOPMENT_TEAM)";
+				GENERATE_INFOPLIST_FILE = YES;
+				INFOPLIST_FILE = FileProviderExtension/Info.plist;
+				INFOPLIST_KEY_CFBundleDisplayName = FileProviderExtension;
+				INFOPLIST_KEY_NSHumanReadableCopyright = "";
+				IPHONEOS_DEPLOYMENT_TARGET = 16.0;
+				LD_RUNPATH_SEARCH_PATHS = (
+					"$(inherited)",
+					"@executable_path/Frameworks",
+					"@executable_path/../../Frameworks",
+				);
+				MARKETING_VERSION = 1.0;
+				PRODUCT_BUNDLE_IDENTIFIER = "$(BASE_PACKAGE_IDENTIFIER).fileprovider";
+				PRODUCT_NAME = "$(TARGET_NAME)";
+				SDKROOT = iphoneos;
+				SKIP_INSTALL = YES;
+				STRING_CATALOG_GENERATE_SYMBOLS = YES;
+				SWIFT_APPROACHABLE_CONCURRENCY = YES;
+				SWIFT_EMIT_LOC_STRINGS = YES;
+				SWIFT_UPCOMING_FEATURE_MEMBER_IMPORT_VISIBILITY = YES;
+				SWIFT_VERSION = 5.0;
+				TARGETED_DEVICE_FAMILY = "1,2";
+			};
+			name = Dev;
+		};
 		3AAAFB302EF5218F004C69AD /* Release */ = {
 			isa = XCBuildConfiguration;
 			buildSettings = {
@@ -2252,6 +2472,40 @@
 				TVOS_DEPLOYMENT_TARGET = 17.0;
 			};
 			name = Debug;
+		};
+		BD9DBCF36BAE0100DA691A1E /* Dev */ = {
+			isa = XCBuildConfiguration;
+			buildSettings = {
+				ASSETCATALOG_COMPILER_APPICON_NAME = "App Icon & Top Shelf Image";
+				ASSETCATALOG_COMPILER_GLOBAL_ACCENT_COLOR_NAME = AccentColor;
+				CODE_SIGN_ENTITLEMENTS = SFT/SFT.entitlements;
+				CODE_SIGN_STYLE = Automatic;
+				CURRENT_PROJECT_VERSION = 1;
+				DEVELOPMENT_TEAM = "$(OVERLAY_DEVELOPMENT_TEAM)";
+				ENABLE_PREVIEWS = YES;
+				GCC_C_LANGUAGE_STANDARD = gnu11;
+				GENERATE_INFOPLIST_FILE = YES;
+				INFOPLIST_FILE = SFT/Info.plist;
+				INFOPLIST_KEY_CFBundleDisplayName = "$(OVERLAY_APPLICATION_NAME)";
+				INFOPLIST_KEY_LSApplicationCategoryType = "public.app-category.utilities";
+				INFOPLIST_KEY_UILaunchScreen_Generation = YES;
+				INFOPLIST_KEY_UIRequiredDeviceCapabilities = arm64;
+				INFOPLIST_KEY_UIUserInterfaceStyle = Automatic;
+				LD_RUNPATH_SEARCH_PATHS = (
+					"$(inherited)",
+					"@executable_path/Frameworks",
+				);
+				MARKETING_VERSION = "1.13.13";
+				PRODUCT_BUNDLE_IDENTIFIER = "$(BASE_PACKAGE_IDENTIFIER)";
+				PRODUCT_NAME = "$(OVERLAY_APPLICATION_NAME)";
+				SDKROOT = appletvos;
+				SWIFT_ACTIVE_COMPILATION_CONDITIONS = "DEBUG SFI_DEV $(inherited)";
+				SWIFT_EMIT_LOC_STRINGS = YES;
+				SWIFT_VERSION = 5.0;
+				TARGETED_DEVICE_FAMILY = 3;
+				TVOS_DEPLOYMENT_TARGET = 17.0;
+			};
+			name = Dev;
 		};
 		3AC03BA22A72BF3500B7946F /* Release */ = {
 			isa = XCBuildConfiguration;
@@ -2324,6 +2578,42 @@
 			};
 			name = Debug;
 		};
+		CA7E0A08F84945ED8B3D92E7 /* Dev */ = {
+			isa = XCBuildConfiguration;
+			buildSettings = {
+				CODE_SIGN_ENTITLEMENTS = TVExtension/TVExtension.entitlements;
+				CODE_SIGN_IDENTITY = "Apple Development";
+				CODE_SIGN_STYLE = Automatic;
+				CURRENT_PROJECT_VERSION = 1;
+				DEVELOPMENT_TEAM = "$(OVERLAY_DEVELOPMENT_TEAM)";
+				GENERATE_INFOPLIST_FILE = YES;
+				INFOPLIST_FILE = TVExtension/Info.plist;
+				INFOPLIST_KEY_CFBundleDisplayName = TVExtension;
+				INFOPLIST_KEY_NSHumanReadableCopyright = "";
+				INFOPLIST_KEY_UIRequiredDeviceCapabilities = arm64;
+				IPHONEOS_DEPLOYMENT_TARGET = 15.0;
+				LD_RUNPATH_SEARCH_PATHS = (
+					"$(inherited)",
+					"@executable_path/Frameworks",
+					"@executable_path/../../Frameworks",
+				);
+				MARKETING_VERSION = 1.0;
+				PRODUCT_BUNDLE_IDENTIFIER = "$(BASE_PACKAGE_IDENTIFIER).extension";
+				PRODUCT_NAME = "$(TARGET_NAME)";
+				PROVISIONING_PROFILE_SPECIFIER = "";
+				SDKROOT = iphoneos;
+				SKIP_INSTALL = YES;
+				SUPPORTED_PLATFORMS = "appletvos appletvsimulator";
+				SUPPORTS_MACCATALYST = NO;
+				SUPPORTS_MAC_DESIGNED_FOR_IPHONE_IPAD = NO;
+				SUPPORTS_XR_DESIGNED_FOR_IPHONE_IPAD = NO;
+				SWIFT_EMIT_LOC_STRINGS = YES;
+				SWIFT_VERSION = 5.0;
+				TARGETED_DEVICE_FAMILY = 3;
+				TVOS_DEPLOYMENT_TARGET = 17.0;
+			};
+			name = Dev;
+		};
 		3AE171A22A8128DD00393060 /* Release */ = {
 			isa = XCBuildConfiguration;
 			buildSettings = {
@@ -2391,6 +2681,37 @@
 				TARGETED_DEVICE_FAMILY = "1,2";
 			};
 			name = Debug;
+		};
+		7ED817C8175BFC9137602932 /* Dev */ = {
+			isa = XCBuildConfiguration;
+			buildSettings = {
+				ASSETCATALOG_COMPILER_GLOBAL_ACCENT_COLOR_NAME = AccentColor;
+				ASSETCATALOG_COMPILER_WIDGET_BACKGROUND_COLOR_NAME = WidgetBackground;
+				CODE_SIGN_ENTITLEMENTS = WidgetExtension/WidgetExtension.entitlements;
+				CODE_SIGN_IDENTITY = "Apple Development";
+				CODE_SIGN_STYLE = Automatic;
+				CURRENT_PROJECT_VERSION = 1;
+				DEVELOPMENT_TEAM = "$(OVERLAY_DEVELOPMENT_TEAM)";
+				GENERATE_INFOPLIST_FILE = YES;
+				INFOPLIST_FILE = WidgetExtension/Info.plist;
+				INFOPLIST_KEY_CFBundleDisplayName = WidgetExtension;
+				INFOPLIST_KEY_NSHumanReadableCopyright = "";
+				IPHONEOS_DEPLOYMENT_TARGET = 18.0;
+				LD_RUNPATH_SEARCH_PATHS = (
+					"$(inherited)",
+					"@executable_path/Frameworks",
+					"@executable_path/../../Frameworks",
+				);
+				MARKETING_VERSION = 1.0;
+				PRODUCT_BUNDLE_IDENTIFIER = "$(BASE_PACKAGE_IDENTIFIER).widget";
+				PRODUCT_NAME = "$(TARGET_NAME)";
+				SDKROOT = iphoneos;
+				SKIP_INSTALL = YES;
+				SWIFT_EMIT_LOC_STRINGS = YES;
+				SWIFT_VERSION = 5.0;
+				TARGETED_DEVICE_FAMILY = "1,2";
+			};
+			name = Dev;
 		};
 		3AE396062C21A5CC00647718 /* Release */ = {
 			isa = XCBuildConfiguration;
@@ -2465,6 +2786,47 @@
 			};
 			name = Debug;
 		};
+		9D9D0E1764266CEDCC80AD6E /* Dev */ = {
+			isa = XCBuildConfiguration;
+			buildSettings = {
+				APP_GROUP_IDENTIFIER = "$(TeamIdentifierPrefix)$(BASE_PACKAGE_IDENTIFIER)";
+				AUTOMATION_APPLE_EVENTS = NO;
+				CODE_SIGN_ENTITLEMENTS = HelperService/RootHelper.entitlements;
+				"CODE_SIGN_IDENTITY[sdk=macosx*]" = "Apple Development";
+				CODE_SIGN_STYLE = Automatic;
+				CREATE_INFOPLIST_SECTION_IN_BINARY = YES;
+				DEVELOPMENT_TEAM = "$(OVERLAY_DEVELOPMENT_TEAM)";
+				ENABLE_HARDENED_RUNTIME = YES;
+				ENABLE_RESOURCE_ACCESS_AUDIO_INPUT = NO;
+				ENABLE_RESOURCE_ACCESS_CALENDARS = NO;
+				ENABLE_RESOURCE_ACCESS_CAMERA = NO;
+				ENABLE_RESOURCE_ACCESS_CONTACTS = NO;
+				ENABLE_RESOURCE_ACCESS_LOCATION = NO;
+				ENABLE_RESOURCE_ACCESS_PHOTO_LIBRARY = NO;
+				INFOPLIST_FILE = HelperService/Info.plist;
+				INFOPLIST_KEY_WKSupportsLiveActivityLaunchAttributeTypes = "";
+				LD_RUNPATH_SEARCH_PATHS = (
+					"$(inherited)",
+					"@executable_path/../Frameworks",
+				);
+				MACOSX_DEPLOYMENT_TARGET = 13.0;
+				MARKETING_VERSION = "1.13.0-alpha.21";
+				PRODUCT_BUNDLE_IDENTIFIER = "$(BASE_PACKAGE_IDENTIFIER).helper";
+				PRODUCT_NAME = "$(TARGET_NAME)";
+				RUNTIME_EXCEPTION_ALLOW_DYLD_ENVIRONMENT_VARIABLES = NO;
+				RUNTIME_EXCEPTION_ALLOW_JIT = NO;
+				RUNTIME_EXCEPTION_ALLOW_UNSIGNED_EXECUTABLE_MEMORY = NO;
+				RUNTIME_EXCEPTION_DEBUGGING_TOOL = NO;
+				RUNTIME_EXCEPTION_DISABLE_EXECUTABLE_PAGE_PROTECTION = NO;
+				RUNTIME_EXCEPTION_DISABLE_LIBRARY_VALIDATION = NO;
+				SDKROOT = macosx;
+				SKIP_INSTALL = YES;
+				SWIFT_APPROACHABLE_CONCURRENCY = YES;
+				SWIFT_UPCOMING_FEATURE_MEMBER_IMPORT_VISIBILITY = YES;
+				SWIFT_VERSION = 5.0;
+			};
+			name = Dev;
+		};
 		3AE595772F08C34000C13426 /* Release */ = {
 			isa = XCBuildConfiguration;
 			buildSettings = {
@@ -2513,6 +2875,8 @@
 				ALWAYS_SEARCH_USER_PATHS = NO;
 				APP_GROUP_IDENTIFIER = "group.$(BASE_PACKAGE_IDENTIFIER)";
 				ASSETCATALOG_COMPILER_GENERATE_SWIFT_ASSET_SYMBOL_EXTENSIONS = YES;
+				SFI_APP_ICON_NAME = AppIcon;
+				SFI_REQUIRE_WLT_LIBBOX = NO;
 				BASE_PACKAGE_IDENTIFIER = "$(OVERLAY_BASE_PACKAGE_IDENTIFIER)";
 				INFOPLIST_KEY_OverlayApplicationLink = "$(OVERLAY_APPLICATION_LINK)";
 				INFOPLIST_KEY_OverlayApplicationName = "$(OVERLAY_APPLICATION_NAME)";
@@ -2583,6 +2947,85 @@
 			};
 			name = Debug;
 		};
+		BF71A8B911061B0D2FAE3572 /* Dev */ = {
+			isa = XCBuildConfiguration;
+			baseConfigurationReference = 3B1D24E53020260000000001 /* Config/Overlay.xcconfig */;
+			buildSettings = {
+				ALWAYS_SEARCH_USER_PATHS = NO;
+				APP_GROUP_IDENTIFIER = "group.$(BASE_PACKAGE_IDENTIFIER)";
+				ASSETCATALOG_COMPILER_GENERATE_SWIFT_ASSET_SYMBOL_EXTENSIONS = YES;
+				SFI_APP_ICON_NAME = AppIcon;
+				SFI_REQUIRE_WLT_LIBBOX = NO;
+				BASE_PACKAGE_IDENTIFIER = "$(OVERLAY_BASE_PACKAGE_IDENTIFIER).dev";
+				INFOPLIST_KEY_OverlayApplicationLink = "$(OVERLAY_APPLICATION_LINK)";
+				INFOPLIST_KEY_OverlayApplicationName = "$(OVERLAY_APPLICATION_NAME) Dev";
+				INFOPLIST_KEY_OverlayChangelogLink = "$(OVERLAY_CHANGELOG_LINK)";
+				INFOPLIST_KEY_OverlayConfigurationLink = "$(OVERLAY_CONFIGURATION_LINK)";
+				INFOPLIST_KEY_OverlayReleasesLink = "$(OVERLAY_RELEASES_LINK)";
+				INFOPLIST_KEY_OverlaySourceLink = "$(OVERLAY_SOURCE_LINK)";
+				CLANG_ANALYZER_LOCALIZABILITY_NONLOCALIZED = YES;
+				CLANG_ANALYZER_NONNULL = YES;
+				CLANG_ANALYZER_NUMBER_OBJECT_CONVERSION = YES_AGGRESSIVE;
+				CLANG_CXX_LANGUAGE_STANDARD = "gnu++20";
+				CLANG_ENABLE_MODULES = YES;
+				CLANG_ENABLE_OBJC_ARC = YES;
+				CLANG_ENABLE_OBJC_WEAK = YES;
+				CLANG_WARN_BLOCK_CAPTURE_AUTORELEASING = YES;
+				CLANG_WARN_BOOL_CONVERSION = YES;
+				CLANG_WARN_COMMA = YES;
+				CLANG_WARN_CONSTANT_CONVERSION = YES;
+				CLANG_WARN_DEPRECATED_OBJC_IMPLEMENTATIONS = YES;
+				CLANG_WARN_DIRECT_OBJC_ISA_USAGE = YES_ERROR;
+				CLANG_WARN_DOCUMENTATION_COMMENTS = YES;
+				CLANG_WARN_EMPTY_BODY = YES;
+				CLANG_WARN_ENUM_CONVERSION = YES;
+				CLANG_WARN_INFINITE_RECURSION = YES;
+				CLANG_WARN_INT_CONVERSION = YES;
+				CLANG_WARN_NON_LITERAL_NULL_CONVERSION = YES;
+				CLANG_WARN_OBJC_IMPLICIT_RETAIN_SELF = YES;
+				CLANG_WARN_OBJC_LITERAL_CONVERSION = YES;
+				CLANG_WARN_OBJC_ROOT_CLASS = YES_ERROR;
+				CLANG_WARN_QUOTED_INCLUDE_IN_FRAMEWORK_HEADER = YES;
+				CLANG_WARN_RANGE_LOOP_ANALYSIS = YES;
+				CLANG_WARN_STRICT_PROTOTYPES = YES;
+				CLANG_WARN_SUSPICIOUS_MOVE = YES;
+				CLANG_WARN_UNGUARDED_AVAILABILITY = YES_AGGRESSIVE;
+				CLANG_WARN_UNREACHABLE_CODE = YES;
+				CLANG_WARN__DUPLICATE_METHOD_MATCH = YES;
+				COPY_PHASE_STRIP = NO;
+				CURRENT_PROJECT_VERSION = 1;
+				DEAD_CODE_STRIPPING = YES;
+				DEBUG_INFORMATION_FORMAT = dwarf;
+				ENABLE_STRICT_OBJC_MSGSEND = YES;
+				ENABLE_TESTABILITY = YES;
+				ENABLE_USER_SCRIPT_SANDBOXING = YES;
+				GCC_C_LANGUAGE_STANDARD = gnu17;
+				GCC_DYNAMIC_NO_PIC = NO;
+				GCC_NO_COMMON_BLOCKS = YES;
+				GCC_OPTIMIZATION_LEVEL = 0;
+				GCC_PREPROCESSOR_DEFINITIONS = (
+					"DEBUG=1",
+					"$(inherited)",
+				);
+				GCC_WARN_64_TO_32_BIT_CONVERSION = YES;
+				GCC_WARN_ABOUT_RETURN_TYPE = YES_ERROR;
+				GCC_WARN_UNDECLARED_SELECTOR = YES;
+				GCC_WARN_UNINITIALIZED_AUTOS = YES_AGGRESSIVE;
+				GCC_WARN_UNUSED_FUNCTION = YES;
+				GCC_WARN_UNUSED_VARIABLE = YES;
+				IPHONEOS_DEPLOYMENT_TARGET = 15.0;
+				LOCALIZATION_PREFERS_STRING_CATALOGS = YES;
+				MTL_ENABLE_DEBUG_INFO = INCLUDE_SOURCE;
+				MTL_FAST_MATH = YES;
+				ONLY_ACTIVE_ARCH = YES;
+				SWIFT_ACTIVE_COMPILATION_CONDITIONS = "DEBUG SFI_DEV $(inherited)";
+				SWIFT_EMIT_LOC_STRINGS = NO;
+				SWIFT_OPTIMIZATION_LEVEL = "-Onone";
+				VERSIONING_SYSTEM = "apple-generic";
+				VERSION_INFO_PREFIX = "";
+			};
+			name = Dev;
+		};
 		3AEC20CC2A45991900A63465 /* Release */ = {
 			isa = XCBuildConfiguration;
 			baseConfigurationReference = 3B1D24E53020260000000001 /* Config/Overlay.xcconfig */;
@@ -2590,6 +3033,8 @@
 				ALWAYS_SEARCH_USER_PATHS = NO;
 				APP_GROUP_IDENTIFIER = "group.$(BASE_PACKAGE_IDENTIFIER)";
 				ASSETCATALOG_COMPILER_GENERATE_SWIFT_ASSET_SYMBOL_EXTENSIONS = YES;
+				SFI_APP_ICON_NAME = AppIcon;
+				SFI_REQUIRE_WLT_LIBBOX = NO;
 				BASE_PACKAGE_IDENTIFIER = "$(OVERLAY_BASE_PACKAGE_IDENTIFIER)";
 				INFOPLIST_KEY_OverlayApplicationLink = "$(OVERLAY_APPLICATION_LINK)";
 				INFOPLIST_KEY_OverlayApplicationName = "$(OVERLAY_APPLICATION_NAME)";
@@ -2655,7 +3100,7 @@
 		3AEC20FF2A459AB500A63465 /* Debug */ = {
 			isa = XCBuildConfiguration;
 			buildSettings = {
-				ASSETCATALOG_COMPILER_APPICON_NAME = AppIcon;
+				ASSETCATALOG_COMPILER_APPICON_NAME = "$(SFI_APP_ICON_NAME)";
 				ASSETCATALOG_COMPILER_GLOBAL_ACCENT_COLOR_NAME = AccentColor;
 				ASSETCATALOG_COMPILER_INCLUDE_ALL_APPICON_ASSETS = YES;
 				CODE_SIGN_ENTITLEMENTS = SFI/SFI.entitlements;
@@ -2694,10 +3139,52 @@
 			};
 			name = Debug;
 		};
+		E8F4F2CC2FEEB1EC798A5F3E /* Dev */ = {
+			isa = XCBuildConfiguration;
+			buildSettings = {
+				ASSETCATALOG_COMPILER_APPICON_NAME = "$(SFI_APP_ICON_NAME)";
+				ASSETCATALOG_COMPILER_GLOBAL_ACCENT_COLOR_NAME = AccentColor;
+				ASSETCATALOG_COMPILER_INCLUDE_ALL_APPICON_ASSETS = YES;
+				CODE_SIGN_ENTITLEMENTS = SFI/SFI.entitlements;
+				CODE_SIGN_IDENTITY = "Apple Development";
+				CODE_SIGN_STYLE = Automatic;
+				CURRENT_PROJECT_VERSION = 1;
+				DEVELOPMENT_ASSET_PATHS = "";
+				DEVELOPMENT_TEAM = "$(OVERLAY_DEVELOPMENT_TEAM)";
+				ENABLE_PREVIEWS = YES;
+				GENERATE_INFOPLIST_FILE = YES;
+				INFOPLIST_FILE = SFI/Info.plist;
+				INFOPLIST_KEY_CFBundleDisplayName = "$(OVERLAY_APPLICATION_NAME) Dev";
+				INFOPLIST_KEY_ITSAppUsesNonExemptEncryption = NO;
+				INFOPLIST_KEY_LSApplicationCategoryType = "public.app-category.utilities";
+				INFOPLIST_KEY_LSSupportsOpeningDocumentsInPlace = YES;
+				INFOPLIST_KEY_UIApplicationSceneManifest_Generation = YES;
+				INFOPLIST_KEY_UIApplicationSupportsIndirectInputEvents = YES;
+				INFOPLIST_KEY_UILaunchScreen_Generation = YES;
+				INFOPLIST_KEY_UISupportedInterfaceOrientations_iPad = "UIInterfaceOrientationPortrait UIInterfaceOrientationPortraitUpsideDown UIInterfaceOrientationLandscapeLeft UIInterfaceOrientationLandscapeRight";
+				INFOPLIST_KEY_UISupportedInterfaceOrientations_iPhone = "UIInterfaceOrientationPortrait UIInterfaceOrientationLandscapeLeft UIInterfaceOrientationLandscapeRight";
+				INFOPLIST_KEY_UISupportsDocumentBrowser = NO;
+				IPHONEOS_DEPLOYMENT_TARGET = 15.0;
+				LD_RUNPATH_SEARCH_PATHS = (
+					"$(inherited)",
+					"@executable_path/Frameworks",
+				);
+				MARKETING_VERSION = "1.13.13";
+				OTHER_CODE_SIGN_FLAGS = "--deep";
+				PRODUCT_BUNDLE_IDENTIFIER = "$(BASE_PACKAGE_IDENTIFIER)";
+				PRODUCT_NAME = "$(OVERLAY_APPLICATION_NAME) Dev";
+				PROVISIONING_PROFILE_SPECIFIER = "";
+				SDKROOT = iphoneos;
+				SWIFT_EMIT_LOC_STRINGS = NO;
+				SWIFT_VERSION = 5.0;
+				TARGETED_DEVICE_FAMILY = "1,2";
+			};
+			name = Dev;
+		};
 		3AEC21002A459AB500A63465 /* Release */ = {
 			isa = XCBuildConfiguration;
 			buildSettings = {
-				ASSETCATALOG_COMPILER_APPICON_NAME = AppIcon;
+				ASSETCATALOG_COMPILER_APPICON_NAME = "$(SFI_APP_ICON_NAME)";
 				ASSETCATALOG_COMPILER_GLOBAL_ACCENT_COLOR_NAME = AccentColor;
 				ASSETCATALOG_COMPILER_INCLUDE_ALL_APPICON_ASSETS = YES;
 				CODE_SIGN_ENTITLEMENTS = SFI/SFI.entitlements;
@@ -2775,6 +3262,45 @@
 				SWIFT_VERSION = 5.0;
 			};
 			name = Debug;
+		};
+		2B9BBCE6A02262F65F162A28 /* Dev */ = {
+			isa = XCBuildConfiguration;
+			buildSettings = {
+				ASSETCATALOG_COMPILER_APPICON_NAME = AppIcon;
+				ASSETCATALOG_COMPILER_GLOBAL_ACCENT_COLOR_NAME = AccentColor;
+				CODE_SIGN_ENTITLEMENTS = SFM/SFM.entitlements;
+				CODE_SIGN_IDENTITY = "Apple Development";
+				CODE_SIGN_STYLE = Automatic;
+				COMBINE_HIDPI_IMAGES = YES;
+				CURRENT_PROJECT_VERSION = 395;
+				DEAD_CODE_STRIPPING = YES;
+				DEVELOPMENT_TEAM = "$(OVERLAY_DEVELOPMENT_TEAM)";
+				ENABLE_HARDENED_RUNTIME = YES;
+				ENABLE_PREVIEWS = YES;
+				GENERATE_INFOPLIST_FILE = YES;
+				INFOPLIST_FILE = SFM/Info.plist;
+				INFOPLIST_KEY_CFBundleDisplayName = "$(OVERLAY_APPLICATION_NAME)";
+				INFOPLIST_KEY_LSApplicationCategoryType = "public.app-category.utilities";
+				INFOPLIST_KEY_LSSupportsOpeningDocumentsInPlace = YES;
+				INFOPLIST_KEY_LSUIElement = YES;
+				INFOPLIST_KEY_NSHumanReadableCopyright = "";
+				INFOPLIST_KEY_UISupportsDocumentBrowser = NO;
+				LD_RUNPATH_SEARCH_PATHS = (
+					"$(inherited)",
+					"@executable_path/../Frameworks",
+				);
+				MACOSX_DEPLOYMENT_TARGET = 13.0;
+				MARKETING_VERSION = "1.13.13";
+				OTHER_CODE_SIGN_FLAGS = "";
+				PRODUCT_BUNDLE_IDENTIFIER = "$(BASE_PACKAGE_IDENTIFIER)";
+				PRODUCT_NAME = "$(OVERLAY_APPLICATION_NAME)";
+				PROVISIONING_PROFILE_SPECIFIER = "";
+				REEXPORTED_LIBRARY_PATHS = "";
+				SDKROOT = macosx;
+				SWIFT_EMIT_LOC_STRINGS = NO;
+				SWIFT_VERSION = 5.0;
+			};
+			name = Dev;
 		};
 		3AEC21172A459B1A00A63465 /* Release */ = {
 			isa = XCBuildConfiguration;
@@ -2862,6 +3388,54 @@
 				TVOS_DEPLOYMENT_TARGET = 17.0;
 			};
 			name = Debug;
+		};
+		66D6897E2E7100694663B188 /* Dev */ = {
+			isa = XCBuildConfiguration;
+			buildSettings = {
+				APPLICATION_EXTENSION_API_ONLY = YES;
+				CLANG_ENABLE_MODULES = YES;
+				CODE_SIGN_IDENTITY = "Apple Development";
+				CODE_SIGN_STYLE = Automatic;
+				COMBINE_HIDPI_IMAGES = YES;
+				CURRENT_PROJECT_VERSION = 1;
+				DEAD_CODE_STRIPPING = YES;
+				DEFINES_MODULE = YES;
+				DEVELOPMENT_TEAM = "$(OVERLAY_DEVELOPMENT_TEAM)";
+				DYLIB_COMPATIBILITY_VERSION = 1;
+				DYLIB_CURRENT_VERSION = 1;
+				DYLIB_INSTALL_NAME_BASE = "@rpath";
+				EMBED_ASSET_PACKS_IN_PRODUCT_BUNDLE = NO;
+				ENABLE_ON_DEMAND_RESOURCES = NO;
+				GENERATE_INFOPLIST_FILE = YES;
+				INFOPLIST_KEY_NSHumanReadableCopyright = "";
+				INSTALL_PATH = "$(LOCAL_LIBRARY_DIR)/Frameworks";
+				LD_RUNPATH_SEARCH_PATHS = (
+					"$(inherited)",
+					"@executable_path/../Frameworks",
+				);
+				MACH_O_TYPE = mh_dylib;
+				MACOSX_DEPLOYMENT_TARGET = 13.0;
+				MARKETING_VERSION = 1.0;
+				MODULE_VERIFIER_SUPPORTED_LANGUAGES = "objective-c objective-c++";
+				MODULE_VERIFIER_SUPPORTED_LANGUAGE_STANDARDS = "gnu17 gnu++20";
+				OTHER_CODE_SIGN_FLAGS = "--deep";
+				PRODUCT_BUNDLE_IDENTIFIER = "$(BASE_PACKAGE_IDENTIFIER).library";
+				PRODUCT_NAME = "$(TARGET_NAME:c99extidentifier)";
+				PROVISIONING_PROFILE_SPECIFIER = "";
+				SDKROOT = macosx;
+				SKIP_INSTALL = YES;
+				STRIP_STYLE = "non-global";
+				SUPPORTED_PLATFORMS = "appletvos appletvsimulator iphoneos iphonesimulator macosx";
+				SUPPORTS_MACCATALYST = NO;
+				SUPPORTS_MAC_DESIGNED_FOR_IPHONE_IPAD = NO;
+				SUPPORTS_XR_DESIGNED_FOR_IPHONE_IPAD = YES;
+				SWIFT_EMIT_LOC_STRINGS = NO;
+				SWIFT_OPTIMIZATION_LEVEL = "-Onone";
+				SWIFT_VERSION = 5.0;
+				TARGETED_DEVICE_FAMILY = "1,2,3";
+				TVOS_DEPLOYMENT_TARGET = 17.0;
+			};
+			name = Dev;
 		};
 		3AEC21272A459B4700A63465 /* Release */ = {
 			isa = XCBuildConfiguration;
@@ -2958,6 +3532,54 @@
 			};
 			name = Debug;
 		};
+		4FC574ADADAE497CA018390F /* Dev */ = {
+			isa = XCBuildConfiguration;
+			buildSettings = {
+				APP_GROUP_IDENTIFIER = "$(TeamIdentifierPrefix)$(BASE_PACKAGE_IDENTIFIER)";
+				CODE_SIGN_ENTITLEMENTS = SystemExtension/SystemExtension.entitlements;
+				CODE_SIGN_IDENTITY = "Apple Development";
+				"CODE_SIGN_IDENTITY[sdk=macosx*]" = "Developer ID Application";
+				CODE_SIGN_STYLE = Manual;
+				CURRENT_PROJECT_VERSION = 1;
+				DEVELOPMENT_TEAM = "";
+				"DEVELOPMENT_TEAM[sdk=macosx*]" = "$(OVERLAY_DEVELOPMENT_TEAM)";
+				ENABLE_APP_SANDBOX = YES;
+				ENABLE_HARDENED_RUNTIME = YES;
+				ENABLE_INCOMING_NETWORK_CONNECTIONS = YES;
+				ENABLE_OUTGOING_NETWORK_CONNECTIONS = YES;
+				ENABLE_RESOURCE_ACCESS_AUDIO_INPUT = NO;
+				ENABLE_RESOURCE_ACCESS_BLUETOOTH = NO;
+				ENABLE_RESOURCE_ACCESS_CALENDARS = NO;
+				ENABLE_RESOURCE_ACCESS_CAMERA = NO;
+				ENABLE_RESOURCE_ACCESS_CONTACTS = NO;
+				ENABLE_RESOURCE_ACCESS_LOCATION = NO;
+				ENABLE_RESOURCE_ACCESS_PRINTING = NO;
+				ENABLE_RESOURCE_ACCESS_USB = NO;
+				GCC_C_LANGUAGE_STANDARD = gnu11;
+				GENERATE_INFOPLIST_FILE = YES;
+				INFOPLIST_FILE = SystemExtension/Info.plist;
+				INFOPLIST_KEY_CFBundleDisplayName = SFMExtension;
+				INFOPLIST_KEY_NSHumanReadableCopyright = "";
+				INFOPLIST_KEY_NSSystemExtensionUsageDescription = "";
+				LD_RUNPATH_SEARCH_PATHS = (
+					"$(inherited)",
+					"@executable_path/../Frameworks",
+					"@executable_path/../../../../Frameworks",
+				);
+				MACOSX_DEPLOYMENT_TARGET = 13.0;
+				MARKETING_VERSION = "1.13.13";
+				PRODUCT_BUNDLE_IDENTIFIER = "$(BASE_PACKAGE_IDENTIFIER).system";
+				PRODUCT_NAME = "$(inherited)";
+				PROVISIONING_PROFILE_SPECIFIER = "";
+				"PROVISIONING_PROFILE_SPECIFIER[sdk=macosx*]" = "$(OVERLAY_MACOS_SYSTEM_PROFILE_SPECIFIER)";
+				SDKROOT = macosx;
+				SKIP_INSTALL = YES;
+				SWIFT_ACTIVE_COMPILATION_CONDITIONS = "DEBUG SFI_DEV $(inherited)";
+				SWIFT_EMIT_LOC_STRINGS = YES;
+				SWIFT_VERSION = 5.0;
+			};
+			name = Dev;
+		};
 		3AEECBFE2A6DF40A006A0E0C /* Release */ = {
 			isa = XCBuildConfiguration;
 			buildSettings = {
@@ -3048,6 +3670,48 @@
 			};
 			name = Debug;
 		};
+		F8EB4DEFA5E8657062D9A1CE /* Dev */ = {
+			isa = XCBuildConfiguration;
+			buildSettings = {
+				APP_GROUP_IDENTIFIER = "$(TeamIdentifierPrefix)$(BASE_PACKAGE_IDENTIFIER)";
+				ASSETCATALOG_COMPILER_APPICON_NAME = AppIcon;
+				ASSETCATALOG_COMPILER_GLOBAL_ACCENT_COLOR_NAME = AccentColor;
+				ASSETCATALOG_COMPILER_INCLUDE_ALL_APPICON_ASSETS = NO;
+				CODE_SIGN_ENTITLEMENTS = SFM.System/SFM.entitlements;
+				CODE_SIGN_IDENTITY = "Apple Development";
+				"CODE_SIGN_IDENTITY[sdk=macosx*]" = "Developer ID Application";
+				CODE_SIGN_STYLE = Manual;
+				COMBINE_HIDPI_IMAGES = YES;
+				CURRENT_PROJECT_VERSION = 1;
+				DEVELOPMENT_TEAM = "";
+				"DEVELOPMENT_TEAM[sdk=macosx*]" = "$(OVERLAY_DEVELOPMENT_TEAM)";
+				ENABLE_HARDENED_RUNTIME = YES;
+				ENABLE_PREVIEWS = YES;
+				GCC_C_LANGUAGE_STANDARD = gnu11;
+				GENERATE_INFOPLIST_FILE = YES;
+				INFOPLIST_FILE = SFM.System/Info.plist;
+				INFOPLIST_KEY_CFBundleDisplayName = "$(OVERLAY_APPLICATION_NAME)";
+				INFOPLIST_KEY_LSApplicationCategoryType = "public.app-category.utilities";
+				INFOPLIST_KEY_LSSupportsOpeningDocumentsInPlace = YES;
+				INFOPLIST_KEY_NSHumanReadableCopyright = "";
+				INFOPLIST_KEY_UISupportsDocumentBrowser = NO;
+				LD_RUNPATH_SEARCH_PATHS = (
+					"$(inherited)",
+					"@executable_path/../Frameworks",
+				);
+				MACOSX_DEPLOYMENT_TARGET = 13.0;
+				MARKETING_VERSION = "1.13.13";
+				PRODUCT_BUNDLE_IDENTIFIER = "$(BASE_PACKAGE_IDENTIFIER).standalone";
+				PRODUCT_NAME = "$(OVERLAY_APPLICATION_NAME)";
+				PROVISIONING_PROFILE_SPECIFIER = "";
+				"PROVISIONING_PROFILE_SPECIFIER[sdk=macosx*]" = "$(OVERLAY_MACOS_STANDALONE_PROFILE_SPECIFIER)";
+				SDKROOT = macosx;
+				SWIFT_ACTIVE_COMPILATION_CONDITIONS = "DEBUG SFI_DEV $(inherited)";
+				SWIFT_EMIT_LOC_STRINGS = YES;
+				SWIFT_VERSION = 5.0;
+			};
+			name = Dev;
+		};
 		3AEECC122A6DF9CA006A0E0C /* Release */ = {
 			isa = XCBuildConfiguration;
 			buildSettings = {
@@ -3129,6 +3793,45 @@
 			};
 			name = Debug;
 		};
+		1622AB153FAD0C860306B571 /* Dev */ = {
+			isa = XCBuildConfiguration;
+			buildSettings = {
+				CLANG_ENABLE_MODULES = YES;
+				CODE_SIGN_IDENTITY = "Apple Development";
+				CODE_SIGN_STYLE = Manual;
+				COMBINE_HIDPI_IMAGES = YES;
+				CURRENT_PROJECT_VERSION = 1;
+				DEFINES_MODULE = YES;
+				DEVELOPMENT_TEAM = "";
+				DYLIB_COMPATIBILITY_VERSION = 1;
+				DYLIB_CURRENT_VERSION = 1;
+				DYLIB_INSTALL_NAME_BASE = "@rpath";
+				GCC_C_LANGUAGE_STANDARD = gnu11;
+				GENERATE_INFOPLIST_FILE = YES;
+				INFOPLIST_KEY_NSHumanReadableCopyright = "";
+				INSTALL_PATH = "$(LOCAL_LIBRARY_DIR)/Frameworks";
+				LD_RUNPATH_SEARCH_PATHS = (
+					"$(inherited)",
+					"@executable_path/../Frameworks",
+					"@loader_path/Frameworks",
+				);
+				MACH_O_TYPE = staticlib;
+				MACOSX_DEPLOYMENT_TARGET = 13.0;
+				MARKETING_VERSION = 1.0;
+				MODULE_VERIFIER_SUPPORTED_LANGUAGES = "objective-c objective-c++";
+				MODULE_VERIFIER_SUPPORTED_LANGUAGE_STANDARDS = "gnu11 gnu++20";
+				PRODUCT_BUNDLE_IDENTIFIER = "$(BASE_PACKAGE_IDENTIFIER).macapp";
+				PRODUCT_NAME = "$(TARGET_NAME:c99extidentifier)";
+				PROVISIONING_PROFILE_SPECIFIER = "";
+				SDKROOT = macosx;
+				SKIP_INSTALL = YES;
+				SWIFT_ACTIVE_COMPILATION_CONDITIONS = "DEBUG SFI_DEV $(inherited)";
+				SWIFT_EMIT_LOC_STRINGS = YES;
+				SWIFT_OPTIMIZATION_LEVEL = "-Onone";
+				SWIFT_VERSION = 5.0;
+			};
+			name = Dev;
+		};
 		3AEECC392A6DFDAD006A0E0C /* Release */ = {
 			isa = XCBuildConfiguration;
 			buildSettings = {
@@ -3174,6 +3877,7 @@
 			isa = XCConfigurationList;
 			buildConfigurations = (
 				3A096F912A4ED3DE00D4A2ED /* Debug */,
+				B4A57D3EB3CDE8EE81D31F4F /* Dev */,
 				3A096F922A4ED3DE00D4A2ED /* Release */,
 			);
 			defaultConfigurationIsVisible = 0;
@@ -3183,6 +3887,7 @@
 			isa = XCConfigurationList;
 			buildConfigurations = (
 				3A4EAD192A4FEAE6005435B3 /* Debug */,
+				0FF8C8E9AFA05A007D50905D /* Dev */,
 				3A4EAD1A2A4FEAE6005435B3 /* Release */,
 			);
 			defaultConfigurationIsVisible = 0;
@@ -3192,6 +3897,7 @@
 			isa = XCConfigurationList;
 			buildConfigurations = (
 				3A63137B2F0CEF3D0060A550 /* Debug */,
+				87643D4FC1067F646391D052 /* Dev */,
 				3A63137C2F0CEF3D0060A550 /* Release */,
 			);
 			defaultConfigurationIsVisible = 0;
@@ -3201,6 +3907,7 @@
 			isa = XCConfigurationList;
 			buildConfigurations = (
 				3A63139D2F0CEF740060A550 /* Debug */,
+				3F28B94CE6FD3AB9A64FB403 /* Dev */,
 				3A63139E2F0CEF740060A550 /* Release */,
 			);
 			defaultConfigurationIsVisible = 0;
@@ -3210,6 +3917,7 @@
 			isa = XCConfigurationList;
 			buildConfigurations = (
 				3A6313B02F0CEFDD0060A550 /* Debug */,
+				F5E628E0435388B7B3DDFFB6 /* Dev */,
 				3A6313B12F0CEFDD0060A550 /* Release */,
 			);
 			defaultConfigurationIsVisible = 0;
@@ -3219,6 +3927,7 @@
 			isa = XCConfigurationList;
 			buildConfigurations = (
 				3A7701782A4E6B34008F031F /* Debug */,
+				9DBF08945833D89481CD2DF0 /* Dev */,
 				3A7701792A4E6B34008F031F /* Release */,
 			);
 			defaultConfigurationIsVisible = 0;
@@ -3228,6 +3937,7 @@
 			isa = XCConfigurationList;
 			buildConfigurations = (
 				3AAAFB2F2EF5218F004C69AD /* Debug */,
+				418AB023572A47506A73E25C /* Dev */,
 				3AAAFB302EF5218F004C69AD /* Release */,
 			);
 			defaultConfigurationIsVisible = 0;
@@ -3237,6 +3947,7 @@
 			isa = XCConfigurationList;
 			buildConfigurations = (
 				3AC03BA12A72BF3500B7946F /* Debug */,
+				BD9DBCF36BAE0100DA691A1E /* Dev */,
 				3AC03BA22A72BF3500B7946F /* Release */,
 			);
 			defaultConfigurationIsVisible = 0;
@@ -3246,6 +3957,7 @@
 			isa = XCConfigurationList;
 			buildConfigurations = (
 				3AE171A12A8128DD00393060 /* Debug */,
+				CA7E0A08F84945ED8B3D92E7 /* Dev */,
 				3AE171A22A8128DD00393060 /* Release */,
 			);
 			defaultConfigurationIsVisible = 0;
@@ -3255,6 +3967,7 @@
 			isa = XCConfigurationList;
 			buildConfigurations = (
 				3AE396052C21A5CC00647718 /* Debug */,
+				7ED817C8175BFC9137602932 /* Dev */,
 				3AE396062C21A5CC00647718 /* Release */,
 			);
 			defaultConfigurationIsVisible = 0;
@@ -3264,6 +3977,7 @@
 			isa = XCConfigurationList;
 			buildConfigurations = (
 				3AE595762F08C34000C13426 /* Debug */,
+				9D9D0E1764266CEDCC80AD6E /* Dev */,
 				3AE595772F08C34000C13426 /* Release */,
 			);
 			defaultConfigurationIsVisible = 0;
@@ -3273,6 +3987,7 @@
 			isa = XCConfigurationList;
 			buildConfigurations = (
 				3AEC20CB2A45991900A63465 /* Debug */,
+				BF71A8B911061B0D2FAE3572 /* Dev */,
 				3AEC20CC2A45991900A63465 /* Release */,
 			);
 			defaultConfigurationIsVisible = 0;
@@ -3282,6 +3997,7 @@
 			isa = XCConfigurationList;
 			buildConfigurations = (
 				3AEC20FF2A459AB500A63465 /* Debug */,
+				E8F4F2CC2FEEB1EC798A5F3E /* Dev */,
 				3AEC21002A459AB500A63465 /* Release */,
 			);
 			defaultConfigurationIsVisible = 0;
@@ -3291,6 +4007,7 @@
 			isa = XCConfigurationList;
 			buildConfigurations = (
 				3AEC21162A459B1A00A63465 /* Debug */,
+				2B9BBCE6A02262F65F162A28 /* Dev */,
 				3AEC21172A459B1A00A63465 /* Release */,
 			);
 			defaultConfigurationIsVisible = 0;
@@ -3300,6 +4017,7 @@
 			isa = XCConfigurationList;
 			buildConfigurations = (
 				3AEC21262A459B4700A63465 /* Debug */,
+				66D6897E2E7100694663B188 /* Dev */,
 				3AEC21272A459B4700A63465 /* Release */,
 			);
 			defaultConfigurationIsVisible = 0;
@@ -3309,6 +4027,7 @@
 			isa = XCConfigurationList;
 			buildConfigurations = (
 				3AEECBFD2A6DF40A006A0E0C /* Debug */,
+				4FC574ADADAE497CA018390F /* Dev */,
 				3AEECBFE2A6DF40A006A0E0C /* Release */,
 			);
 			defaultConfigurationIsVisible = 0;
@@ -3318,6 +4037,7 @@
 			isa = XCConfigurationList;
 			buildConfigurations = (
 				3AEECC112A6DF9CA006A0E0C /* Debug */,
+				F8EB4DEFA5E8657062D9A1CE /* Dev */,
 				3AEECC122A6DF9CA006A0E0C /* Release */,
 			);
 			defaultConfigurationIsVisible = 0;
@@ -3327,6 +4047,7 @@
 			isa = XCConfigurationList;
 			buildConfigurations = (
 				3AEECC382A6DFDAD006A0E0C /* Debug */,
+				1622AB153FAD0C860306B571 /* Dev */,
 				3AEECC392A6DFDAD006A0E0C /* Release */,
 			);
 			defaultConfigurationIsVisible = 0;

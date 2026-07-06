@@ -9,7 +9,17 @@ fi
 
 version="$1"
 client_root="$(pwd)"
-destination="${2:-Libbox.xcframework}"
+variant="${LIBBOX_VARIANT:-ordinary}"
+case "$variant" in
+	ordinary|dev)
+		;;
+	*)
+		echo "LIBBOX_VARIANT must be ordinary or dev, got: $variant" >&2
+		exit 1
+		;;
+esac
+default_destination="build/libbox/$variant/Libbox.xcframework"
+destination="${2:-$default_destination}"
 if [[ "$destination" != /* ]]; then
 	destination="$client_root/$destination"
 fi
@@ -98,6 +108,10 @@ if [[ "${#extra_tag_list[@]}" -gt 0 ]]; then
 	export SING_BOX_EXTRA_TAGS="$extra_tags"
 	echo "using extra sing-box build tags: $SING_BOX_EXTRA_TAGS"
 fi
+if [[ "$variant" == "ordinary" && ",${SING_BOX_EXTRA_TAGS:-}," == *",with_wlt,"* ]]; then
+	echo "ordinary libbox builds must be WLT-free; refusing with_wlt tag" >&2
+	exit 1
+fi
 
 if [[ "${LIBBOX_SKIP_TOOL_INSTALL:-0}" != "1" ]]; then
 	make lib_install
@@ -117,4 +131,8 @@ if [[ "$source_xcframework" != "$destination" ]]; then
 	rm -rf "$destination"
 	mkdir -p "$(dirname "$destination")"
 	mv "$source_xcframework" "$destination"
+fi
+if [[ "${LIBBOX_ACTIVATE:-1}" == "1" ]]; then
+	rm -rf "$client_root/Libbox.xcframework"
+	cp -R "$destination" "$client_root/Libbox.xcframework"
 fi
