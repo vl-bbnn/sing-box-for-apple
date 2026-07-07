@@ -54,6 +54,28 @@ class AppStoreConnectClient
     end
   end
 
+  def create_certificate(certificate_type:, csr_path:, certificate_output_path:)
+    response = request(
+      :post,
+      "/v1/certificates",
+      body: {
+        data: {
+          type: "certificates",
+          attributes: {
+            certificateType: certificate_type,
+            csrContent: File.read(csr_path)
+          }
+        }
+      },
+      allowed_statuses: [201]
+    )
+    certificate_content = response.dig("data", "attributes", "certificateContent")
+    raise "App Store Connect did not return certificateContent" if certificate_content.nil? || certificate_content.empty?
+
+    File.binwrite(certificate_output_path, Base64.decode64(certificate_content))
+    warn "Wrote #{certificate_type} certificate to #{certificate_output_path}"
+  end
+
   private
 
   def token(mode = @token_mode)
@@ -322,6 +344,8 @@ parser = OptionParser.new do |opts|
   opts.on("--version VALUE") { |value| options[:version] = value }
   opts.on("--beta-group-id VALUE") { |value| options[:beta_group_id] = value }
   opts.on("--certificate-type VALUE") { |value| options[:certificate_types] << value }
+  opts.on("--csr-path VALUE") { |value| options[:csr_path] = value }
+  opts.on("--certificate-output-path VALUE") { |value| options[:certificate_output_path] = value }
   opts.on("--keep-newest VALUE", Integer) { |value| options[:keep_newest] = value }
   opts.on("--whats-new VALUE") { |value| options[:whats_new] = value }
   opts.on("--locale VALUE") { |value| options[:locale] = value }
@@ -359,6 +383,16 @@ when "prune-development-certificates"
   client.prune_development_certificates(
     certificate_types: options[:certificate_types],
     keep_newest: options[:keep_newest]
+  )
+when "create-certificate"
+  raise "missing certificate type" if options[:certificate_types].length != 1
+  raise "missing csr path" if options[:csr_path].nil? || options[:csr_path].empty?
+  raise "missing certificate output path" if options[:certificate_output_path].nil? || options[:certificate_output_path].empty?
+
+  client.create_certificate(
+    certificate_type: options[:certificate_types].first,
+    csr_path: options[:csr_path],
+    certificate_output_path: options[:certificate_output_path]
   )
 else
   raise "unknown command: #{command}"
