@@ -43,10 +43,10 @@
 			<key>CFBundleURLIconFile</key>
 			<string>AppIcon.icns</string>
 			<key>CFBundleURLName</key>
-			<string>sing-box</string>
+			<string>$(OVERLAY_URL_SCHEME)</string>
 			<key>CFBundleURLSchemes</key>
 			<array>
-				<string>sing-box</string>
+				<string>$(OVERLAY_URL_SCHEME)</string>
 			</array>
 		</dict>
 	</array>

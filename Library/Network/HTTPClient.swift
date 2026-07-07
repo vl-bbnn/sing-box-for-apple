@@ -3,11 +3,13 @@ import Libbox
 
 public class HTTPClient {
     private static var userAgent: String {
-        var userAgent = Variant.applicationName
+        var userAgent = AppConfiguration.applicationName
         userAgent += "/"
         userAgent += Bundle.main.version
         userAgent += " (Build "
         userAgent += Bundle.main.versionNumber
+        userAgent += "; platform "
+        userAgent += Variant.applicationName
         userAgent += "; sing-box "
         userAgent += LibboxVersion()
         userAgent += "; language "
@@ -29,6 +31,8 @@ public class HTTPClient {
         #endif
         let request = client.newRequest()!
         request.setUserAgent(HTTPClient.userAgent)
+        request.setHeader("X-Device-Type", value: "mobile")
+        request.setHeader("X-Client-Application", value: AppConfiguration.applicationName)
         try request.setURL(url)
         let response = try request.execute()
         let content = try response.getContent()
@@ -51,6 +55,8 @@ public class HTTPClient {
         #endif
         let request = client.newRequest()!
         request.setUserAgent(HTTPClient.userAgent)
+        request.setHeader("X-Device-Type", value: "mobile")
+        request.setHeader("X-Client-Application", value: AppConfiguration.applicationName)
         try request.setURL(url)
         let response = try request.execute()
         if let progress {
