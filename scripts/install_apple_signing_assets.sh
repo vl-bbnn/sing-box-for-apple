@@ -110,7 +110,7 @@ if [[ "${APPLE_REQUIRE_DEVELOPMENT_CERTIFICATE:-0}" == "1" ]] && ! has_developme
 	exit 1
 fi
 
-if ! has_distribution_identity "$IDENTITIES_OUTPUT"; then
+if [[ "${APPLE_REQUIRE_DISTRIBUTION_CERTIFICATE:-1}" == "1" ]] && ! has_distribution_identity "$IDENTITIES_OUTPUT"; then
 	echo "No Apple Distribution code signing identity is available" >&2
 	exit 1
 fi
