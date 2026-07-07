@@ -157,6 +157,9 @@ jobs:
       ASC_KEY_ID: ${{ secrets.ASC_KEY_ID }}
       ASC_KEY_ISSUER_ID: ${{ secrets.ASC_KEY_ISSUER_ID }}
       ASC_KEY_P8: ${{ secrets.ASC_KEY_P8 }}
+      BUILD_CERTIFICATE_BASE64: ${{ secrets.BUILD_CERTIFICATE_BASE64 }}
+      P12_PASSWORD: ${{ secrets.P12_PASSWORD }}
+      KEYCHAIN_PASSWORD: ${{ secrets.KEYCHAIN_PASSWORD }}
     steps:
       - name: Checkout repository
         uses: actions/checkout@v5
@@ -245,6 +248,9 @@ jobs:
           test -n "$ASC_KEY_ID"
           test -n "$ASC_KEY_ISSUER_ID"
           test -n "$ASC_KEY_P8"
+
+      - name: Install signing assets
+        run: ./scripts/install_apple_signing_assets.sh
 
       - name: Prepare release branch
         run: |
