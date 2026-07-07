@@ -29,7 +29,45 @@ has_distribution_identity() {
 	grep -Eq '"(Apple|iPhone) Distribution:' <<< "$1"
 }
 
-if [[ -n "${BUILD_CERTIFICATE_BASE64:-}" ]]; then
+has_development_identity() {
+	grep -Eq '"(Apple Development|iPhone Developer):' <<< "$1"
+}
+
+create_signing_certificate() {
+	local certificate_type="$1"
+	local file_label="$2"
+	local common_name="$3"
+
+	if [[ -z "${ASC_KEY_ID:-}" || -z "${ASC_KEY_ISSUER_ID:-}" || -z "${ASC_KEY_PATH:-}" ]]; then
+		echo "App Store Connect credentials are required to create $certificate_type" >&2
+		exit 1
+	fi
+
+	ensure_keychain
+	local private_key_path="$RUNNER_TEMP/${file_label}.key"
+	local csr_path="$RUNNER_TEMP/${file_label}.certSigningRequest"
+	local certificate_der_path="$RUNNER_TEMP/${file_label}.cer"
+	local certificate_pem_path="$RUNNER_TEMP/${file_label}.pem"
+	local certificate_p12_path="$RUNNER_TEMP/${file_label}.p12"
+
+	echo "Creating temporary $certificate_type certificate via App Store Connect API"
+	openssl genrsa -out "$private_key_path" 2048 >/dev/null 2>&1
+	openssl req -new -key "$private_key_path" -out "$csr_path" -subj "/CN=$common_name/O=CI/C=US"
+	ruby scripts/app_store_connect.rb create-certificate \
+		--certificate-type "$certificate_type" \
+		--csr-path "$csr_path" \
+		--certificate-output-path "$certificate_der_path"
+	openssl x509 -inform DER -in "$certificate_der_path" -out "$certificate_pem_path"
+	openssl pkcs12 -export \
+		-inkey "$private_key_path" \
+		-in "$certificate_pem_path" \
+		-out "$certificate_p12_path" \
+		-password "pass:$KEYCHAIN_PASSWORD"
+	security import "$certificate_p12_path" -P "$KEYCHAIN_PASSWORD" -A -t cert -f pkcs12 -k "$KEYCHAIN_PATH"
+	security set-key-partition-list -S apple-tool:,apple: -k "$KEYCHAIN_PASSWORD" "$KEYCHAIN_PATH"
+}
+
+if [[ -n "${BUILD_CERTIFICATE_BASE64:-}" && "${APPLE_IGNORE_BUILD_CERTIFICATE:-0}" != "1" ]]; then
 	if [[ -z "${P12_PASSWORD:-}" || -z "${KEYCHAIN_PASSWORD:-}" ]]; then
 		echo "P12_PASSWORD and KEYCHAIN_PASSWORD are required when BUILD_CERTIFICATE_BASE64 is set" >&2
 		exit 1
@@ -49,41 +87,27 @@ if [[ -n "${BUILD_CERTIFICATE_BASE64:-}" ]]; then
 		exit 1
 	fi
 else
-	echo "BUILD_CERTIFICATE_BASE64 is not set, relying on Xcode automatic/cloud signing"
+	echo "BUILD_CERTIFICATE_BASE64 is not set or is ignored for this job"
+fi
+
+IDENTITIES_OUTPUT="$(codesigning_identities)"
+if ! has_development_identity "$IDENTITIES_OUTPUT" && [[ "${APPLE_CREATE_DEVELOPMENT_CERTIFICATE:-0}" == "1" ]]; then
+	create_signing_certificate DEVELOPMENT apple_development "Apple Development CI"
+	IDENTITIES_OUTPUT="$(codesigning_identities)"
+	printf '%s\n' "$IDENTITIES_OUTPUT"
 fi
 
 IDENTITIES_OUTPUT="$(codesigning_identities)"
 if ! has_distribution_identity "$IDENTITIES_OUTPUT" && [[ "${APPLE_CREATE_DISTRIBUTION_CERTIFICATE:-1}" == "1" ]]; then
-	if [[ -z "${ASC_KEY_ID:-}" || -z "${ASC_KEY_ISSUER_ID:-}" || -z "${ASC_KEY_PATH:-}" ]]; then
-		echo "No Apple Distribution identity is installed and App Store Connect credentials are unavailable" >&2
-		exit 1
-	fi
-
-	ensure_keychain
 	DISTRIBUTION_CERTIFICATE_TYPE="${APPLE_DISTRIBUTION_CERTIFICATE_TYPE:-IOS_DISTRIBUTION}"
-	PRIVATE_KEY_PATH="$RUNNER_TEMP/apple_distribution.key"
-	CSR_PATH="$RUNNER_TEMP/apple_distribution.certSigningRequest"
-	CERTIFICATE_DER_PATH="$RUNNER_TEMP/apple_distribution.cer"
-	CERTIFICATE_PEM_PATH="$RUNNER_TEMP/apple_distribution.pem"
-	CERTIFICATE_P12_PATH="$RUNNER_TEMP/apple_distribution.p12"
-
-	echo "Creating temporary $DISTRIBUTION_CERTIFICATE_TYPE certificate via App Store Connect API"
-	openssl genrsa -out "$PRIVATE_KEY_PATH" 2048 >/dev/null 2>&1
-	openssl req -new -key "$PRIVATE_KEY_PATH" -out "$CSR_PATH" -subj "/CN=Apple Distribution CI/O=CI/C=US"
-	ruby scripts/app_store_connect.rb create-certificate \
-		--certificate-type "$DISTRIBUTION_CERTIFICATE_TYPE" \
-		--csr-path "$CSR_PATH" \
-		--certificate-output-path "$CERTIFICATE_DER_PATH"
-	openssl x509 -inform DER -in "$CERTIFICATE_DER_PATH" -out "$CERTIFICATE_PEM_PATH"
-	openssl pkcs12 -export \
-		-inkey "$PRIVATE_KEY_PATH" \
-		-in "$CERTIFICATE_PEM_PATH" \
-		-out "$CERTIFICATE_P12_PATH" \
-		-password "pass:$KEYCHAIN_PASSWORD"
-	security import "$CERTIFICATE_P12_PATH" -P "$KEYCHAIN_PASSWORD" -A -t cert -f pkcs12 -k "$KEYCHAIN_PATH"
-	security set-key-partition-list -S apple-tool:,apple: -k "$KEYCHAIN_PASSWORD" "$KEYCHAIN_PATH"
+	create_signing_certificate "$DISTRIBUTION_CERTIFICATE_TYPE" apple_distribution "Apple Distribution CI"
 	IDENTITIES_OUTPUT="$(codesigning_identities)"
 	printf '%s\n' "$IDENTITIES_OUTPUT"
+fi
+
+if [[ "${APPLE_REQUIRE_DEVELOPMENT_CERTIFICATE:-0}" == "1" ]] && ! has_development_identity "$IDENTITIES_OUTPUT"; then
+	echo "No Apple Development code signing identity is available" >&2
+	exit 1
 fi
 
 if ! has_distribution_identity "$IDENTITIES_OUTPUT"; then

@@ -202,6 +202,9 @@ jobs:
       BUILD_CERTIFICATE_BASE64: ${{ secrets.BUILD_CERTIFICATE_BASE64 }}
       P12_PASSWORD: ${{ secrets.P12_PASSWORD }}
       KEYCHAIN_PASSWORD: ${{ secrets.KEYCHAIN_PASSWORD }}
+      APPLE_IGNORE_BUILD_CERTIFICATE: "1"
+      APPLE_CREATE_DEVELOPMENT_CERTIFICATE: "1"
+      APPLE_REQUIRE_DEVELOPMENT_CERTIFICATE: "1"
     steps:
       - name: Checkout repository
         uses: actions/checkout@v5
