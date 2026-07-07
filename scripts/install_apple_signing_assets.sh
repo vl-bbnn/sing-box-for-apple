@@ -25,6 +25,10 @@ codesigning_identities() {
 	security find-identity -v -p codesigning "$KEYCHAIN_PATH" || true
 }
 
+has_distribution_identity() {
+	grep -Eq '"(Apple|iPhone) Distribution:' <<< "$1"
+}
+
 if [[ -n "${BUILD_CERTIFICATE_BASE64:-}" ]]; then
 	if [[ -z "${P12_PASSWORD:-}" || -z "${KEYCHAIN_PASSWORD:-}" ]]; then
 		echo "P12_PASSWORD and KEYCHAIN_PASSWORD are required when BUILD_CERTIFICATE_BASE64 is set" >&2
@@ -49,7 +53,7 @@ else
 fi
 
 IDENTITIES_OUTPUT="$(codesigning_identities)"
-if [[ "$IDENTITIES_OUTPUT" != *"Apple Distribution:"* && "${APPLE_CREATE_DISTRIBUTION_CERTIFICATE:-1}" == "1" ]]; then
+if ! has_distribution_identity "$IDENTITIES_OUTPUT" && [[ "${APPLE_CREATE_DISTRIBUTION_CERTIFICATE:-1}" == "1" ]]; then
 	if [[ -z "${ASC_KEY_ID:-}" || -z "${ASC_KEY_ISSUER_ID:-}" || -z "${ASC_KEY_PATH:-}" ]]; then
 		echo "No Apple Distribution identity is installed and App Store Connect credentials are unavailable" >&2
 		exit 1
@@ -82,7 +86,7 @@ if [[ "$IDENTITIES_OUTPUT" != *"Apple Distribution:"* && "${APPLE_CREATE_DISTRIB
 	printf '%s\n' "$IDENTITIES_OUTPUT"
 fi
 
-if [[ "$IDENTITIES_OUTPUT" != *"Apple Distribution:"* ]]; then
+if ! has_distribution_identity "$IDENTITIES_OUTPUT"; then
 	echo "No Apple Distribution code signing identity is available" >&2
 	exit 1
 fi
