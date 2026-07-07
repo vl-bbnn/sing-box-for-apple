@@ -143,8 +143,9 @@ fi
 printf '%s\n' "$variant" > "$destination/.libbox-variant"
 printf '%s\n' "$libbox_version" > "$destination/.libbox-version"
 git rev-parse HEAD > "$destination/.libbox-source-ref"
-active_xcframework="$client_root/Libbox.xcframework"
+active_xcframework="$client_root/$default_destination"
 if [[ "${LIBBOX_ACTIVATE:-1}" == "1" && "$destination" != "$active_xcframework" ]]; then
 	rm -rf "$active_xcframework"
+	mkdir -p "$(dirname "$active_xcframework")"
 	cp -R "$destination" "$active_xcframework"
 fi
