@@ -48,7 +48,7 @@ else
 	git fetch --tags --force >/dev/null 2>&1
 
 	if [[ -n "$repo_ref" ]]; then
-		git fetch origin "$repo_ref" --depth=1 >/dev/null 2>&1
+		git fetch origin "$repo_ref" >/dev/null 2>&1
 		git checkout -q FETCH_HEAD
 		echo "using sing-box source $repo_url@$repo_ref ($(git rev-parse --short HEAD))"
 	else
