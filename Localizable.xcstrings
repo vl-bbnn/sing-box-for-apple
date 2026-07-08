@@ -1119,6 +1119,9 @@
         }
       }
     },
+    "Bundled wlt-client" : {
+
+    },
     "By default, segment routing is used in `auto_route` instead of global routing.\nIf `<route_address/route_exclude_address>` exists in the configuration, this item will not take effect on the corresponding network (commonly used to resolve HomeKit compatibility issues).\nOn macOS, enabling this option will cause Internet Sharing to not work properly." : {
       "localizations" : {
         "fa" : {
@@ -1482,6 +1485,12 @@
           }
         }
       }
+    },
+    "Choose executable" : {
+
+    },
+    "Choose file" : {
+
     },
     "Clash Mode" : {
       "localizations" : {
@@ -8506,6 +8515,9 @@
         }
       }
     },
+    "Unknown" : {
+
+    },
     "Unsaved Changes" : {
       "localizations" : {
         "fa" : {
@@ -8835,6 +8847,12 @@
         }
       }
     },
+    "VP8 Batch: %lld" : {
+
+    },
+    "VP8 FPS: %lld" : {
+
+    },
     "VPN will not connect automatically." : {
       "localizations" : {
         "fa" : {
@@ -8918,6 +8936,9 @@
           }
         }
       }
+    },
+    "Whitelist Transport" : {
+
     },
     "Wi-Fi" : {
       "localizations" : {

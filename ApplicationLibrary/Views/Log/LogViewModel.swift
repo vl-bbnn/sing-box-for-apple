@@ -25,8 +25,6 @@ public class LogDataModel: ObservableObject {
     private var lastSearchText = ""
     private var cancellables = Set<AnyCancellable>()
 
-    private static let maxVisibleLogs = 1000
-
     public var isEmpty: Bool {
         commandClient.logList.isEmpty
     }
@@ -36,11 +34,7 @@ public class LogDataModel: ObservableObject {
     }
 
     private func updateVisibleLogs() {
-        if filteredLogs.count <= Self.maxVisibleLogs {
-            visibleLogs = filteredLogs
-        } else {
-            visibleLogs = Array(filteredLogs.suffix(Self.maxVisibleLogs))
-        }
+        visibleLogs = filteredLogs
     }
 
     public init(commandClient: CommandClient, viewModel: LogViewModel) {
@@ -119,13 +113,22 @@ public class LogDataModel: ObservableObject {
         filteredLogs = []
         visibleLogs = []
         commandClient.clearLogs()
+        PacketTunnelDiagnostics.clear()
         Task.detached {
             try? LibboxNewStandaloneCommandClient()!.clearLogs()
         }
     }
 
     public func getLogsText() -> String {
-        filteredLogs.map { ANSIColors.stripAnsiCodes($0.message) }.joined(separator: "\n")
+        var sections = [
+            filteredLogs.map { ANSIColors.stripAnsiCodes($0.message) }.joined(separator: "\n"),
+        ]
+        let diagnostics = PacketTunnelDiagnostics.readText()
+            .trimmingCharacters(in: .whitespacesAndNewlines)
+        if !diagnostics.isEmpty {
+            sections.append("=== packet-tunnel diagnostics ===\n\(diagnostics)")
+        }
+        return sections.filter { !$0.isEmpty }.joined(separator: "\n\n")
     }
 
     #if !os(tvOS)

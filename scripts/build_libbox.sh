@@ -27,8 +27,13 @@ workspace_root="${RUNNER_TEMP:-$(pwd)/build}"
 build_root="$workspace_root/libbox-build"
 repo_dir="${SING_BOX_REPO:-}"
 repo_url="${SING_BOX_REPO_URL:-https://github.com/SagerNet/sing-box.git}"
-repo_ref="${SING_BOX_REPO_REF:-stable}"
-platforms="${LIBBOX_APPLE_PLATFORMS:-ios,macos}"
+repo_ref="${SING_BOX_REPO_REF:-stage}"
+if [[ "$variant" == "dev" ]]; then
+	platforms="${LIBBOX_APPLE_PLATFORMS:-ios,iossimulator,macos}"
+else
+	platforms="${LIBBOX_APPLE_PLATFORMS:-ios,macos}"
+fi
+carrier_module="${WLT_CARRIER_MODULE:-github.com/vl-bbnn/wlt-carrier}"
 
 rm -rf "$destination"
 mkdir -p "$build_root"
@@ -106,6 +111,9 @@ if [[ "${SING_BOX_LX:-}" == "1" ]]; then
 fi
 split_tags "${SING_BOX_BUILD_TAGS:-}"
 split_tags "${SING_BOX_EXTRA_TAGS:-}"
+if [[ "$variant" == "dev" ]]; then
+	split_tags "with_wlt"
+fi
 
 if [[ "${#extra_tag_list[@]}" -gt 0 ]]; then
 	extra_tags="$(
@@ -115,6 +123,12 @@ if [[ "${#extra_tag_list[@]}" -gt 0 ]]; then
 	)"
 	export SING_BOX_EXTRA_TAGS="$extra_tags"
 	echo "using extra sing-box build tags: $SING_BOX_EXTRA_TAGS"
+	if [[ ",$extra_tags," == *",with_wlt,"* ]]; then
+		case ",${GOPRIVATE:-}," in
+			*,"$carrier_module",*) ;;
+			*) export GOPRIVATE="${GOPRIVATE:+$GOPRIVATE,}$carrier_module" ;;
+		esac
+	fi
 fi
 if [[ "$variant" == "ordinary" && ",${SING_BOX_EXTRA_TAGS:-}," == *",with_wlt,"* ]]; then
 	echo "ordinary libbox builds must be WLT-free; refusing with_wlt tag" >&2

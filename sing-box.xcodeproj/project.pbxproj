@@ -2978,6 +2978,7 @@
 			buildSettings = {
 				ALWAYS_SEARCH_USER_PATHS = NO;
 				APP_GROUP_IDENTIFIER = "group.$(BASE_PACKAGE_IDENTIFIER)";
+				EXCLUDED_SOURCE_FILE_NAMES = "WhitelistTransportConfig.swift WhitelistTransportManager.swift";
 				LIBBOX_XCFRAMEWORK_PATH = "build/libbox/ordinary/Libbox.xcframework";
 				ASSETCATALOG_COMPILER_GENERATE_SWIFT_ASSET_SYMBOL_EXTENSIONS = YES;
 				SFI_APP_ICON_NAME = OverlayAppIcon;
@@ -3065,7 +3066,7 @@
 				LIBBOX_XCFRAMEWORK_PATH = "build/libbox/dev/Libbox.xcframework";
 				ASSETCATALOG_COMPILER_GENERATE_SWIFT_ASSET_SYMBOL_EXTENSIONS = YES;
 				SFI_APP_ICON_NAME = OverlayDevAppIcon;
-				SFI_REQUIRE_WLT_LIBBOX = NO;
+				SFI_REQUIRE_WLT_LIBBOX = YES;
 				OVERLAY_URL_SCHEME = "$(OVERLAY_DEV_URL_SCHEME)";
 				BASE_PACKAGE_IDENTIFIER = "$(OVERLAY_BASE_PACKAGE_IDENTIFIER).dev";
 				INFOPLIST_KEY_OverlayApplicationLink = "$(OVERLAY_APPLICATION_LINK)";
@@ -3147,6 +3148,7 @@
 			buildSettings = {
 				ALWAYS_SEARCH_USER_PATHS = NO;
 				APP_GROUP_IDENTIFIER = "group.$(BASE_PACKAGE_IDENTIFIER)";
+				EXCLUDED_SOURCE_FILE_NAMES = "WhitelistTransportConfig.swift WhitelistTransportManager.swift";
 				LIBBOX_XCFRAMEWORK_PATH = "build/libbox/ordinary/Libbox.xcframework";
 				ASSETCATALOG_COMPILER_GENERATE_SWIFT_ASSET_SYMBOL_EXTENSIONS = YES;
 				SFI_APP_ICON_NAME = OverlayAppIcon;
