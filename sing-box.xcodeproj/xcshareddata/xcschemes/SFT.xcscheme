@@ -16,7 +16,7 @@
             <BuildableReference
                BuildableIdentifier = "primary"
                BlueprintIdentifier = "3AC03B952A72BF3300B7946F"
-               BuildableName = "sing-box.app"
+               BuildableName = "2b2n-vpn.app"
                BlueprintName = "SFT"
                ReferencedContainer = "container:sing-box.xcodeproj">
             </BuildableReference>
@@ -58,7 +58,7 @@
          <BuildableReference
             BuildableIdentifier = "primary"
             BlueprintIdentifier = "3AC03B952A72BF3300B7946F"
-            BuildableName = "sing-box.app"
+            BuildableName = "2b2n-vpn.app"
             BlueprintName = "SFT"
             ReferencedContainer = "container:sing-box.xcodeproj">
          </BuildableReference>
@@ -75,7 +75,7 @@
          <BuildableReference
             BuildableIdentifier = "primary"
             BlueprintIdentifier = "3AC03B952A72BF3300B7946F"
-            BuildableName = "sing-box.app"
+            BuildableName = "2b2n-vpn.app"
             BlueprintName = "SFT"
             ReferencedContainer = "container:sing-box.xcodeproj">
          </BuildableReference>
