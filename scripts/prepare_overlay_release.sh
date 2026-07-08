@@ -172,7 +172,8 @@ release_overlay_version="$(
 )"
 
 manual_checked_out_release=false
-if [[ "${GITHUB_EVENT_NAME:-}" == "workflow_dispatch" && "$force" == true && "$release_overlay_ref" == "$checked_out_sha" ]]; then
+release_overlay_sha="$(git rev-parse "$release_overlay_ref")"
+if [[ "${GITHUB_EVENT_NAME:-}" == "workflow_dispatch" && "$force" == true && "$release_overlay_sha" == "$checked_out_sha" ]]; then
 	if version_lte "$release_overlay_version" "$version_ceiling"; then
 		manual_checked_out_release=true
 	fi
