@@ -18,6 +18,7 @@ done
 
 origin_remote="${ORIGIN_REMOTE:-origin}"
 upstream_remote="${UPSTREAM_REMOTE:-upstream}"
+release_ref_name="${OVERLAY_RELEASE_BRANCH:-stable}"
 project_file="sing-box.xcodeproj/project.pbxproj"
 version_ceiling="$(tr -d '[:space:]' < Config/Overlay.version-ceiling)"
 application_name="${OVERLAY_APPLICATION_NAME:-$(./scripts/overlay_setting.sh OVERLAY_APPLICATION_NAME)}"
@@ -133,7 +134,7 @@ PY
 	git cherry-pick --continue >/dev/null
 }
 
-git fetch "$origin_remote" main overlay --prune
+git fetch "$origin_remote" main "$release_ref_name" --prune
 git fetch "$upstream_remote" main --prune
 if ! git config user.name >/dev/null; then
 	git config user.name "${GIT_AUTHOR_NAME:-github-actions[bot]}"
@@ -143,17 +144,17 @@ if ! git config user.email >/dev/null; then
 fi
 
 current_main_sha="$(git rev-parse "$origin_remote/main")"
-current_overlay_sha="$(git rev-parse "$origin_remote/overlay")"
+current_overlay_sha="$(git rev-parse "$origin_remote/$release_ref_name")"
 upstream_sha="$(git rev-parse "$upstream_remote/main")"
 checked_out_sha="$(git rev-parse HEAD)"
-release_overlay_ref="$origin_remote/overlay"
+release_overlay_ref="$origin_remote/$release_ref_name"
 
 if [[ "${GITHUB_EVENT_NAME:-}" == "workflow_dispatch" && "$checked_out_sha" != "$current_overlay_sha" ]]; then
 	if git merge-base --is-ancestor "$origin_remote/main" "$checked_out_sha"; then
 		release_overlay_ref="$checked_out_sha"
 		current_overlay_sha="$checked_out_sha"
 	else
-		echo "workflow_dispatch ref $checked_out_sha is not based on $origin_remote/main; using $origin_remote/overlay" >&2
+		echo "workflow_dispatch ref $checked_out_sha is not based on $origin_remote/main; using $origin_remote/$release_ref_name" >&2
 	fi
 fi
 
@@ -213,7 +214,7 @@ fi
 
 overlay_commit_count="$(git rev-list --count "$origin_remote/main..$release_overlay_ref")"
 if [[ "$overlay_commit_count" == "0" ]]; then
-	echo "expected $release_overlay_ref to contain overlay commits relative to origin/main" >&2
+	echo "expected $release_overlay_ref to contain release commits relative to origin/main" >&2
 	exit 1
 fi
 

@@ -29,6 +29,7 @@ concurrency:
   cancel-in-progress: false
 
 env:
+  OVERLAY_RELEASE_BRANCH: stable
   LIBBOX_APPLE_PLATFORMS: ios,macos
   LIBBOX_APPLE_PLATFORMS_CACHE_KEY: ios-macos
   SING_BOX_REPO_URL: https://github.com/vl-bbnn/sing-box.git
@@ -563,11 +564,12 @@ jobs:
 
       - name: Push synced branches
         run: |
-          git fetch origin main overlay --prune
+          release_branch="${OVERLAY_RELEASE_BRANCH:-stable}"
+          git fetch origin main "$release_branch" --prune
 
           upstream_sha="${{ needs.detect-release.outputs.upstream_sha }}"
           remote_main="$(git rev-parse origin/main)"
-          remote_overlay="$(git rev-parse origin/overlay)"
+          remote_release="$(git rev-parse "origin/$release_branch")"
 
           if [[ "$remote_main" == "$upstream_sha" ]]; then
             echo "origin/main already points to $upstream_sha"
@@ -579,4 +581,4 @@ jobs:
             git push --force-with-lease=refs/heads/main:"$remote_main" origin "$upstream_sha:refs/heads/main"
           fi
 
-          git push --force-with-lease=refs/heads/overlay:"$remote_overlay" origin HEAD:refs/heads/overlay
+          git push --force-with-lease=refs/heads/"$release_branch":"$remote_release" origin HEAD:refs/heads/"$release_branch"
