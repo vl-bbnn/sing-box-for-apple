@@ -481,6 +481,13 @@ jobs:
           path: Libbox.xcframework
           key: ${{ steps.cache-libbox-xcframework.outputs.cache-primary-key }}
 
+      - name: Activate Libbox.xcframework
+        run: |
+          ./scripts/verify_libbox_variant.sh ordinary Libbox.xcframework
+          rm -rf build/libbox/ordinary/Libbox.xcframework
+          mkdir -p build/libbox/ordinary
+          cp -R Libbox.xcframework build/libbox/ordinary/Libbox.xcframework
+
       - name: Archive macOS
         run: make archive_macos
 
