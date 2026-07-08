@@ -18,7 +18,7 @@ SFM_SYSTEM_DISTRIBUTION_UNIVERSAL := build/SFM.System-distribution-universal.xml
 XCODE_AUTH_FLAGS :=
 XCODE_EXTRA_FLAGS :=
 IOS_ARCHIVE_FLAGS := APP_SHORTCUTS_ENABLE_FLEXIBLE_MATCHING=NO
-APP_STORE_ARCHIVE_SIGNING_FLAGS := DEVELOPMENT_TEAM="$(DEVELOPMENT_TEAM)"
+APP_STORE_ARCHIVE_SIGNING_FLAGS := DEVELOPMENT_TEAM="$(DEVELOPMENT_TEAM)" CODE_SIGN_STYLE=Automatic CODE_SIGN_IDENTITY="Apple Distribution"
 XCODE_ERROR_FILTER := grep -nE "error:|warning:|AppIntentsSSUTraining|The following build commands failed" || true
 
 ifneq ($(strip $(ASC_KEY_PATH)$(ASC_KEY_ID)$(ASC_KEY_ISSUER_ID)),)
@@ -106,6 +106,8 @@ $(APP_STORE_UPLOAD_PLIST):
 	cp SFI/Upload.plist $@
 	/usr/libexec/PlistBuddy -c "Delete :teamID" $@ >/dev/null 2>&1 || true
 	/usr/libexec/PlistBuddy -c "Add :teamID string $(DEVELOPMENT_TEAM)" $@
+	/usr/libexec/PlistBuddy -c "Delete :signingStyle" $@ >/dev/null 2>&1 || true
+	/usr/libexec/PlistBuddy -c "Add :signingStyle string automatic" $@
 
 release_tvos: archive_tvos upload_tvos
 
