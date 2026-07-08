@@ -11,23 +11,43 @@ public enum AppConfiguration {
     }
 
     public static var applicationLink: String {
-        overlayValue("OverlayApplicationLink", fallback: "https://sing-box.sagernet.org/")
+        overlayValue("OverlayApplicationLink", fallback: "https://example.com/2b2n-vpn/")
     }
 
     public static var changelogLink: String {
-        overlayValue("OverlayChangelogLink", fallback: "https://sing-box.sagernet.org/changelog/")
+        overlayValue("OverlayChangelogLink", fallback: "https://example.com/2b2n-vpn/changelog/")
     }
 
     public static var configurationLink: String {
-        overlayValue("OverlayConfigurationLink", fallback: "https://sing-box.sagernet.org/configuration/")
+        overlayValue("OverlayConfigurationLink", fallback: "https://example.com/2b2n-vpn/configuration/")
     }
 
     public static var sourceLink: String {
-        overlayValue("OverlaySourceLink", fallback: "https://github.com/SagerNet/sing-box")
+        overlayValue("OverlaySourceLink", fallback: "https://example.com/2b2n-stack/source/")
     }
 
     public static var releasesLink: String {
-        overlayValue("OverlayReleasesLink", fallback: "https://github.com/SagerNet/sing-box/releases")
+        overlayValue("OverlayReleasesLink", fallback: "https://example.com/2b2n-vpn/releases/")
+    }
+
+    public static var singBoxCoreLink: String {
+        overlayValue("OverlaySingBoxCoreLink", fallback: "https://github.com/SagerNet/sing-box")
+    }
+
+    public static var singBoxAppleClientLink: String {
+        overlayValue("OverlaySingBoxAppleClientLink", fallback: "https://github.com/SagerNet/sing-box-for-apple")
+    }
+
+    public static var singBoxLXLink: String {
+        overlayValue("OverlaySingBoxLXLink", fallback: "https://github.com/Leadaxe/sing-box-lx")
+    }
+
+    public static var stackSourceLink: String {
+        overlayValue("OverlayStackSourceLink", fallback: "https://github.com/vl-bbnn/2b2n-stack")
+    }
+
+    public static var showsAppStoreReview: Bool {
+        !["2b2n-vpn", "dev-vpn"].contains(applicationName)
     }
 
     public static let iCloudDirectoryName = "sing-box"

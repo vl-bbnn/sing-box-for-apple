@@ -56,6 +56,12 @@
 		3AEECC452A6DFE61006A0E0C /* ApplicationLibrary.framework in Frameworks */ = {isa = PBXBuildFile; fileRef = 3A4EAD102A4FEAE6005435B3 /* ApplicationLibrary.framework */; };
 		3AF3A3D22B2207F3001FD7C1 /* libresolv.tbd in Frameworks */ = {isa = PBXBuildFile; fileRef = 3AF3A3D12B2207E1001FD7C1 /* libresolv.tbd */; };
 		3AFE19402EF5677100F61E06 /* SystemConfiguration.framework in Frameworks */ = {isa = PBXBuildFile; fileRef = 3AC72A302EED94F60039DEA4 /* SystemConfiguration.framework */; };
+		3B2B2B012F410001002B2B2B /* OverlayAppIcon.icon in Resources */ = {isa = PBXBuildFile; fileRef = 3B2B2B002F410001002B2B2B /* OverlayAppIcon.icon */; };
+		3B2B2B022F410001002B2B2B /* OverlayAppIcon.icon in Resources */ = {isa = PBXBuildFile; fileRef = 3B2B2B002F410001002B2B2B /* OverlayAppIcon.icon */; };
+		3B2B2B032F410001002B2B2B /* OverlayAppIcon.icon in Resources */ = {isa = PBXBuildFile; fileRef = 3B2B2B002F410001002B2B2B /* OverlayAppIcon.icon */; };
+		3B2B2B112F410001002B2B2B /* OverlayDevAppIcon.icon in Resources */ = {isa = PBXBuildFile; fileRef = 3B2B2B102F410001002B2B2B /* OverlayDevAppIcon.icon */; };
+		3B2B2B122F410001002B2B2B /* OverlayDevAppIcon.icon in Resources */ = {isa = PBXBuildFile; fileRef = 3B2B2B102F410001002B2B2B /* OverlayDevAppIcon.icon */; };
+		3B2B2B132F410001002B2B2B /* OverlayDevAppIcon.icon in Resources */ = {isa = PBXBuildFile; fileRef = 3B2B2B102F410001002B2B2B /* OverlayDevAppIcon.icon */; };
 		9C37F17D2C131100001B9FA8 /* Localizable.xcstrings in Resources */ = {isa = PBXBuildFile; fileRef = 9C37F17C2C131100001B9FA8 /* Localizable.xcstrings */; };
 		9C37F17E2C131100001B9FA8 /* Localizable.xcstrings in Resources */ = {isa = PBXBuildFile; fileRef = 9C37F17C2C131100001B9FA8 /* Localizable.xcstrings */; };
 		9C37F17F2C131100001B9FA8 /* Localizable.xcstrings in Resources */ = {isa = PBXBuildFile; fileRef = 9C37F17C2C131100001B9FA8 /* Localizable.xcstrings */; };
@@ -452,6 +458,8 @@
 		3AE595A12F08C4E900C13426 /* CoreWLAN.framework */ = {isa = PBXFileReference; lastKnownFileType = wrapper.framework; name = CoreWLAN.framework; path = System/Library/Frameworks/CoreWLAN.framework; sourceTree = SDKROOT; };
 		3AE595A32F08C4ED00C13426 /* UserNotifications.framework */ = {isa = PBXFileReference; lastKnownFileType = wrapper.framework; name = UserNotifications.framework; path = System/Library/Frameworks/UserNotifications.framework; sourceTree = SDKROOT; };
 		3B1D24E53020260000000001 /* Config/Overlay.xcconfig */ = {isa = PBXFileReference; lastKnownFileType = text.xcconfig; path = Config/Overlay.xcconfig; sourceTree = "<group>"; };
+		3B2B2B002F410001002B2B2B /* OverlayAppIcon.icon */ = {isa = PBXFileReference; explicitFileType = folder.iconcomposer.icon; path = OverlayAppIcon.icon; sourceTree = "<group>"; };
+		3B2B2B102F410001002B2B2B /* OverlayDevAppIcon.icon */ = {isa = PBXFileReference; explicitFileType = folder.iconcomposer.icon; path = OverlayDevAppIcon.icon; sourceTree = "<group>"; };
 		3AE595AE2F08D00000C13426 /* HelperService/LaunchDaemons/HelperService.plist */ = {isa = PBXFileReference; lastKnownFileType = text.plist.xml; path = HelperService/LaunchDaemons/HelperService.plist; sourceTree = "<group>"; };
 		3AEC20DB2A4599D000A63465 /* Libbox.xcframework */ = {isa = PBXFileReference; lastKnownFileType = wrapper.xcframework; path = "$(LIBBOX_XCFRAMEWORK_PATH)"; sourceTree = SOURCE_ROOT; };
 		3AEC20F32A459AB400A63465 /* sing-box.app */ = {isa = PBXFileReference; explicitFileType = wrapper.application; includeInIndex = 0; path = "sing-box.app"; sourceTree = BUILT_PRODUCTS_DIR; };
@@ -791,6 +799,8 @@
 			children = (
 				9C37F17C2C131100001B9FA8 /* Localizable.xcstrings */,
 				3B1D24E53020260000000001 /* Config/Overlay.xcconfig */,
+				3B2B2B002F410001002B2B2B /* OverlayAppIcon.icon */,
+				3B2B2B102F410001002B2B2B /* OverlayDevAppIcon.icon */,
 				3AEC20DB2A4599D000A63465 /* Libbox.xcframework */,
 				3ADDCEB42E8B723B009ACE1D /* SFI */,
 				3ADDCEC02E8B7240009ACE1D /* SFM */,
@@ -1131,6 +1141,7 @@
 				3AEC20EF2A459AB400A63465 /* Sources */,
 				3AEC20F02A459AB400A63465 /* Frameworks */,
 				3AEC20F12A459AB400A63465 /* Resources */,
+				3B2B2B042F410001002B2B2B /* Strip App Icon Alpha */,
 				3A44BB782A4DC17000E4C9F8 /* Embed Foundation Extensions */,
 				3A9759222A4EB69C00E4404B /* Embed Frameworks */,
 				3A8655172A4FA26600B7181F /* Embed ExtensionKit Extensions */,
@@ -1165,6 +1176,7 @@
 				3AEC21052A459B1900A63465 /* Sources */,
 				3AEC21062A459B1900A63465 /* Frameworks */,
 				3AEC21072A459B1900A63465 /* Resources */,
+				3B2B2B052F410001002B2B2B /* Strip App Icon Alpha */,
 				3A096F762A4ED1A600D4A2ED /* Embed Foundation Extensions */,
 				3A8655132A4FA25C00B7181F /* Embed ExtensionKit Extensions */,
 				3A5F26CA2A503D4B00C27EDF /* Embed Frameworks */,
@@ -1236,6 +1248,7 @@
 				3AEECC002A6DF9CA006A0E0C /* Sources */,
 				3AEECC012A6DF9CA006A0E0C /* Frameworks */,
 				3AEECC022A6DF9CA006A0E0C /* Resources */,
+				3B2B2B062F410001002B2B2B /* Strip App Icon Alpha */,
 				3AEECC212A6DFA79006A0E0C /* Embed Frameworks */,
 				3AEECC232A6DFA79006A0E0C /* Embed System Extensions */,
 				3AE595A92F08C5E200C13426 /* Copy Helpers */,
@@ -1461,6 +1474,8 @@
 			isa = PBXResourcesBuildPhase;
 			buildActionMask = 2147483647;
 			files = (
+				3B2B2B012F410001002B2B2B /* OverlayAppIcon.icon in Resources */,
+				3B2B2B112F410001002B2B2B /* OverlayDevAppIcon.icon in Resources */,
 				9C37F17D2C131100001B9FA8 /* Localizable.xcstrings in Resources */,
 			);
 			runOnlyForDeploymentPostprocessing = 0;
@@ -1469,6 +1484,8 @@
 			isa = PBXResourcesBuildPhase;
 			buildActionMask = 2147483647;
 			files = (
+				3B2B2B022F410001002B2B2B /* OverlayAppIcon.icon in Resources */,
+				3B2B2B122F410001002B2B2B /* OverlayDevAppIcon.icon in Resources */,
 				9C37F17E2C131100001B9FA8 /* Localizable.xcstrings in Resources */,
 			);
 			runOnlyForDeploymentPostprocessing = 0;
@@ -1492,6 +1509,8 @@
 			isa = PBXResourcesBuildPhase;
 			buildActionMask = 2147483647;
 			files = (
+				3B2B2B032F410001002B2B2B /* OverlayAppIcon.icon in Resources */,
+				3B2B2B132F410001002B2B2B /* OverlayDevAppIcon.icon in Resources */,
 				9C37F17F2C131100001B9FA8 /* Localizable.xcstrings in Resources */,
 			);
 			runOnlyForDeploymentPostprocessing = 0;
@@ -1505,6 +1524,99 @@
 			runOnlyForDeploymentPostprocessing = 0;
 		};
 /* End PBXResourcesBuildPhase section */
+
+/* Begin PBXShellScriptBuildPhase section */
+		3B2B2B042F410001002B2B2B /* Strip App Icon Alpha */ = {
+			isa = PBXShellScriptBuildPhase;
+			alwaysOutOfDate = 1;
+			buildActionMask = 2147483647;
+			files = (
+			);
+			inputFileListPaths = (
+			);
+			inputPaths = (
+				"$(SRCROOT)/scripts/strip_app_icon_alpha.sh",
+			);
+			name = "Strip App Icon Alpha";
+			outputFileListPaths = (
+			);
+			outputPaths = (
+				"$(TARGET_BUILD_DIR)/$(UNLOCALIZED_RESOURCES_FOLDER_PATH)/$(ASSETCATALOG_COMPILER_APPICON_NAME)20x20@2x.png",
+				"$(TARGET_BUILD_DIR)/$(UNLOCALIZED_RESOURCES_FOLDER_PATH)/$(ASSETCATALOG_COMPILER_APPICON_NAME)20x20@3x.png",
+				"$(TARGET_BUILD_DIR)/$(UNLOCALIZED_RESOURCES_FOLDER_PATH)/$(ASSETCATALOG_COMPILER_APPICON_NAME)29x29@2x.png",
+				"$(TARGET_BUILD_DIR)/$(UNLOCALIZED_RESOURCES_FOLDER_PATH)/$(ASSETCATALOG_COMPILER_APPICON_NAME)29x29@3x.png",
+				"$(TARGET_BUILD_DIR)/$(UNLOCALIZED_RESOURCES_FOLDER_PATH)/$(ASSETCATALOG_COMPILER_APPICON_NAME)40x40@2x.png",
+				"$(TARGET_BUILD_DIR)/$(UNLOCALIZED_RESOURCES_FOLDER_PATH)/$(ASSETCATALOG_COMPILER_APPICON_NAME)40x40@3x.png",
+				"$(TARGET_BUILD_DIR)/$(UNLOCALIZED_RESOURCES_FOLDER_PATH)/$(ASSETCATALOG_COMPILER_APPICON_NAME)60x60@2x.png",
+				"$(TARGET_BUILD_DIR)/$(UNLOCALIZED_RESOURCES_FOLDER_PATH)/$(ASSETCATALOG_COMPILER_APPICON_NAME)60x60@3x.png",
+				"$(TARGET_BUILD_DIR)/$(UNLOCALIZED_RESOURCES_FOLDER_PATH)/$(ASSETCATALOG_COMPILER_APPICON_NAME)76x76@2x~ipad.png",
+				"$(TARGET_BUILD_DIR)/$(UNLOCALIZED_RESOURCES_FOLDER_PATH)/$(ASSETCATALOG_COMPILER_APPICON_NAME)83.5x83.5@2x~ipad.png",
+			);
+			runOnlyForDeploymentPostprocessing = 0;
+			shellPath = /bin/sh;
+			shellScript = "\"${SRCROOT}/scripts/strip_app_icon_alpha.sh\"\n";
+		};
+		3B2B2B052F410001002B2B2B /* Strip App Icon Alpha */ = {
+			isa = PBXShellScriptBuildPhase;
+			alwaysOutOfDate = 1;
+			buildActionMask = 2147483647;
+			files = (
+			);
+			inputFileListPaths = (
+			);
+			inputPaths = (
+				"$(SRCROOT)/scripts/strip_app_icon_alpha.sh",
+			);
+			name = "Strip App Icon Alpha";
+			outputFileListPaths = (
+			);
+			outputPaths = (
+				"$(TARGET_BUILD_DIR)/$(UNLOCALIZED_RESOURCES_FOLDER_PATH)/$(ASSETCATALOG_COMPILER_APPICON_NAME)20x20@2x.png",
+				"$(TARGET_BUILD_DIR)/$(UNLOCALIZED_RESOURCES_FOLDER_PATH)/$(ASSETCATALOG_COMPILER_APPICON_NAME)20x20@3x.png",
+				"$(TARGET_BUILD_DIR)/$(UNLOCALIZED_RESOURCES_FOLDER_PATH)/$(ASSETCATALOG_COMPILER_APPICON_NAME)29x29@2x.png",
+				"$(TARGET_BUILD_DIR)/$(UNLOCALIZED_RESOURCES_FOLDER_PATH)/$(ASSETCATALOG_COMPILER_APPICON_NAME)29x29@3x.png",
+				"$(TARGET_BUILD_DIR)/$(UNLOCALIZED_RESOURCES_FOLDER_PATH)/$(ASSETCATALOG_COMPILER_APPICON_NAME)40x40@2x.png",
+				"$(TARGET_BUILD_DIR)/$(UNLOCALIZED_RESOURCES_FOLDER_PATH)/$(ASSETCATALOG_COMPILER_APPICON_NAME)40x40@3x.png",
+				"$(TARGET_BUILD_DIR)/$(UNLOCALIZED_RESOURCES_FOLDER_PATH)/$(ASSETCATALOG_COMPILER_APPICON_NAME)60x60@2x.png",
+				"$(TARGET_BUILD_DIR)/$(UNLOCALIZED_RESOURCES_FOLDER_PATH)/$(ASSETCATALOG_COMPILER_APPICON_NAME)60x60@3x.png",
+				"$(TARGET_BUILD_DIR)/$(UNLOCALIZED_RESOURCES_FOLDER_PATH)/$(ASSETCATALOG_COMPILER_APPICON_NAME)76x76@2x~ipad.png",
+				"$(TARGET_BUILD_DIR)/$(UNLOCALIZED_RESOURCES_FOLDER_PATH)/$(ASSETCATALOG_COMPILER_APPICON_NAME)83.5x83.5@2x~ipad.png",
+			);
+			runOnlyForDeploymentPostprocessing = 0;
+			shellPath = /bin/sh;
+			shellScript = "\"${SRCROOT}/scripts/strip_app_icon_alpha.sh\"\n";
+		};
+		3B2B2B062F410001002B2B2B /* Strip App Icon Alpha */ = {
+			isa = PBXShellScriptBuildPhase;
+			alwaysOutOfDate = 1;
+			buildActionMask = 2147483647;
+			files = (
+			);
+			inputFileListPaths = (
+			);
+			inputPaths = (
+				"$(SRCROOT)/scripts/strip_app_icon_alpha.sh",
+			);
+			name = "Strip App Icon Alpha";
+			outputFileListPaths = (
+			);
+			outputPaths = (
+				"$(TARGET_BUILD_DIR)/$(UNLOCALIZED_RESOURCES_FOLDER_PATH)/$(ASSETCATALOG_COMPILER_APPICON_NAME)20x20@2x.png",
+				"$(TARGET_BUILD_DIR)/$(UNLOCALIZED_RESOURCES_FOLDER_PATH)/$(ASSETCATALOG_COMPILER_APPICON_NAME)20x20@3x.png",
+				"$(TARGET_BUILD_DIR)/$(UNLOCALIZED_RESOURCES_FOLDER_PATH)/$(ASSETCATALOG_COMPILER_APPICON_NAME)29x29@2x.png",
+				"$(TARGET_BUILD_DIR)/$(UNLOCALIZED_RESOURCES_FOLDER_PATH)/$(ASSETCATALOG_COMPILER_APPICON_NAME)29x29@3x.png",
+				"$(TARGET_BUILD_DIR)/$(UNLOCALIZED_RESOURCES_FOLDER_PATH)/$(ASSETCATALOG_COMPILER_APPICON_NAME)40x40@2x.png",
+				"$(TARGET_BUILD_DIR)/$(UNLOCALIZED_RESOURCES_FOLDER_PATH)/$(ASSETCATALOG_COMPILER_APPICON_NAME)40x40@3x.png",
+				"$(TARGET_BUILD_DIR)/$(UNLOCALIZED_RESOURCES_FOLDER_PATH)/$(ASSETCATALOG_COMPILER_APPICON_NAME)60x60@2x.png",
+				"$(TARGET_BUILD_DIR)/$(UNLOCALIZED_RESOURCES_FOLDER_PATH)/$(ASSETCATALOG_COMPILER_APPICON_NAME)60x60@3x.png",
+				"$(TARGET_BUILD_DIR)/$(UNLOCALIZED_RESOURCES_FOLDER_PATH)/$(ASSETCATALOG_COMPILER_APPICON_NAME)76x76@2x~ipad.png",
+				"$(TARGET_BUILD_DIR)/$(UNLOCALIZED_RESOURCES_FOLDER_PATH)/$(ASSETCATALOG_COMPILER_APPICON_NAME)83.5x83.5@2x~ipad.png",
+			);
+			runOnlyForDeploymentPostprocessing = 0;
+			shellPath = /bin/sh;
+			shellScript = "\"${SRCROOT}/scripts/strip_app_icon_alpha.sh\"\n";
+		};
+/* End PBXShellScriptBuildPhase section */
 
 /* Begin PBXSourcesBuildPhase section */
 		3A096F822A4ED3DE00D4A2ED /* Sources */ = {
@@ -2868,7 +2980,7 @@
 				APP_GROUP_IDENTIFIER = "group.$(BASE_PACKAGE_IDENTIFIER)";
 				LIBBOX_XCFRAMEWORK_PATH = "build/libbox/ordinary/Libbox.xcframework";
 				ASSETCATALOG_COMPILER_GENERATE_SWIFT_ASSET_SYMBOL_EXTENSIONS = YES;
-				SFI_APP_ICON_NAME = AppIcon;
+				SFI_APP_ICON_NAME = OverlayAppIcon;
 				SFI_REQUIRE_WLT_LIBBOX = NO;
 				BASE_PACKAGE_IDENTIFIER = "$(OVERLAY_BASE_PACKAGE_IDENTIFIER)";
 				INFOPLIST_KEY_OverlayApplicationLink = "$(OVERLAY_APPLICATION_LINK)";
@@ -2877,6 +2989,10 @@
 				INFOPLIST_KEY_OverlayConfigurationLink = "$(OVERLAY_CONFIGURATION_LINK)";
 				INFOPLIST_KEY_OverlayReleasesLink = "$(OVERLAY_RELEASES_LINK)";
 				INFOPLIST_KEY_OverlaySourceLink = "$(OVERLAY_SOURCE_LINK)";
+				INFOPLIST_KEY_OverlaySingBoxCoreLink = "$(OVERLAY_SING_BOX_CORE_LINK)";
+				INFOPLIST_KEY_OverlaySingBoxAppleClientLink = "$(OVERLAY_SING_BOX_APPLE_CLIENT_LINK)";
+				INFOPLIST_KEY_OverlaySingBoxLXLink = "$(OVERLAY_SING_BOX_LX_LINK)";
+				INFOPLIST_KEY_OverlayStackSourceLink = "$(OVERLAY_STACK_SOURCE_LINK)";
 				CLANG_ANALYZER_LOCALIZABILITY_NONLOCALIZED = YES;
 				CLANG_ANALYZER_NONNULL = YES;
 				CLANG_ANALYZER_NUMBER_OBJECT_CONVERSION = YES_AGGRESSIVE;
@@ -2948,15 +3064,20 @@
 				APP_GROUP_IDENTIFIER = "group.$(BASE_PACKAGE_IDENTIFIER)";
 				LIBBOX_XCFRAMEWORK_PATH = "build/libbox/dev/Libbox.xcframework";
 				ASSETCATALOG_COMPILER_GENERATE_SWIFT_ASSET_SYMBOL_EXTENSIONS = YES;
-				SFI_APP_ICON_NAME = AppIcon;
+				SFI_APP_ICON_NAME = OverlayDevAppIcon;
 				SFI_REQUIRE_WLT_LIBBOX = NO;
+				OVERLAY_URL_SCHEME = "$(OVERLAY_DEV_URL_SCHEME)";
 				BASE_PACKAGE_IDENTIFIER = "$(OVERLAY_BASE_PACKAGE_IDENTIFIER).dev";
 				INFOPLIST_KEY_OverlayApplicationLink = "$(OVERLAY_APPLICATION_LINK)";
-				INFOPLIST_KEY_OverlayApplicationName = "$(OVERLAY_APPLICATION_NAME) Dev";
+				INFOPLIST_KEY_OverlayApplicationName = "$(OVERLAY_DEV_APPLICATION_NAME)";
 				INFOPLIST_KEY_OverlayChangelogLink = "$(OVERLAY_CHANGELOG_LINK)";
 				INFOPLIST_KEY_OverlayConfigurationLink = "$(OVERLAY_CONFIGURATION_LINK)";
 				INFOPLIST_KEY_OverlayReleasesLink = "$(OVERLAY_RELEASES_LINK)";
 				INFOPLIST_KEY_OverlaySourceLink = "$(OVERLAY_SOURCE_LINK)";
+				INFOPLIST_KEY_OverlaySingBoxCoreLink = "$(OVERLAY_SING_BOX_CORE_LINK)";
+				INFOPLIST_KEY_OverlaySingBoxAppleClientLink = "$(OVERLAY_SING_BOX_APPLE_CLIENT_LINK)";
+				INFOPLIST_KEY_OverlaySingBoxLXLink = "$(OVERLAY_SING_BOX_LX_LINK)";
+				INFOPLIST_KEY_OverlayStackSourceLink = "$(OVERLAY_STACK_SOURCE_LINK)";
 				CLANG_ANALYZER_LOCALIZABILITY_NONLOCALIZED = YES;
 				CLANG_ANALYZER_NONNULL = YES;
 				CLANG_ANALYZER_NUMBER_OBJECT_CONVERSION = YES_AGGRESSIVE;
@@ -3028,7 +3149,7 @@
 				APP_GROUP_IDENTIFIER = "group.$(BASE_PACKAGE_IDENTIFIER)";
 				LIBBOX_XCFRAMEWORK_PATH = "build/libbox/ordinary/Libbox.xcframework";
 				ASSETCATALOG_COMPILER_GENERATE_SWIFT_ASSET_SYMBOL_EXTENSIONS = YES;
-				SFI_APP_ICON_NAME = AppIcon;
+				SFI_APP_ICON_NAME = OverlayAppIcon;
 				SFI_REQUIRE_WLT_LIBBOX = NO;
 				BASE_PACKAGE_IDENTIFIER = "$(OVERLAY_BASE_PACKAGE_IDENTIFIER)";
 				INFOPLIST_KEY_OverlayApplicationLink = "$(OVERLAY_APPLICATION_LINK)";
@@ -3037,6 +3158,10 @@
 				INFOPLIST_KEY_OverlayConfigurationLink = "$(OVERLAY_CONFIGURATION_LINK)";
 				INFOPLIST_KEY_OverlayReleasesLink = "$(OVERLAY_RELEASES_LINK)";
 				INFOPLIST_KEY_OverlaySourceLink = "$(OVERLAY_SOURCE_LINK)";
+				INFOPLIST_KEY_OverlaySingBoxCoreLink = "$(OVERLAY_SING_BOX_CORE_LINK)";
+				INFOPLIST_KEY_OverlaySingBoxAppleClientLink = "$(OVERLAY_SING_BOX_APPLE_CLIENT_LINK)";
+				INFOPLIST_KEY_OverlaySingBoxLXLink = "$(OVERLAY_SING_BOX_LX_LINK)";
+				INFOPLIST_KEY_OverlayStackSourceLink = "$(OVERLAY_STACK_SOURCE_LINK)";
 				CLANG_ANALYZER_LOCALIZABILITY_NONLOCALIZED = YES;
 				CLANG_ANALYZER_NONNULL = YES;
 				CLANG_ANALYZER_NUMBER_OBJECT_CONVERSION = YES_AGGRESSIVE;
@@ -3097,7 +3222,7 @@
 			buildSettings = {
 				ASSETCATALOG_COMPILER_APPICON_NAME = "$(SFI_APP_ICON_NAME)";
 				ASSETCATALOG_COMPILER_GLOBAL_ACCENT_COLOR_NAME = AccentColor;
-				ASSETCATALOG_COMPILER_INCLUDE_ALL_APPICON_ASSETS = YES;
+				ASSETCATALOG_COMPILER_INCLUDE_ALL_APPICON_ASSETS = NO;
 				CODE_SIGN_ENTITLEMENTS = SFI/SFI.entitlements;
 				CODE_SIGN_IDENTITY = "Apple Development";
 				CODE_SIGN_STYLE = Automatic;
@@ -3139,7 +3264,7 @@
 			buildSettings = {
 				ASSETCATALOG_COMPILER_APPICON_NAME = "$(SFI_APP_ICON_NAME)";
 				ASSETCATALOG_COMPILER_GLOBAL_ACCENT_COLOR_NAME = AccentColor;
-				ASSETCATALOG_COMPILER_INCLUDE_ALL_APPICON_ASSETS = YES;
+				ASSETCATALOG_COMPILER_INCLUDE_ALL_APPICON_ASSETS = NO;
 				CODE_SIGN_ENTITLEMENTS = SFI/SFI.entitlements;
 				CODE_SIGN_IDENTITY = "Apple Development";
 				CODE_SIGN_STYLE = Automatic;
@@ -3149,7 +3274,7 @@
 				ENABLE_PREVIEWS = YES;
 				GENERATE_INFOPLIST_FILE = YES;
 				INFOPLIST_FILE = SFI/Info.plist;
-				INFOPLIST_KEY_CFBundleDisplayName = "$(OVERLAY_APPLICATION_NAME) Dev";
+				INFOPLIST_KEY_CFBundleDisplayName = "$(OVERLAY_DEV_APPLICATION_NAME)";
 				INFOPLIST_KEY_ITSAppUsesNonExemptEncryption = NO;
 				INFOPLIST_KEY_LSApplicationCategoryType = "public.app-category.utilities";
 				INFOPLIST_KEY_LSSupportsOpeningDocumentsInPlace = YES;
@@ -3167,7 +3292,7 @@
 				MARKETING_VERSION = "1.13.13";
 				OTHER_CODE_SIGN_FLAGS = "--deep";
 				PRODUCT_BUNDLE_IDENTIFIER = "$(BASE_PACKAGE_IDENTIFIER)";
-				PRODUCT_NAME = "$(OVERLAY_APPLICATION_NAME) Dev";
+				PRODUCT_NAME = "$(OVERLAY_DEV_APPLICATION_NAME)";
 				PROVISIONING_PROFILE_SPECIFIER = "";
 				SDKROOT = iphoneos;
 				SWIFT_EMIT_LOC_STRINGS = NO;
@@ -3181,7 +3306,7 @@
 			buildSettings = {
 				ASSETCATALOG_COMPILER_APPICON_NAME = "$(SFI_APP_ICON_NAME)";
 				ASSETCATALOG_COMPILER_GLOBAL_ACCENT_COLOR_NAME = AccentColor;
-				ASSETCATALOG_COMPILER_INCLUDE_ALL_APPICON_ASSETS = YES;
+				ASSETCATALOG_COMPILER_INCLUDE_ALL_APPICON_ASSETS = NO;
 				CODE_SIGN_ENTITLEMENTS = SFI/SFI.entitlements;
 				CODE_SIGN_STYLE = Automatic;
 				CURRENT_PROJECT_VERSION = 1;
@@ -3221,7 +3346,7 @@
 		3AEC21162A459B1A00A63465 /* Debug */ = {
 			isa = XCBuildConfiguration;
 			buildSettings = {
-				ASSETCATALOG_COMPILER_APPICON_NAME = AppIcon;
+				ASSETCATALOG_COMPILER_APPICON_NAME = OverlayAppIcon;
 				ASSETCATALOG_COMPILER_GLOBAL_ACCENT_COLOR_NAME = AccentColor;
 				CODE_SIGN_ENTITLEMENTS = SFM/SFM.entitlements;
 				CODE_SIGN_IDENTITY = "Apple Development";
@@ -3299,7 +3424,7 @@
 		3AEC21172A459B1A00A63465 /* Release */ = {
 			isa = XCBuildConfiguration;
 			buildSettings = {
-				ASSETCATALOG_COMPILER_APPICON_NAME = AppIcon;
+				ASSETCATALOG_COMPILER_APPICON_NAME = OverlayAppIcon;
 				ASSETCATALOG_COMPILER_GLOBAL_ACCENT_COLOR_NAME = AccentColor;
 				CODE_SIGN_ENTITLEMENTS = SFM/SFM.entitlements;
 				CODE_SIGN_STYLE = Automatic;
@@ -3624,7 +3749,7 @@
 			isa = XCBuildConfiguration;
 			buildSettings = {
 				APP_GROUP_IDENTIFIER = "$(TeamIdentifierPrefix)$(BASE_PACKAGE_IDENTIFIER)";
-				ASSETCATALOG_COMPILER_APPICON_NAME = AppIcon;
+				ASSETCATALOG_COMPILER_APPICON_NAME = OverlayAppIcon;
 				ASSETCATALOG_COMPILER_GLOBAL_ACCENT_COLOR_NAME = AccentColor;
 				ASSETCATALOG_COMPILER_INCLUDE_ALL_APPICON_ASSETS = NO;
 				CODE_SIGN_ENTITLEMENTS = SFM.System/SFM.entitlements;
@@ -3708,7 +3833,7 @@
 			isa = XCBuildConfiguration;
 			buildSettings = {
 				APP_GROUP_IDENTIFIER = "$(TeamIdentifierPrefix)$(BASE_PACKAGE_IDENTIFIER)";
-				ASSETCATALOG_COMPILER_APPICON_NAME = AppIcon;
+				ASSETCATALOG_COMPILER_APPICON_NAME = OverlayAppIcon;
 				ASSETCATALOG_COMPILER_GLOBAL_ACCENT_COLOR_NAME = AccentColor;
 				ASSETCATALOG_COMPILER_INCLUDE_ALL_APPICON_ASSETS = NO;
 				CODE_SIGN_ENTITLEMENTS = SFM.System/SFM.entitlements;

@@ -160,31 +160,30 @@ public struct SettingView: View {
             }
             #if !os(tvOS)
                 Section("About") {
-                    Link(destination: URL(string: AppConfiguration.applicationLink)!) {
-                        Label("Documentation", systemImage: "doc.on.doc.fill")
+                    Link(destination: URL(string: AppConfiguration.singBoxCoreLink)!) {
+                        Label("sing-box core", systemImage: "gearshape.2.fill")
                     }
                     .buttonStyle(.plain)
                     .foregroundColor(.accentColor)
-                    .contextMenu {
-                        Link(destination: URL(string: AppConfiguration.changelogLink)!) {
-                            Text("Changelog")
-                        }
-                        Link(destination: URL(string: AppConfiguration.configurationLink)!) {
-                            Text("Configuration")
-                        }
-                    }
-                    Link(destination: URL(string: AppConfiguration.sourceLink)!) {
-                        Label("Source Code", systemImage: "pills.fill")
+                    Link(destination: URL(string: AppConfiguration.singBoxAppleClientLink)!) {
+                        Label("sing-box Apple client", systemImage: "apple.logo")
                     }
                     .buttonStyle(.plain)
                     .foregroundColor(.accentColor)
-                    .contextMenu {
-                        Link(destination: URL(string: AppConfiguration.releasesLink)!) {
-                            Text("Releases")
-                        }
+                    Link(destination: URL(string: AppConfiguration.singBoxLXLink)!) {
+                        Label("sing-box-lx", systemImage: "bolt.horizontal.fill")
                     }
-                    RequestReviewButton {
-                        Label("Rate on the App Store", systemImage: "text.bubble.fill")
+                    .buttonStyle(.plain)
+                    .foregroundColor(.accentColor)
+                    Link(destination: URL(string: AppConfiguration.stackSourceLink)!) {
+                        Label("2b2n-stack", systemImage: "server.rack")
+                    }
+                    .buttonStyle(.plain)
+                    .foregroundColor(.accentColor)
+                    if AppConfiguration.showsAppStoreReview {
+                        RequestReviewButton {
+                            Label("Rate on the App Store", systemImage: "text.bubble.fill")
+                        }
                     }
                     #if os(macOS)
                         if Variant.useSystemExtension {
