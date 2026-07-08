@@ -48,7 +48,7 @@ else
 	git fetch --tags --force >/dev/null 2>&1
 
 	if [[ -n "$repo_ref" ]]; then
-		git fetch origin "$repo_ref" --depth=1 >/dev/null 2>&1
+		git fetch origin "$repo_ref" >/dev/null 2>&1
 		git checkout -q FETCH_HEAD
 		echo "using sing-box source $repo_url@$repo_ref ($(git rev-parse --short HEAD))"
 	else
@@ -68,6 +68,14 @@ else
 fi
 
 cd "$repo_dir"
+
+libbox_version="$(go run ./cmd/internal/read_tag)"
+if [[ -z "$libbox_version" || "$libbox_version" == "unknown" ]]; then
+	echo "unable to resolve sing-box version for libbox build from $repo_dir" >&2
+	echo "make sure the checkout has release tags matching v[0-9]* before building TestFlight artifacts" >&2
+	exit 1
+fi
+echo "using sing-box libbox version: $libbox_version"
 
 wireguard_submodule="$(
 	git config -f .gitmodules --get submodule.submodules/wireguard-go.path 2>/dev/null \
@@ -133,8 +141,11 @@ if [[ "$source_xcframework" != "$destination" ]]; then
 	mv "$source_xcframework" "$destination"
 fi
 printf '%s\n' "$variant" > "$destination/.libbox-variant"
+printf '%s\n' "$libbox_version" > "$destination/.libbox-version"
 git rev-parse HEAD > "$destination/.libbox-source-ref"
-if [[ "${LIBBOX_ACTIVATE:-1}" == "1" ]]; then
-	rm -rf "$client_root/Libbox.xcframework"
-	cp -R "$destination" "$client_root/Libbox.xcframework"
+active_xcframework="$client_root/$default_destination"
+if [[ "${LIBBOX_ACTIVATE:-1}" == "1" && "$destination" != "$active_xcframework" ]]; then
+	rm -rf "$active_xcframework"
+	mkdir -p "$(dirname "$active_xcframework")"
+	cp -R "$destination" "$active_xcframework"
 fi

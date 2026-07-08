@@ -46,6 +46,18 @@ write_multiline_output() {
 	printf '%s:\n%s\n' "$key" "$value"
 }
 
+version_lte() {
+	python3 - "$1" "$2" <<'PY'
+import sys
+
+def version(value):
+    core = value.split("-", 1)[0]
+    return tuple(int(part) for part in core.split("."))
+
+raise SystemExit(0 if version(sys.argv[1]) <= version(sys.argv[2]) else 1)
+PY
+}
+
 resolve_project_version_conflict() {
 	local overlay_commit="$1"
 	local conflicted_paths
@@ -153,17 +165,44 @@ upstream_version="$(
 	git show "$upstream_remote/main:$project_file" \
 	| python3 scripts/read_apple_project_setting.py --stdin --infoplist SFI/Info.plist --setting MARKETING_VERSION
 )"
+release_overlay_version="$(
+	git show "$release_overlay_ref:$project_file" \
+	| python3 scripts/read_apple_project_setting.py --stdin --infoplist SFI/Info.plist --setting MARKETING_VERSION
+)"
 
-if ! python3 - "$upstream_version" "$version_ceiling" <<'PY'
-import sys
+manual_checked_out_release=false
+if [[ "${GITHUB_EVENT_NAME:-}" == "workflow_dispatch" && "$force" == true && "$release_overlay_ref" == "$checked_out_sha" ]]; then
+	if version_lte "$release_overlay_version" "$version_ceiling"; then
+		manual_checked_out_release=true
+	fi
+fi
 
-def version(value):
-    core = value.split("-", 1)[0]
-    return tuple(int(part) for part in core.split("."))
+if ! version_lte "$upstream_version" "$version_ceiling"; then
+	if [[ "$manual_checked_out_release" == "true" ]]; then
+		release_notes="$application_name $release_overlay_version"
 
-raise SystemExit(0 if version(sys.argv[1]) <= version(sys.argv[2]) else 1)
-PY
-then
+		write_output current_main_sha "$current_main_sha"
+		write_output current_overlay_sha "$current_overlay_sha"
+		write_output upstream_sha "$upstream_sha"
+		write_output overlay_commit_count "$(git rev-list --count "$origin_remote/main..$release_overlay_ref")"
+		write_output current_version "$current_version"
+		write_output upstream_version "$upstream_version"
+		write_output upstream_changed false
+		write_output version_changed false
+		write_output should_release true
+		write_output should_push false
+		write_multiline_output release_notes "$release_notes"
+
+		git checkout -B "$tmp_branch" "$release_overlay_ref" >/dev/null
+		new_overlay_sha="$(git rev-parse HEAD)"
+		new_version="$(python3 scripts/read_apple_project_setting.py --file "$project_file" --infoplist SFI/Info.plist --setting MARKETING_VERSION)"
+
+		write_output release_branch "$tmp_branch"
+		write_output new_overlay_sha "$new_overlay_sha"
+		write_output new_version "$new_version"
+		exit 0
+	fi
+
 	echo "upstream version $upstream_version exceeds overlay ceiling $version_ceiling; skipping" >&2
 	write_output upstream_version "$upstream_version"
 	write_output version_ceiling "$version_ceiling"
