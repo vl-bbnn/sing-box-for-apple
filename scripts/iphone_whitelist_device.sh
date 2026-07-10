@@ -10,7 +10,7 @@ build_dir="$repo_root/build"
 scheme="${SFI_SCHEME:-SFI Dev}"
 configuration="${SFI_CONFIGURATION:-Dev}"
 derived_data_path="${SFI_DERIVED_DATA_PATH:-$build_dir/DerivedData-iPhone}"
-app_name="${SFI_APP_NAME:-sing-box.app}"
+app_name="${SFI_APP_NAME:-dev-vpn.app}"
 sing_box_version="${SING_BOX_VERSION:-1.13.12}"
 sing_box_repo="${SING_BOX_REPO:-$workspace_root/sing-box}"
 libbox_platforms="${LIBBOX_APPLE_PLATFORMS:-ios,iossimulator,macos}"
@@ -277,6 +277,7 @@ Environment:
   SING_BOX_VERSION         Apple app/libbox version; defaults to 1.13.12.
   SFI_SCHEME                Must be "SFI Dev" (default).
   SFI_CONFIGURATION         Must be Dev (default).
+  SFI_APP_NAME              Dev app bundle name; defaults to dev-vpn.app.
   LIBBOX_APPLE_PLATFORMS   Defaults to ios,iossimulator,macos.
   SING_BOX_BUILD_TAGS      Explicit comma-separated sing-box extra tags.
   SING_BOX_LX=1            Use Makefile.lx tags from SING_BOX_REPO plus with_wlt.
