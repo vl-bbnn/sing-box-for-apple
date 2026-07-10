@@ -7,13 +7,14 @@ repo_root="$(cd "$script_dir/.." && pwd)"
 workspace_root="$(cd "$repo_root/.." && pwd)"
 build_dir="$repo_root/build"
 
-scheme="${SFI_SCHEME:-SFI}"
-configuration="${SFI_CONFIGURATION:-Debug}"
+scheme="${SFI_SCHEME:-SFI Dev}"
+configuration="${SFI_CONFIGURATION:-Dev}"
 derived_data_path="${SFI_DERIVED_DATA_PATH:-$build_dir/DerivedData-iPhone}"
 app_name="${SFI_APP_NAME:-sing-box.app}"
 sing_box_version="${SING_BOX_VERSION:-1.13.12}"
 sing_box_repo="${SING_BOX_REPO:-$workspace_root/sing-box}"
 libbox_platforms="${LIBBOX_APPLE_PLATFORMS:-ios,iossimulator,macos}"
+dev_xcframework="$repo_root/build/libbox/dev/Libbox.xcframework"
 
 mkdir -p "$build_dir"
 
@@ -138,28 +139,35 @@ sing_box_build_tags() {
 
 build_libbox() {
 	log "building Libbox.xcframework from local sing-box"
+	[[ "$scheme" == "SFI Dev" ]] || die "WLT device helper requires SFI Dev scheme, got: $scheme"
+	[[ "$configuration" == "Dev" ]] || die "WLT device helper requires Dev configuration, got: $configuration"
 	# 2b2n:begin wlt
 	local sing_box_build_tags
 	sing_box_build_tags="$(sing_box_build_tags)"
 	# 2b2n:end wlt
 	SING_BOX_REPO="$sing_box_repo" \
+		LIBBOX_VARIANT=dev \
+		LIBBOX_ACTIVATE=0 \
 		LIBBOX_APPLE_PLATFORMS="$libbox_platforms" \
 		SING_BOX_BUILD_TAGS="$sing_box_build_tags" \
 		bash "$repo_root/scripts/build_libbox.sh" "$sing_box_version" \
 		>"$build_dir/build-libbox-iphone.log" 2>&1
 	VERIFY_LX_LIBBOX="${SING_BOX_LX:-0}" \
-		bash "$repo_root/scripts/verify_wlt_libbox.sh" "$repo_root/Libbox.xcframework" \
+		bash "$repo_root/scripts/verify_wlt_libbox.sh" "$dev_xcframework" \
 		>>"$build_dir/build-libbox-iphone.log" 2>&1 \
-		|| die "rebuilt Libbox.xcframework failed WLT verification; see build/build-libbox-iphone.log"
+		|| die "rebuilt Dev Libbox.xcframework failed WLT verification; see build/build-libbox-iphone.log"
 	log "Libbox build ok"
 }
 
 verify_libbox() {
-	bash "$repo_root/scripts/verify_wlt_libbox.sh" "$repo_root/Libbox.xcframework"
+	VERIFY_LX_LIBBOX="${SING_BOX_LX:-0}" \
+		bash "$repo_root/scripts/verify_wlt_libbox.sh" "$dev_xcframework"
 }
 
 build_app() {
 	log "building SFI for generic iOS device"
+	[[ "$scheme" == "SFI Dev" ]] || die "WLT device helper requires SFI Dev scheme, got: $scheme"
+	[[ "$configuration" == "Dev" ]] || die "WLT device helper requires Dev configuration, got: $configuration"
 	xcodebuild \
 		-project "$repo_root/sing-box.xcodeproj" \
 		-scheme "$scheme" \
@@ -257,7 +265,7 @@ Commands:
   preflight     Print sanitized device/build readiness.
   build-libbox  Rebuild Libbox.xcframework from local sing-box.
   verify-libbox Verify WLT symbols, module linkage, and iOS slices.
-  build-app     Build SFI for generic iOS device.
+  build-app     Build the WLT-enabled SFI Dev app for a generic iOS device.
   install       Install the built app on the connected iPhone.
   launch        Launch the installed app on the connected iPhone.
   all           build-app, install, launch.
@@ -267,6 +275,8 @@ Environment:
   DEVICE_ID                Override auto-selected iPhone identifier.
   SING_BOX_REPO            Local sing-box repo; defaults to ../sing-box.
   SING_BOX_VERSION         Apple app/libbox version; defaults to 1.13.12.
+  SFI_SCHEME                Must be "SFI Dev" (default).
+  SFI_CONFIGURATION         Must be Dev (default).
   LIBBOX_APPLE_PLATFORMS   Defaults to ios,iossimulator,macos.
   SING_BOX_BUILD_TAGS      Explicit comma-separated sing-box extra tags.
   SING_BOX_LX=1            Use Makefile.lx tags from SING_BOX_REPO plus with_wlt.
