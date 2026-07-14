@@ -139,6 +139,19 @@ if [[ "${LIBBOX_SKIP_TOOL_INSTALL:-0}" != "1" ]]; then
 	make lib_install
 fi
 export PATH="$PATH:$(go env GOPATH)/bin"
+
+# gomobile does not overwrite generated ObjC binding sources. A second local
+# build otherwise fails with "file exists" in one of these platform workdirs.
+# They are build-only output; keep source and unrelated build artifacts intact.
+for generated_bind_dir in \
+	build/ios-arm64/Libbox \
+	build/iossimulator-amd64/Libbox \
+	build/iossimulator-arm64/Libbox \
+	build/macos-amd64/Libbox \
+	build/macos-arm64/Libbox; do
+	rm -rf "$generated_bind_dir"
+done
+
 go run ./cmd/internal/build_libbox -target apple -platform "$platforms"
 
 source_xcframework="$repo_dir/Libbox.xcframework"
