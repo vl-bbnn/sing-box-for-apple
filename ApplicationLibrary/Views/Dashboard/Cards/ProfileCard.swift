@@ -231,6 +231,7 @@ public struct ProfileCard: View {
         .buttonStyle(.plain)
         .actionButtonStyle()
         .disabled(viewModel.isUpdating)
+        .accessibilityIdentifier("wlt.profile.refresh")
     }
 
     @ViewBuilder

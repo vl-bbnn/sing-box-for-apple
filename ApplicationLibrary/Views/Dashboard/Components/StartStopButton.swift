@@ -98,6 +98,7 @@ public struct StartStopButton: View {
                 #endif
             }
             .labelStyle(.iconOnly)
+            .accessibilityIdentifier("wlt.connection.toggle")
             #if os(iOS)
                 .modifier(PrimaryTintModifier())
             #endif

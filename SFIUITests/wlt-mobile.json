@@ -1,0 +1,56 @@
+{
+  "name": "WLT mobile-network smoke",
+  "apps": {
+    "safari": "com.apple.mobilesafari",
+    "springboard": "com.apple.springboard",
+    "youtube": "com.google.ios.youtube",
+    "twitch": "tv.twitch"
+  },
+  "steps": [
+    { "action": "launch", "app": "vpn", "timeout": 30 },
+    { "action": "wait_element", "app": "vpn", "identifier": "wlt.profile.selector", "timeout": 30 },
+    { "action": "assert_text", "app": "vpn", "text": "WLT-clean", "timeout": 10 },
+    { "action": "tap_if_text", "app": "vpn", "text": "Started", "identifier": "wlt.connection.toggle", "timeout": 10 },
+    { "action": "assert_text", "app": "vpn", "text": "Stopped", "timeout": 30 },
+    { "action": "tap_element", "app": "vpn", "identifier": "wlt.profile.refresh", "timeout": 10 },
+    { "action": "wait", "seconds": 5 },
+    { "action": "tap_element", "app": "vpn", "identifier": "wlt.connection.toggle", "timeout": 10 },
+    { "action": "assert_text", "app": "vpn", "text": "Started", "timeout": 120 },
+    { "action": "screenshot", "name": "vpn-started" },
+
+    { "action": "launch", "app": "safari", "timeout": 30 },
+    { "action": "dismiss_pip", "app": "springboard", "timeout": 5 },
+    { "action": "wait", "seconds": 1 },
+    { "action": "type_into", "app": "safari", "identifier": "TabBarItemTitle", "text": "https://stopgame.ru\n", "timeout": 10 },
+    { "action": "wait", "seconds": 20 },
+    { "action": "screenshot", "name": "safari-stopgame" },
+    { "action": "type_into", "app": "safari", "identifier": "TabBarItemTitle", "text": "https://rozetked.me\n", "timeout": 10 },
+    { "action": "wait", "seconds": 20 },
+    { "action": "screenshot", "name": "safari-rozetked" },
+    { "action": "type_into", "app": "safari", "identifier": "TabBarItemTitle", "text": "https://zol.ru\n", "timeout": 10 },
+    { "action": "wait", "seconds": 20 },
+    { "action": "screenshot", "name": "safari-zol" },
+
+    { "action": "launch", "app": "youtube", "timeout": 30 },
+    { "action": "tap_element", "app": "youtube", "identifier": "id.ui.pivotbar.FEwhat_to_watch.button", "timeout": 20 },
+    { "action": "wait", "seconds": 8 },
+    { "action": "tap_element", "app": "youtube", "identifier": "eml.vwc", "timeout": 30 },
+    { "action": "wait", "seconds": 45 },
+    { "action": "screenshot", "name": "youtube-playback" },
+
+    { "action": "launch", "app": "twitch", "timeout": 30 },
+    { "action": "dismiss_pip", "app": "springboard", "timeout": 5 },
+    { "action": "tap", "app": "twitch", "name": "open-visible-live-card", "x": 0.5, "y": 0.85 },
+    { "action": "wait_element", "app": "twitch", "identifier": "video_player", "timeout": 30 },
+    { "action": "tap", "app": "twitch", "x": 0.5, "y": 0.55 },
+    { "action": "wait", "seconds": 45 },
+    { "action": "assert_text_absent", "app": "twitch", "text": "Произошла ошибка. Повторите попытку.", "timeout": 1 },
+    { "action": "screenshot", "name": "twitch-playback" },
+
+    { "action": "activate", "app": "vpn", "timeout": 30 },
+    { "action": "assert_text", "app": "vpn", "text": "Started", "timeout": 30 },
+    { "action": "tap_element", "app": "vpn", "identifier": "wlt.connection.toggle", "timeout": 10 },
+    { "action": "assert_text", "app": "vpn", "text": "Stopped", "timeout": 30 },
+    { "action": "screenshot", "name": "vpn-finished" }
+  ]
+}

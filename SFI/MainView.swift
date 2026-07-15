@@ -200,6 +200,7 @@ struct MainView: View {
                 .foregroundStyle(.secondary)
                 .lineLimit(1)
                 .fixedSize()
+                .accessibilityIdentifier("wlt.connection.status")
         }
 
         private var statusText: Text {
