@@ -35,4 +35,6 @@ Keep private URLs and user-specific sequences outside the repository. The host
 script injects the selected JSON into the UI-test runner through a generated
 `.xctestrun` file and saves the scenario, XCTest result, screenshots, build log,
 and the app-group `stderr`/WLT diagnostics under
-`~/Desktop/wlt-device-scenario-<timestamp>/`.
+`.local/wlt-test-artifacts/wlt-device-scenario-<timestamp>/` inside this
+checkout. The `.local` tree is ignored by Git. Set
+`WLT_TEST_ARTIFACT_ROOT` or `WLT_SCENARIO_ARTIFACT_DIR` to override it.

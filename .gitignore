@@ -9,6 +9,7 @@ CLAUDE.md
 /.mcp.json
 AGENTS.md
 /.codex/
+/.local/
 /screenshots/
 /fastlane/report.xml
 /fastlane/test_output/

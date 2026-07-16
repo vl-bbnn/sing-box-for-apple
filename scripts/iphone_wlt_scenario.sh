@@ -5,11 +5,12 @@ set -euo pipefail
 script_dir="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 repo_root="$(cd "$script_dir/.." && pwd)"
 build_dir="${WLT_SCENARIO_BUILD_DIR:-$repo_root/build/DerivedData-WLTScenario}"
+artifact_root="${WLT_TEST_ARTIFACT_ROOT:-$repo_root/.local/wlt-test-artifacts}"
 scenario_path="${WLT_DEVICE_SCENARIO:-$repo_root/SFIUITests/wlt-mobile.json}"
 scheme="${SFI_SCHEME:-SFI Dev}"
 configuration="${SFI_CONFIGURATION:-Dev}"
 timestamp="$(date '+%Y-%m-%d-%H%M%S')"
-artifact_dir="${WLT_SCENARIO_ARTIFACT_DIR:-$HOME/Desktop/wlt-device-scenario-$timestamp}"
+artifact_dir="${WLT_SCENARIO_ARTIFACT_DIR:-$artifact_root/wlt-device-scenario-$timestamp}"
 
 log() {
     printf '[wlt-device-scenario] %s\n' "$*" >&2
