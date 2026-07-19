@@ -36,6 +36,7 @@ env:
   SING_BOX_REPO_REF: stable
   SING_BOX_LX: "1"
   OVERLAY_APPLICATION_NAME: ${{ vars.OVERLAY_APPLICATION_NAME }}
+  VPN_CLIENT_IMPORT_SCHEME: ${{ vars.VPN_CLIENT_IMPORT_SCHEME }}
   OVERLAY_APPLICATION_LINK: ${{ vars.OVERLAY_APPLICATION_LINK }}
   OVERLAY_CHANGELOG_LINK: ${{ vars.OVERLAY_CHANGELOG_LINK }}
   OVERLAY_CONFIGURATION_LINK: ${{ vars.OVERLAY_CONFIGURATION_LINK }}
@@ -112,6 +113,7 @@ jobs:
       - name: Validate workflow configuration
         run: |
           test -n "$OVERLAY_APPLICATION_NAME"
+          test -n "$VPN_CLIENT_IMPORT_SCHEME"
           test -n "$OVERLAY_DEVELOPMENT_TEAM"
 
       - name: Prepare release branch
@@ -209,6 +211,7 @@ jobs:
       - name: Validate workflow configuration
         run: |
           test -n "$OVERLAY_APPLICATION_NAME"
+          test -n "$VPN_CLIENT_IMPORT_SCHEME"
           test -n "$OVERLAY_BASE_PACKAGE_IDENTIFIER"
           test -n "$OVERLAY_DEVELOPMENT_TEAM"
           test -n "$ASC_KEY_ID"
@@ -403,6 +406,7 @@ jobs:
       - name: Validate workflow configuration
         run: |
           test -n "$OVERLAY_APPLICATION_NAME"
+          test -n "$VPN_CLIENT_IMPORT_SCHEME"
           test -n "$OVERLAY_BASE_PACKAGE_IDENTIFIER"
           test -n "$OVERLAY_DEVELOPMENT_TEAM"
           test -n "$ASC_KEY_ID"
