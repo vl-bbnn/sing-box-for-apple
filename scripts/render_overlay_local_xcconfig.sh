@@ -6,11 +6,23 @@ config_path="Config/Overlay.local.xcconfig"
 base_package_identifier="${OVERLAY_BASE_PACKAGE_IDENTIFIER:-}"
 development_team="${OVERLAY_DEVELOPMENT_TEAM:-}"
 application_name="${OVERLAY_APPLICATION_NAME:-$(./scripts/overlay_setting.sh OVERLAY_APPLICATION_NAME)}"
+client_import_scheme="${VPN_CLIENT_IMPORT_SCHEME:?VPN_CLIENT_IMPORT_SCHEME must be set by the build environment}"
 application_link="${OVERLAY_APPLICATION_LINK:-$(./scripts/overlay_setting.sh OVERLAY_APPLICATION_LINK)}"
 changelog_link="${OVERLAY_CHANGELOG_LINK:-$(./scripts/overlay_setting.sh OVERLAY_CHANGELOG_LINK)}"
 configuration_link="${OVERLAY_CONFIGURATION_LINK:-$(./scripts/overlay_setting.sh OVERLAY_CONFIGURATION_LINK)}"
 source_link="${OVERLAY_SOURCE_LINK:-$(./scripts/overlay_setting.sh OVERLAY_SOURCE_LINK)}"
 releases_link="${OVERLAY_RELEASES_LINK:-$(./scripts/overlay_setting.sh OVERLAY_RELEASES_LINK)}"
+
+validate_url_scheme() {
+    setting_name="$1"
+    setting_value="$2"
+    if ! printf '%s' "$setting_value" | grep -Eq '^[A-Za-z][A-Za-z0-9+.-]*$'; then
+        echo "$setting_name is not a valid URI scheme" >&2
+        exit 1
+    fi
+}
+
+validate_url_scheme VPN_CLIENT_IMPORT_SCHEME "$client_import_scheme"
 
 xcconfig_url() {
     printf '%s' "$1" | sed 's|://|:/$()/|'
@@ -47,6 +59,7 @@ OVERLAY_DEVELOPMENT_TEAM = $development_team
 OVERLAY_MACOS_SYSTEM_PROFILE_SPECIFIER = $macos_system_profile_specifier
 OVERLAY_MACOS_STANDALONE_PROFILE_SPECIFIER = $macos_standalone_profile_specifier
 OVERLAY_APPLICATION_NAME = $application_name
+VPN_CLIENT_IMPORT_SCHEME = $client_import_scheme
 OVERLAY_APPLICATION_LINK = $application_link
 OVERLAY_CHANGELOG_LINK = $changelog_link
 OVERLAY_CONFIGURATION_LINK = $configuration_link
