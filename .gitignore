@@ -2,13 +2,14 @@
 /Libbox.xcframework/
 xcuserdata/
 .DS_Store
-/build/
+/build
 /sing-box.xcodeproj/project.pbxproj.back
 CLAUDE.md
 /.claude/
 /.mcp.json
 AGENTS.md
 /.codex/
+/.local/
 /screenshots/
 /fastlane/report.xml
 /fastlane/test_output/

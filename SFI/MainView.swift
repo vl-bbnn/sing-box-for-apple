@@ -15,6 +15,7 @@ struct MainView: View {
     @State private var showGroups = false
     @State private var showConnections = false
     @State private var buttonState = ButtonVisibilityState()
+    @State private var deviceScenarioAutostartAttempted = false
 
     private let profileEditor: (Binding<String>, Bool) -> AnyView = { text, isEditable in
         AnyView(ProfileEditorWrapperView(text: text, isEditable: isEditable))
@@ -149,7 +150,10 @@ struct MainView: View {
                     Task { @MainActor in updateButtonVisibility() }
                 }
                 .onReceive(environments.$extensionProfile) { _ in
-                    Task { @MainActor in updateButtonVisibility() }
+                    Task { @MainActor in
+                        updateButtonVisibility()
+                        scheduleDeviceScenarioAutostart()
+                    }
                 }
                 .onReceive(environments.$emptyProfiles) { _ in
                     Task { @MainActor in updateButtonVisibility() }
@@ -163,12 +167,15 @@ struct MainView: View {
         }
         .onAppear {
             environments.postReload()
+            scheduleDeviceScenarioAutostart()
         }
         .alert($alert)
         .globalChecks()
         .onChangeCompat(of: scenePhase) { newValue in
             if newValue == .active {
                 environments.postReload()
+                scheduleDeviceScenarioAutostart()
+                scheduleDeviceScenarioLogExport()
             }
         }
         .onChangeCompat(of: selection) { newValue in
@@ -189,6 +196,62 @@ struct MainView: View {
             profile: environments.extensionProfile,
             commandClient: environments.commandClient
         )
+    }
+
+    private func scheduleDeviceScenarioLogExport() {
+        guard ProcessInfo.processInfo.environment["WLT_DEVICE_SCENARIO"] == "1" else { return }
+        // Do not touch the command client during initial app launch: XCTest
+        // must finish establishing automation before any extension IPC starts.
+        guard environments.extensionProfile?.status.isConnected == true else { return }
+        DispatchQueue.main.asyncAfter(deadline: .now() + 1) {
+            guard environments.extensionProfile?.status.isConnected == true else { return }
+            environments.connect()
+            DispatchQueue.main.asyncAfter(deadline: .now() + 3) {
+                let text = environments.commandClient.logList
+                    .map(\.message)
+                    .joined(separator: "\n")
+                let url = FilePath.cacheDirectory.appendingPathComponent("wlt-device-service.log")
+                try? text.write(to: url, atomically: true, encoding: .utf8)
+            }
+        }
+    }
+
+    private func scheduleDeviceScenarioAutostart() {
+        #if os(iOS) && SFI_DEV
+            guard ProcessInfo.processInfo.environment["WLT_DEVICE_AUTOSTART"] == "1" else {
+                return
+            }
+            guard !deviceScenarioAutostartAttempted else { return }
+            guard let profile = environments.extensionProfile else { return }
+            deviceScenarioAutostartAttempted = true
+            NSLog("WLT_DEVICE_AUTOSTART stage=begin")
+            Task { @MainActor in
+                do {
+                    let selectedProfileID = await SharedPreferences.selectedProfileID.get()
+                    if let selectedProfile = try await ProfileManager.get(selectedProfileID),
+                       selectedProfile.type == .remote
+                    {
+                        NSLog("WLT_DEVICE_AUTOSTART stage=remote_profile_update_begin")
+                        try await selectedProfile.updateRemoteProfile()
+                        NSLog("WLT_DEVICE_AUTOSTART stage=remote_profile_update_done")
+                    }
+                    if profile.status.isConnected {
+                        NSLog("WLT_DEVICE_AUTOSTART stage=already_connected")
+                        scheduleDeviceScenarioLogExport()
+                        return
+                    }
+                    try await profile.start()
+                    NSLog("WLT_DEVICE_AUTOSTART stage=start_returned")
+                    try? await Task.sleep(nanoseconds: 10_000_000_000)
+                    scheduleDeviceScenarioLogExport()
+                } catch {
+                    NSLog(
+                        "WLT_DEVICE_AUTOSTART stage=failed error=%@",
+                        error.localizedDescription
+                    )
+                }
+            }
+        #endif
     }
 
     private struct StatusText: View {

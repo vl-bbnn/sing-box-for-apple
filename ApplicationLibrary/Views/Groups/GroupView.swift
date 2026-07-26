@@ -32,8 +32,9 @@ public struct GroupView: View {
                     Image(systemName: "arrow.up.to.line")
                 }
             }
+            .accessibilityIdentifier("wlt.group.\(group.tag).expand")
             #if os(macOS) || os(tvOS)
-            .buttonStyle(.plain)
+                .buttonStyle(.plain)
             #endif
             Button {
                 listViewModel.performURLTest(group.tag)
@@ -45,6 +46,7 @@ public struct GroupView: View {
             #endif
         }
         .padding([.top, .bottom], 8)
+        .accessibilityIdentifier("wlt.group.\(group.tag)")
         .animation(.easeInOut, value: group.isExpand)
     }
 
