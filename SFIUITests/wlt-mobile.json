@@ -38,9 +38,9 @@
   "steps": [
     { "action": "launch", "app": "vpn", "timeout": 30, "fatal": true },
     { "action": "wait_any", "app": "vpn", "identifiers": ["wlt.profile.selector"], "timeout": 30, "fatal": true },
-    { "action": "assert_text", "app": "vpn", "text": "WLT-clean", "timeout": 10, "fatal": true },
-    { "action": "tap_if_text", "app": "vpn", "text": "Started", "identifier": "wlt.connection.toggle", "timeout": 10, "fatal": true },
-    { "action": "assert_text", "app": "vpn", "text": "Stopped", "timeout": 30, "fatal": true },
+    { "action": "assert_text_contains", "app": "vpn", "text": "WLT-clean", "timeout": 10, "fatal": true },
+    { "action": "tap_if_text", "app": "vpn", "text": "Started", "identifier": "wlt.scenario.connection.stop", "timeout": 10, "fatal": true },
+    { "action": "assert_connection_status", "app": "vpn", "text": "Stopped", "timeout": 30, "fatal": true },
     { "action": "tap_any", "app": "vpn", "identifiers": ["wlt.profile.refresh"], "timeout": 10, "fatal": true },
     { "action": "wait", "seconds": 5 },
     { "action": "disable_wifi", "app": "springboard", "timeout": 30, "fatal": true },
@@ -48,8 +48,8 @@
     { "action": "activate", "app": "vpn", "timeout": 20, "fatal": true },
     { "action": "wait_any", "app": "vpn", "identifiers": ["wlt.profile.selector"], "timeout": 15, "fatal": true },
     { "action": "wait", "seconds": 3 },
-    { "action": "tap_any", "app": "vpn", "identifiers": ["wlt.connection.toggle"], "timeout": 10, "fatal": true },
-    { "action": "assert_text", "app": "vpn", "text": "Started", "timeout": 120, "fatal": true },
+    { "action": "tap_any", "app": "vpn", "identifiers": ["wlt.scenario.connection.start"], "timeout": 10, "fatal": true },
+    { "action": "assert_connection_status", "app": "vpn", "text": "Started", "timeout": 120, "fatal": true },
     { "action": "select_outbound", "app": "vpn", "group": "whitelist-exit", "outbound": "ru", "timeout": 30, "fatal": true },
     { "action": "screenshot", "name": "vpn-started-ru-lte" },
 

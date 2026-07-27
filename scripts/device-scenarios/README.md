@@ -69,6 +69,19 @@ WLT_CYCLE_RUNS=2 \
 scripts/iphone_wlt_cycle.sh
 ```
 
+Use `SFIUITests/wlt-memory-cycle.json` for the bounded RU -> EU -> RU endurance
+gate. It runs six 8 MiB downloads and holds the tunnel between route changes so
+PacketTunnel RSS, memory pressure, thermal state, and normal shutdown can be
+compared across repeated runs:
+
+```sh
+WLT_DEVICE_SCENARIO="$PWD/SFIUITests/wlt-memory-cycle.json" \
+WLT_SCENARIO_SKIP_BUILD=1 \
+WLT_SCENARIO_INSTALL_APP=never \
+WLT_CYCLE_RUNS=3 \
+scripts/iphone_wlt_cycle.sh
+```
+
 When more than one Apple development team is available, select the team used
 to sign both the app and the UI-test runner explicitly:
 
@@ -104,9 +117,10 @@ top-left corner and `(1, 1)` is the bottom-right corner. Supported actions are:
 
 - `launch`, `activate`, `terminate`, `home`, `disable_wifi`, and `enable_wifi`;
 - `tap`, `double_tap`, `long_press`, and `swipe`;
-- `tap_element`, `tap_any`, `tap_if_any`, `tap_if_text`, `dismiss_pip`,
-  `wait_element`, `wait_any`, `assert_text`, `assert_text_contains`,
-  `assert_text_absent`, and `assert_any_absent`;
+- `tap_element`, `tap_any`, `tap_if_any`, `tap_if_text`, `tap_if_text_at`,
+  `dismiss_pip`, `wait_element`, `wait_any`, `assert_text`,
+  `assert_text_contains`, `assert_connection_status`, `assert_text_absent`, and
+  `assert_any_absent`;
 - `type`, `type_into`, `type_into_any`, `wait`, `screenshot`, and `dump_ui`;
 - `select_outbound`, `youtube_quality`, `tap_twitch_live`, `tap_twitch_vod`, `twitch_quality`, `testflight_install`,
   `measure_download`,
@@ -116,6 +130,12 @@ top-left corner and `(1, 1)` is the bottom-right corner. Supported actions are:
 `type_into` focuses the element identified by `identifier` or `label` before
 typing. `tap_if_text` taps its target only when the supplied static `text` is
 currently visible, which is useful for normalizing state at scenario start.
+`assert_connection_status` reads the dedicated connection-status accessibility
+node and waits for an exact state. While the runner sets `WLT_DEVICE_SCENARIO`,
+the Dev app also exposes transparent 44-point
+`wlt.scenario.connection.start`/`stop` controls. They avoid the iOS 26+
+SwiftUI tab-bar accessory bug where a visible start button can report
+`isHittable=false`; ordinary Dev launches and all non-Dev builds omit them.
 `dismiss_pip` uses the SpringBoard accessibility hierarchy to close an active
 Picture-in-Picture window without relying on localized button labels or screen
 coordinates.

@@ -1,0 +1,54 @@
+{
+  "name": "WLT iOS RU EU memory endurance",
+  "continue_on_failure": false,
+  "apps": {
+    "safari": "com.apple.mobilesafari",
+    "springboard": "com.apple.springboard"
+  },
+  "cleanup_steps": [
+    { "action": "terminate", "app": "safari" }
+  ],
+  "steps": [
+    { "action": "launch", "app": "vpn", "timeout": 30, "fatal": true },
+    { "action": "wait_any", "app": "vpn", "identifiers": ["wlt.profile.selector"], "timeout": 30, "fatal": true },
+    { "action": "assert_text_contains", "app": "vpn", "text": "WLT-clean", "timeout": 10, "fatal": true },
+    { "action": "tap_if_text", "app": "vpn", "text": "Started", "identifier": "wlt.scenario.connection.stop", "timeout": 10, "fatal": true },
+    { "action": "assert_connection_status", "app": "vpn", "text": "Stopped", "timeout": 30, "fatal": true },
+    { "action": "tap_any", "app": "vpn", "identifiers": ["wlt.profile.refresh"], "timeout": 10, "fatal": true },
+    { "action": "wait", "seconds": 5 },
+    { "action": "disable_wifi", "app": "springboard", "timeout": 30, "fatal": true },
+    { "action": "wait", "seconds": 15 },
+    { "action": "activate", "app": "vpn", "timeout": 20, "fatal": true },
+    { "action": "tap_any", "app": "vpn", "identifiers": ["wlt.scenario.connection.start"], "timeout": 10, "fatal": true },
+    { "action": "assert_connection_status", "app": "vpn", "text": "Started", "timeout": 120, "fatal": true },
+    { "action": "select_outbound", "app": "vpn", "group": "whitelist-exit", "outbound": "ru", "timeout": 30, "fatal": true },
+    { "action": "screenshot", "name": "ru-started" },
+
+    { "action": "launch", "app": "safari", "timeout": 30, "fatal": true },
+    { "action": "tap_if_any", "app": "safari", "identifiers": ["DoneButton"], "timeout": 2 },
+    { "action": "type_into_any", "app": "safari", "identifiers": ["TabBarItemTitle"], "text": "https://google.com\n", "timeout": 10, "fatal": true },
+    { "action": "wait", "seconds": 5 },
+    { "action": "assert_web_loaded", "app": "safari", "name": "ru-google", "expected_texts": ["Поиск", "Search", "Мне повезёт", "I'm Feeling Lucky"], "timeout": 20, "fatal": true },
+    { "action": "measure_download", "name": "ru-download-01", "text": "https://speed.cloudflare.com/__down?bytes=8388608&seed=1", "minimum_bytes": 8000000, "timeout": 90, "fatal": true },
+    { "action": "measure_download", "name": "ru-download-02", "text": "https://speed.cloudflare.com/__down?bytes=8388608&seed=2", "minimum_bytes": 8000000, "timeout": 90, "fatal": true },
+    { "action": "measure_download", "name": "ru-download-03", "text": "https://speed.cloudflare.com/__down?bytes=8388608&seed=3", "minimum_bytes": 8000000, "timeout": 90, "fatal": true },
+    { "action": "wait", "seconds": 30 },
+    { "action": "activate", "app": "vpn", "timeout": 20, "fatal": true },
+    { "action": "assert_connection_status", "app": "vpn", "text": "Started", "timeout": 20, "fatal": true },
+    { "action": "select_outbound", "app": "vpn", "group": "whitelist-exit", "outbound": "eu", "timeout": 30, "fatal": true },
+    { "action": "screenshot", "name": "eu-selected" },
+
+    { "action": "launch", "app": "safari", "timeout": 30, "fatal": true },
+    { "action": "type_into_any", "app": "safari", "identifiers": ["TabBarItemTitle"], "text": "https://rutracker.org\n", "timeout": 10, "fatal": true },
+    { "action": "wait", "seconds": 5 },
+    { "action": "assert_web_loaded", "app": "safari", "name": "eu-rutracker", "expected_texts": ["Форум", "Вход", "Регистрация"], "timeout": 20, "fatal": true },
+    { "action": "measure_download", "name": "eu-download-01", "text": "https://speed.cloudflare.com/__down?bytes=8388608&seed=4", "minimum_bytes": 8000000, "timeout": 90, "fatal": true },
+    { "action": "measure_download", "name": "eu-download-02", "text": "https://speed.cloudflare.com/__down?bytes=8388608&seed=5", "minimum_bytes": 8000000, "timeout": 90, "fatal": true },
+    { "action": "measure_download", "name": "eu-download-03", "text": "https://speed.cloudflare.com/__down?bytes=8388608&seed=6", "minimum_bytes": 8000000, "timeout": 90, "fatal": true },
+    { "action": "wait", "seconds": 60 },
+    { "action": "activate", "app": "vpn", "timeout": 20, "fatal": true },
+    { "action": "assert_connection_status", "app": "vpn", "text": "Started", "timeout": 20, "fatal": true },
+    { "action": "select_outbound", "app": "vpn", "group": "whitelist-exit", "outbound": "ru", "timeout": 30, "fatal": true },
+    { "action": "screenshot", "name": "ru-restored" }
+  ]
+}

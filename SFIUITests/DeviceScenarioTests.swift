@@ -8,6 +8,7 @@ final class DeviceScenarioTests: XCTestCase {
     private var shouldRestoreWiFi = false
     private var failedSections = Set<String>()
     private var leaveVPNRunning = false
+    private var scenarioCompleted = false
 
     override func setUpWithError() throws {
         continueAfterFailure = true
@@ -24,12 +25,26 @@ final class DeviceScenarioTests: XCTestCase {
         defer {
             apps.removeAll()
             failedSections.removeAll()
+            scenarioCompleted = false
             scenario = nil
         }
 
         // Cleanup may need to launch a freshly signed development build. Restore
         // unrestricted Wi-Fi first so iOS can complete its online trust check.
         restoreWiFiIfNeeded()
+
+        if leaveVPNRunning, scenarioCompleted {
+            apps["safari"]?.terminate()
+            guard let vpnApp = apps["vpn"] else { return }
+            vpnApp.activate()
+            guard vpnApp.staticTexts["Started"].firstMatch.waitForExistence(timeout: 30) else {
+                attachScreenshot(named: "vpn-leave-running-not-started")
+                XCTFail("VPN was not running when the persistent scenario completed")
+                return
+            }
+            attachScreenshot(named: "vpn-left-running")
+            return
+        }
 
         for (index, step) in (scenario?.cleanupSteps ?? []).enumerated() {
             do {
@@ -42,15 +57,6 @@ final class DeviceScenarioTests: XCTestCase {
 
         guard let vpnApp = apps["vpn"] else { return }
         vpnApp.activate()
-        if leaveVPNRunning {
-            guard vpnApp.staticTexts["Started"].firstMatch.waitForExistence(timeout: 15) else {
-                attachScreenshot(named: "vpn-leave-running-not-started")
-                XCTFail("VPN was not running when the persistent scenario completed")
-                return
-            }
-            attachScreenshot(named: "vpn-left-running")
-            return
-        }
         guard vpnApp.staticTexts["Started"].firstMatch.waitForExistence(timeout: 3) else { return }
 
         // MainView exports the live command-client log when it returns to the
@@ -95,12 +101,16 @@ final class DeviceScenarioTests: XCTestCase {
             }
             Thread.sleep(forTimeInterval: 0.5)
         }
-        guard toggle.waitForExistence(timeout: 3), toggle.isHittable else {
+        guard toggle.waitForExistence(timeout: 3) else {
             attachScreenshot(named: "vpn-teardown-toggle-not-hittable")
             XCTFail("Cleanup could not reach the VPN stop button")
             return
         }
-        toggle.tap()
+        if toggle.isHittable {
+            toggle.tap()
+        } else {
+            vpnApp.coordinate(withNormalizedOffset: CGVector(dx: 0.94, dy: 0.875)).tap()
+        }
         guard vpnApp.staticTexts["Stopped"].firstMatch.waitForExistence(timeout: 30) else {
             attachScreenshot(named: "vpn-teardown-stop-timeout")
             XCTFail("Cleanup could not stop the VPN")
@@ -131,6 +141,7 @@ final class DeviceScenarioTests: XCTestCase {
                 }
             }
         }
+        scenarioCompleted = true
     }
 
     func testCrossAppProof() {
@@ -206,11 +217,16 @@ final class DeviceScenarioTests: XCTestCase {
                 thenHoldForDuration: step.endHoldDuration ?? 0
             )
         case "tap_element", "tap_any":
-            try findElement(step, in: app, timeout: timeout).tap()
+            try tapElement(findElement(step, in: app, timeout: timeout))
         case "tap_if_text":
             guard let text = step.text else { throw ScenarioError.invalidStep("tap_if_text requires text") }
             if app.staticTexts[text].firstMatch.exists {
-                try findElement(step, in: app, timeout: timeout).tap()
+                try tapElement(findElement(step, in: app, timeout: timeout))
+            }
+        case "tap_if_text_at":
+            guard let text = step.text else { throw ScenarioError.invalidStep("tap_if_text_at requires text") }
+            if app.staticTexts[text].firstMatch.exists {
+                try coordinate(step, in: app).tap()
             }
         case "tap_if_identifier":
             guard let identifier = step.identifier else {
@@ -218,11 +234,11 @@ final class DeviceScenarioTests: XCTestCase {
             }
             let element = app.descendants(matching: .any).matching(identifier: identifier).firstMatch
             if element.exists {
-                element.tap()
+                try tapElement(element)
             }
         case "tap_if_any":
             if let element = findElementIfPresent(step, in: app, timeout: timeout) {
-                element.tap()
+                try tapElement(element)
             }
         case "tap_and_assert_selected":
             try tapAndAssertSelected(step, in: app, timeout: timeout)
@@ -255,6 +271,22 @@ final class DeviceScenarioTests: XCTestCase {
             guard let text = step.text else { throw ScenarioError.invalidStep("assert_text requires text") }
             let element = app.staticTexts[text].firstMatch
             try require(element.waitForExistence(timeout: timeout), "text not found: \(text)")
+        case "assert_connection_status":
+            guard let text = step.text else {
+                throw ScenarioError.invalidStep("assert_connection_status requires text")
+            }
+            let status = app.descendants(matching: .any).matching(
+                identifier: "wlt.connection.status"
+            ).firstMatch
+            let deadline = Date().addingTimeInterval(timeout)
+            while Date() < deadline {
+                if status.exists, status.label == text { return }
+                Thread.sleep(forTimeInterval: 0.2)
+            }
+            let actualStatus = status.exists ? status.label : "missing"
+            throw ScenarioError.failed(
+                "connection status did not become \(text): \(actualStatus)"
+            )
         case "assert_text_contains":
             guard let text = step.text else { throw ScenarioError.invalidStep("assert_text_contains requires text") }
             let element = app.descendants(matching: .any).matching(
@@ -656,12 +688,29 @@ final class DeviceScenarioTests: XCTestCase {
         if stringValue(item.value) != "selected" {
             item.tap()
         }
+        var selected = stringValue(item.value) == "selected" || item.isSelected
         let deadline = Date().addingTimeInterval(timeout)
         while Date() < deadline {
-            if stringValue(item.value) == "selected" || item.isSelected { return }
+            if stringValue(item.value) == "selected" || item.isSelected {
+                selected = true
+                break
+            }
             Thread.sleep(forTimeInterval: 0.2)
         }
-        throw ScenarioError.failed("outbound did not become selected: \(group) -> \(outbound)")
+        try require(selected, "outbound did not become selected: \(group) -> \(outbound)")
+
+        // Groups is a draggable sheet on iPhone. Leaving it presented hides
+        // the connection status and can route later automation taps through a
+        // stale accessibility element behind the sheet.
+        let sheetGrabber = app.coordinate(withNormalizedOffset: CGVector(dx: 0.5, dy: 0.08))
+        let sheetBottom = app.coordinate(withNormalizedOffset: CGVector(dx: 0.5, dy: 0.95))
+        sheetGrabber.press(
+            forDuration: 0.05,
+            thenDragTo: sheetBottom,
+            withVelocity: .fast,
+            thenHoldForDuration: 0
+        )
+        Thread.sleep(forTimeInterval: 0.7)
     }
 
     private func selectYouTubeQuality(_ step: DeviceScenario.Step, in app: XCUIApplication, timeout: TimeInterval) throws {
@@ -1236,6 +1285,21 @@ final class DeviceScenarioTests: XCTestCase {
             throw ScenarioError.failed("element not found: \(step.elementSummary)")
         }
         return element
+    }
+
+    private func tapElement(_ element: XCUIElement) throws {
+        if element.isHittable {
+            element.tap()
+            return
+        }
+        let frame = element.frame
+        guard !frame.isEmpty, frame.width > 0, frame.height > 0 else {
+            throw ScenarioError.failed("element is not hittable and has no visible frame")
+        }
+        // SwiftUI's iOS 26+ tab-bar accessory can expose a visible control
+        // with a valid screen frame while XCTest reports isHittable=false.
+        // A coordinate tap avoids the broken scroll-to-visible hit point.
+        element.coordinate(withNormalizedOffset: CGVector(dx: 0.5, dy: 0.5)).tap()
     }
 
     private func findElementIfPresent(

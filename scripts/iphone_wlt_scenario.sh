@@ -684,6 +684,8 @@ preflight_target_app() {
     while true; do
         if devicectl_retry "$launch_label" device process launch \
             --device "$device" \
+            --terminate-existing \
+            --environment-variables '{"WLT_DEVICE_SCENARIO":"1"}' \
             "$bundle_identifier" \
             --timeout 60; then
             return 0
