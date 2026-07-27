@@ -6,7 +6,11 @@
     "springboard": "com.apple.springboard"
   },
   "cleanup_steps": [
-    { "action": "terminate", "app": "safari" }
+    { "action": "terminate", "app": "safari" },
+    { "action": "activate", "app": "vpn", "timeout": 20 },
+    { "action": "tap_if_text", "app": "vpn", "text": "Started", "identifier": "wlt.scenario.connection.stop", "timeout": 10 },
+    { "action": "assert_connection_status", "app": "vpn", "text": "Stopped", "timeout": 30 },
+    { "action": "enable_wifi", "app": "springboard", "timeout": 30 }
   ],
   "steps": [
     { "action": "launch", "app": "vpn", "timeout": 30, "fatal": true },
