@@ -8,15 +8,11 @@ public final class OverviewViewModel: BaseViewModel {
     @Published public var reasserting = false
 
     public func switchProfile(_ profileID: Int64, profile: ExtensionProfile, environments: ExtensionEnvironments) async {
-        await SharedPreferences.selectedProfileID.set(profileID)
-        environments.selectedProfileUpdate.send()
-
-        if profile.status.isConnected {
-            do {
-                try await profile.reloadService()
-            } catch {
-                alert = AlertState(action: "reload service", error: error)
-            }
+        do {
+            try await profile.selectProfile(profileID)
+            environments.selectedProfileUpdate.send()
+        } catch {
+            alert = AlertState(action: "switch profile", error: error)
         }
         reasserting = false
     }

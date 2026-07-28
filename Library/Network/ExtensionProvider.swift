@@ -86,8 +86,12 @@ open class ExtensionProvider: NEPacketTunnelProvider {
     guard let startOptionsURL else {
       return
     }
-    let data = try ExtensionStartOptions.encode(options)
-    try data.write(to: startOptionsURL, options: .atomic)
+    if startOptionsURL == ExtensionStartOptions.snapshotURL {
+      try ExtensionStartOptions.persist(options)
+    } else {
+      let data = try ExtensionStartOptions.encode(options)
+      try data.write(to: startOptionsURL, options: .atomic)
+    }
   }
 
   private func loadPersistedStartOptions() throws -> [String: NSObject]? {

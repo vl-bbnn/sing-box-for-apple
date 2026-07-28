@@ -455,14 +455,12 @@ public class StatusBarController: NSObject, NSMenuDelegate {
     @objc private func selectProfile(_ sender: NSMenuItem) {
         guard let profileID = sender.representedObject as? Int64 else { return }
         Task {
-            await SharedPreferences.selectedProfileID.set(profileID)
-            environments.selectedProfileUpdate.send()
-            if environments.extensionProfile?.status.isConnected == true {
-                do {
-                    try await environments.extensionProfile?.reloadService()
-                } catch {
-                    showAlert(error: error)
-                }
+            do {
+                guard let profile = environments.extensionProfile else { return }
+                try await profile.selectProfile(profileID)
+                environments.selectedProfileUpdate.send()
+            } catch {
+                showAlert(error: error)
             }
             await loadProfiles()
         }

@@ -232,12 +232,39 @@ public class ExtensionProfile: ObservableObject {
     }
   }
 
-  private func prepareStartOptions() async throws -> [String: NSObject] {
+  public func selectProfile(_ profileID: Int64) async throws {
+    let options = try await prepareStartOptions(profileID: profileID)
+
+    // On-demand starts do not carry start options. Arm the recovery snapshot
+    // before publishing the selection so an overlapping reconnect cannot boot
+    // the previously selected profile.
+    try ExtensionStartOptions.persist(options)
+    await SharedPreferences.selectedProfileID.set(profileID)
+
+    switch status {
+    case .connected:
+      do {
+        try await reloadService()
+      } catch {
+        // A provider message can race with an extension reconnect. A full
+        // restart always supplies fresh start options from the selected profile.
+        try await restart()
+      }
+    case .connecting, .disconnecting, .reasserting:
+      try await restart()
+    default:
+      break
+    }
+  }
+
+  private func prepareStartOptions(profileID explicitProfileID: Int64? = nil) async throws
+    -> [String: NSObject]
+  {
     var options: [String: NSObject] = [
       "manualStart": NSNumber(value: true)
     ]
 
-    let profileID = await SharedPreferences.selectedProfileID.get()
+    let profileID = explicitProfileID ?? SharedPreferences.selectedProfileID.getBlocking()
     guard let profile = try await ProfileManager.get(profileID) else {
       throw NSError(
         domain: "ExtensionProfile", code: -1,
@@ -248,6 +275,7 @@ public class ExtensionProfile: ObservableObject {
 
     let configContent = try await profile.readAsync()
     options["configContent"] = NSString(string: configContent)
+    options["profileID"] = NSNumber(value: profileID)
 
     #if !os(macOS)
       options["ignoreMemoryLimit"] = await NSNumber(
