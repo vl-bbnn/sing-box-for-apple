@@ -24,15 +24,31 @@ lock, missing developer trust, and disabled Developer Mode before Wi-Fi is
 disabled. Physical passcode/Face ID unlock remains intentionally impossible to
 automate.
 
+Developer trust must be established by launching the built runner while the
+unlocked iPhone has unrestricted Wi-Fi access to Apple's verification
+services. On affected iOS/Xcode versions, **Settings -> General -> VPN & Device
+Management** may contain no developer entry even though XCTest reports
+`Developer App Certificate is not trusted`; there is then no manual trust
+button to press. Return the device to Wi-Fi and rerun the no-op XCTest
+preflight. Do not rebuild or reinstall on restricted LTE: validation cannot
+complete there, and either action can invalidate a runner that was already
+usable. After one successful Wi-Fi launch, reuse the same build with
+`WLT_SCENARIO_SKIP_BUILD=1` and `WLT_SCENARIO_INSTALL_APP=never` for LTE cycles.
+
 Before XCTest, the runner terminates stale `Runner.app` processes left on the
-iPhone by earlier Xcode projects. It deliberately does not terminate the
-device-side AutomationMode writer/UI processes: on current iOS/Xcode betas that
-can discard an authenticated grant and cause a new passcode prompt. A retry
-resets only stale runner processes and the current user's Mac CoreDevice
-service. A surviving CoreDevice service
+iPhone by earlier Xcode projects. By default it does not terminate the
+device-side AutomationMode writer: on current iOS/Xcode betas that can discard
+an authenticated grant and cause a new passcode prompt. On a dedicated Mac
+already configured for passwordless Automation Mode,
+`WLT_SCENARIO_RESET_AUTOMATION_ON_TIMEOUT=1` enables a single controlled writer
+reset only after XCTest reports `Timed out while enabling automation mode` and
+before the existing retry. A retry also resets the current user's Mac
+CoreDevice service. A surviving CoreDevice service
 owned by another simultaneously logged-in macOS console user is reported as
 `coredevice_competing_console_session`; log out that other console session and
 rerun, because the current user cannot safely take over its automation channel.
+A second logged-in session without its own live CoreDevice service is recorded
+for diagnostics but is not classified as competition.
 
 For unattended cycles, configure the Mac once from an administrator session:
 

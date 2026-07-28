@@ -18,6 +18,7 @@ test_host_timeout="${WLT_SCENARIO_TEST_HOST_TIMEOUT:-3600}"
 close_mirroring="${WLT_SCENARIO_CLOSE_MIRRORING:-0}"
 preflight_app="${WLT_SCENARIO_PREFLIGHT_APP:-1}"
 test_attempt_limit="${WLT_SCENARIO_TEST_ATTEMPTS:-2}"
+reset_automation_on_timeout="${WLT_SCENARIO_RESET_AUTOMATION_ON_TIMEOUT:-0}"
 preflight_wait_seconds="${WLT_SCENARIO_PREFLIGHT_WAIT_SECONDS:-180}"
 install_app_mode="${WLT_SCENARIO_INSTALL_APP:-auto}"
 leave_running="${WLT_SCENARIO_LEAVE_RUNNING:-0}"
@@ -178,10 +179,15 @@ for process in processes:
     parsed = urlparse(executable)
     executable_path = unquote(parsed.path if parsed.scheme == "file" else executable)
     is_runner = executable_path.endswith("/Runner.app/Runner")
-    # Never terminate AutomationMode system processes here. On current iOS/Xcode
-    # betas that can discard a successfully authenticated Automation Mode grant
-    # and turn an infrastructure retry into another physical passcode prompt.
-    if not is_runner:
+    is_automation_writer = executable_path.endswith(
+        "/AutomationMode.framework/automationmode-writer"
+    )
+    selected = (
+        is_runner if mode == "runners"
+        else is_automation_writer if mode == "writer"
+        else False
+    )
+    if not selected:
         continue
     pid = process.get("processIdentifier")
     if isinstance(pid, int) and pid > 1:
@@ -213,10 +219,16 @@ record_competing_coredevice_sessions() {
             $1 != current && $2 == "console" { print }
         '
     } >"$destination"
-    # Section headers alone are not evidence. A second logged-in Aqua session
-    # can retain CoreSimulator/Automation Mode ownership even when its
-    # CoreDeviceService process is no longer visible.
-    /usr/bin/awk '$0 !~ /^\[/ && NF { found=1 } END { exit !found }' "$destination"
+    # A second Aqua session alone is not proof of ownership: a device-side
+    # AutomationMode writer reset can recover while that session remains logged
+    # in. Classify competition only when another user actually owns a live
+    # CoreDeviceService process; keep the console list as supporting evidence.
+    /usr/bin/awk '
+        /^\[other CoreDeviceService owners\]/ { section=1; next }
+        /^\[/ { section=0; next }
+        section && NF { found=1 }
+        END { exit !found }
+    ' "$destination"
 }
 
 devicectl_retry() {
@@ -747,6 +759,8 @@ run() {
     validate_positive_integer WLT_SCENARIO_TEST_HOST_TIMEOUT "$test_host_timeout"
     validate_positive_integer WLT_SCENARIO_TEST_ATTEMPTS "$test_attempt_limit"
     validate_non_negative_integer WLT_SCENARIO_PREFLIGHT_WAIT_SECONDS "$preflight_wait_seconds"
+    [[ "$reset_automation_on_timeout" == "0" || "$reset_automation_on_timeout" == "1" ]] \
+        || die "WLT_SCENARIO_RESET_AUTOMATION_ON_TIMEOUT must be 0 or 1"
     case "$install_app_mode" in
         auto | always | never | 0 | 1) ;;
         *) die "WLT_SCENARIO_INSTALL_APP must be auto, always, never, 0, or 1" ;;
@@ -853,9 +867,17 @@ run() {
             && is_coredevice_failure "$test_log" \
             && ! rg -q 'Test Suite .*DeviceScenarioTests.* started|testScenario.*started|Step [0-9]+ failed|failed - Step [0-9]+' "$test_log"; then
             log "XCTest did not start because CoreDevice failed; retrying ($attempt/$test_attempt_limit)"
-            # Preserve the authenticated Automation Mode grant. Clearing its
-            # device-side writer/UI processes can force another passcode prompt.
-            reset_device_automation "$device" runners || true
+            if [[ "$reset_automation_on_timeout" == "1" ]] \
+                && rg -qi 'Timed out while enabling automation mode' "$test_log" \
+                && ! automation_mode_requires_authentication; then
+                # This recovery is opt-in because killing a healthy writer can
+                # discard its grant. It is safe for the unattended optimizer
+                # only after automationmodetool confirms passwordless mode.
+                log "resetting the stale device Automation Mode writer before retry"
+                reset_device_automation "$device" writer || true
+            else
+                reset_device_automation "$device" runners || true
+            fi
             repair_coredevice "$device" || true
             continue
         fi
