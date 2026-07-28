@@ -13,9 +13,10 @@ WLT_DEVICE_SCENARIO=/path/to/scenario.json scripts/iphone_wlt_scenario.sh
 Coordinates are normalized to the active application's frame: `(0, 0)` is the
 top-left corner and `(1, 1)` is the bottom-right corner. Supported actions are:
 
-- `launch`, `activate`, `terminate`, and `home`;
+- `launch`, `launch_if_installed`, `activate`, `terminate`, and `home`;
 - `tap`, `double_tap`, `long_press`, and `swipe`;
-- `tap_element`, `tap_if_text`, `dismiss_pip`, `wait_element`, `assert_text`,
+- `tap_element`, `tap_if_text`, `tap_text`, `tap_text_if_present`, `dismiss_pip`,
+  `wait_element`, `wait_text`, `wait_text_absent`, `wait_text_if_present`, `assert_text`,
   and `assert_text_absent`;
 - `type`, `type_into`, `wait`, `screenshot`, and `dump_ui`.
 
@@ -29,7 +30,8 @@ coordinates.
 Application aliases are declared in the scenario's `apps` dictionary. `vpn`
 is reserved for the SFI application under test. Known public bundle IDs used by
 the default scenario are Safari (`com.apple.mobilesafari`), YouTube
-(`com.google.ios.youtube`), and Twitch (`tv.twitch`).
+(`com.google.ios.youtube`), Twitch (`tv.twitch`), and Discord
+(`com.hammerandchisel.discord`).
 
 Keep private URLs and user-specific sequences outside the repository. The host
 script injects the selected JSON into the UI-test runner through a generated

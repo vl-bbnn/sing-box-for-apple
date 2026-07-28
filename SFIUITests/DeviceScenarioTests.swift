@@ -4,6 +4,7 @@ import XCTest
 final class DeviceScenarioTests: XCTestCase {
     private var scenario: DeviceScenario!
     private var apps: [String: XCUIApplication] = [:]
+    private var skippedApps: Set<String> = []
 
     override func setUpWithError() throws {
         continueAfterFailure = false
@@ -18,6 +19,7 @@ final class DeviceScenarioTests: XCTestCase {
     override func tearDownWithError() throws {
         defer {
             apps.removeAll()
+            skippedApps.removeAll()
             scenario = nil
         }
         guard let vpnApp = apps["vpn"] else { return }
@@ -62,13 +64,25 @@ final class DeviceScenarioTests: XCTestCase {
     }
 
     private func execute(_ step: DeviceScenario.Step) throws {
-        let app = application(named: step.app ?? "vpn")
+        let appName = step.app ?? "vpn"
+        let app = application(named: appName)
         let timeout = step.timeout ?? 20
+
+        if skippedApps.contains(appName) {
+            return
+        }
 
         switch step.action {
         case "launch":
             app.launch()
             try require(app.wait(for: .runningForeground, timeout: timeout), "app did not enter foreground")
+        case "launch_if_installed":
+            app.launch()
+            guard app.wait(for: .runningForeground, timeout: timeout) else {
+                skippedApps.insert(appName)
+                attachScreenshot(named: step.name ?? "\(appName)-not-available")
+                return
+            }
         case "activate":
             app.activate()
             try require(app.wait(for: .runningForeground, timeout: timeout), "app did not enter foreground")
@@ -98,6 +112,13 @@ final class DeviceScenarioTests: XCTestCase {
             if app.staticTexts[text].firstMatch.exists {
                 try findElement(step, in: app, timeout: timeout).tap()
             }
+        case "tap_text":
+            guard let text = step.text else { throw ScenarioError.invalidStep("tap_text requires text") }
+            try textElement(text, in: app, timeout: timeout).tap()
+        case "tap_text_if_present":
+            guard let text = step.text else { throw ScenarioError.invalidStep("tap_text_if_present requires text") }
+            let element = try textElement(text, in: app, timeout: min(timeout, 1), required: false)
+            if element.exists { element.tap() }
         case "dismiss_pip":
             let pip = app.windows.matching(identifier: "PIP-SBInteractionPassThroughView").firstMatch
             if pip.exists {
@@ -121,6 +142,18 @@ final class DeviceScenarioTests: XCTestCase {
             app.typeText(text)
         case "wait_element":
             _ = try findElement(step, in: app, timeout: timeout)
+        case "wait_text":
+            guard let text = step.text else { throw ScenarioError.invalidStep("wait_text requires text") }
+            _ = try textElement(text, in: app, timeout: timeout)
+        case "wait_text_absent":
+            guard let text = step.text else { throw ScenarioError.invalidStep("wait_text_absent requires text") }
+            let element = try textElement(text, in: app, timeout: 0, required: false)
+            let expectation = XCTNSPredicateExpectation(predicate: NSPredicate(format: "exists == false"), object: element)
+            let result = XCTWaiter().wait(for: [expectation], timeout: timeout)
+            try require(result == .completed, "text did not disappear: \(text)")
+        case "wait_text_if_present":
+            guard let text = step.text else { throw ScenarioError.invalidStep("wait_text_if_present requires text") }
+            _ = try textElement(text, in: app, timeout: min(timeout, 1), required: false)
         case "assert_text":
             guard let text = step.text else { throw ScenarioError.invalidStep("assert_text requires text") }
             let element = app.staticTexts[text].firstMatch
@@ -166,6 +199,26 @@ final class DeviceScenarioTests: XCTestCase {
             throw ScenarioError.invalidStep("element action requires identifier or label")
         }
         try require(element.waitForExistence(timeout: timeout), "element not found")
+        return element
+    }
+
+    private func textElement(
+        _ text: String,
+        in app: XCUIApplication,
+        timeout: TimeInterval,
+        required: Bool = true
+    ) throws -> XCUIElement {
+        let predicate = NSPredicate(
+            format: "label == %@ OR label CONTAINS %@ OR value == %@ OR value CONTAINS %@",
+            text,
+            text,
+            text,
+            text
+        )
+        let element = app.descendants(matching: .any).matching(predicate).firstMatch
+        if required {
+            try require(element.waitForExistence(timeout: timeout), "text not found: \(text)")
+        }
         return element
     }
 

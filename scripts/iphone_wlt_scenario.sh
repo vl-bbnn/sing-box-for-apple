@@ -39,9 +39,8 @@ for device in devices:
     hardware = device.get("hardwareProperties", {})
     if hardware.get("deviceType") != "iPhone":
         continue
-    state = str(device.get("deviceProperties", {}).get("bootState", ""))
     connection = device.get("connectionProperties", {})
-    if connection.get("tunnelState") == "connected" or "available" in str(device.get("state", "")) or state == "booted":
+    if connection.get("pairingState") == "paired":
         matches.append(device)
 if len(matches) != 1:
     raise SystemExit(f"expected exactly one available iPhone, found {len(matches)}; connect by USB, unlock it, or set DEVICE_ID")

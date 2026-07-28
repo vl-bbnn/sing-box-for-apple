@@ -4,7 +4,8 @@
     "safari": "com.apple.mobilesafari",
     "springboard": "com.apple.springboard",
     "youtube": "com.google.ios.youtube",
-    "twitch": "tv.twitch"
+    "twitch": "tv.twitch",
+    "discord": "com.hammerandchisel.discord"
   },
   "steps": [
     { "action": "launch", "app": "vpn", "timeout": 30 },
@@ -46,6 +47,23 @@
     { "action": "wait", "seconds": 45 },
     { "action": "assert_text_absent", "app": "twitch", "text": "Произошла ошибка. Повторите попытку.", "timeout": 1 },
     { "action": "screenshot", "name": "twitch-playback" },
+
+    { "action": "launch_if_installed", "app": "discord", "timeout": 30, "name": "discord-unavailable" },
+    { "action": "wait_text_if_present", "app": "discord", "text": "Тест", "timeout": 10 },
+    { "action": "tap_text_if_present", "app": "discord", "text": "Тест", "timeout": 5 },
+    { "action": "swipe", "app": "discord", "name": "open-discord-server-drawer", "x": 0.01, "y": 0.5, "end_x": 0.95, "end_y": 0.5, "duration": 0.4 },
+    { "action": "tap", "app": "discord", "name": "expand-discord-voice-category", "x": 0.5, "y": 0.70 },
+    { "action": "wait_text_if_present", "app": "discord", "text": "Голосовые каналы", "timeout": 10 },
+    { "action": "wait_text_if_present", "app": "discord", "text": "Комната для встреч", "timeout": 10 },
+    { "action": "tap_text", "app": "discord", "text": "Комната для встреч", "timeout": 10 },
+    { "action": "wait", "app": "discord", "seconds": 1 },
+    { "action": "tap_text", "app": "discord", "text": "Комната для встреч", "timeout": 10 },
+    { "action": "tap_element", "app": "discord", "label": "Присоединиться к голосовому каналу", "timeout": 10 },
+    { "action": "wait_text", "app": "discord", "text": "Отключиться", "timeout": 20 },
+    { "action": "screenshot", "app": "discord", "name": "discord-test-meetings-voice" },
+    { "action": "wait", "app": "discord", "seconds": 5 },
+    { "action": "tap_element", "app": "discord", "label": "Отключиться", "timeout": 10 },
+    { "action": "wait_text_absent", "app": "discord", "text": "Отключиться", "timeout": 20 },
 
     { "action": "activate", "app": "vpn", "timeout": 30 },
     { "action": "assert_text", "app": "vpn", "text": "Started", "timeout": 30 },
