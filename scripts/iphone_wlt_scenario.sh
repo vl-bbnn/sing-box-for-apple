@@ -89,7 +89,7 @@ run_with_host_timeout() {
     else
         status=$?
     fi
-    kill "$watchdog" >/dev/null 2>&1 || true
+    terminate_process_tree "$watchdog"
     wait "$watchdog" >/dev/null 2>&1 || true
     if [[ -s "$marker" ]]; then
         printf 'WLT_HOST_TIMEOUT seconds=%s command=%q\n' "$timeout_seconds" "$1" >&2
@@ -115,6 +115,13 @@ is_coredevice_failure() {
     local path="$1"
     rg -qi \
         'CoreDeviceService to fully initialize|XPCConnectionDescription.*CoreDeviceService|connection was invalidated|CoreDeviceCLISupport|com\.apple\.coredevice\.devicectl error 1|Timed out while enabling automation mode|Unable to find a destination matching the provided destination specifier' \
+        "$path"
+}
+
+is_xctest_session_failure() {
+    local path="$1"
+    rg -qi \
+        'Not authorized for performing UI testing actions|Failed to determine whether continuity display is enabled|Timed out while checking for continuity enablement|Failed to create directory on device .* to hold runtime profiles|The system failed to get the path on the remote device for the provided domain|<unknown>:0: error: .* : .* crashed' \
         "$path"
 }
 
@@ -178,7 +185,16 @@ for process in processes:
     executable = str(process.get("executable", ""))
     parsed = urlparse(executable)
     executable_path = unquote(parsed.path if parsed.scheme == "file" else executable)
-    is_runner = executable_path.endswith("/Runner.app/Runner")
+    executable_name = executable_path.rsplit("/", 1)[-1]
+    bundle_name = executable_path.rsplit("/", 2)[-2] if "/" in executable_path else ""
+    is_runner = (
+        executable_path.endswith("/Runner.app/Runner")
+        or (
+            bundle_name.endswith("UITests-Runner.app")
+            and executable_name == bundle_name.removesuffix(".app")
+        )
+        or executable_path.endswith("/XCTRunner.app/XCTRunner")
+    )
     is_automation_writer = executable_path.endswith(
         "/AutomationMode.framework/automationmode-writer"
     )
@@ -266,8 +282,8 @@ classify_log_failure() {
         printf 'developer_mode_required\n'
     elif rg -qi 'application.*not (found|installed)|ApplicationNotFound|Failed to find.*application' "$path"; then
         printf 'app_not_installed\n'
-    elif rg -qi 'Failed to determine whether continuity display is enabled|Timed out while checking for continuity enablement' "$path"; then
-        printf 'xctest_continuity_unavailable\n'
+    elif is_xctest_session_failure "$path"; then
+        printf 'xctest_automation_unavailable\n'
     elif rg -qi 'Step [0-9]+ failed|failed - Step [0-9]+|Test Case .* failed' "$path"; then
         printf 'scenario_failed\n'
     elif is_coredevice_failure "$path"; then
@@ -443,6 +459,7 @@ PY
 
 write_scenario_report() {
     local test_log="$1"
+    local metrics_dir="${2:-}"
     local scenario="$artifact_dir/scenario.json"
     [[ -f "$scenario" && -f "$test_log" ]] || return 0
     /usr/bin/python3 - "$scenario" "$test_log" "$artifact_dir/scenario-report.json" "$artifact_dir/scenario-report.tsv" <<'PY'
@@ -525,6 +542,21 @@ with open(tsv_path, "w", encoding="utf-8", newline="") as handle:
     for item in failures:
         writer.writerow([item["step"], item["app"], item["action"], item["name"], item["category"], item["error"]])
 PY
+    /usr/bin/python3 "$script_dir/iphone_wlt_xcresult_metrics.py" \
+        --report "$artifact_dir/scenario-report.json" \
+        --attachments "$metrics_dir" \
+        >"$artifact_dir/wlt-metric-merge.json"
+}
+
+export_wlt_metric_attachments() {
+    local result_bundle="$1"
+    local output_dir="$2"
+    [[ -d "$result_bundle" ]] || return 1
+    xcrun xcresulttool export attachments \
+        --path "$result_bundle" \
+        --output-path "$output_dir" \
+        --filter 'wlt-metric-*' \
+        >"$artifact_dir/xcresult-metric-export.log" 2>&1
 }
 
 close_iphone_mirroring() {
@@ -863,23 +895,37 @@ run() {
         if ((test_status == 0)); then
             break
         fi
-        if ((attempt < test_attempt_limit)) \
-            && is_coredevice_failure "$test_log" \
-            && ! rg -q 'Test Suite .*DeviceScenarioTests.* started|testScenario.*started|Step [0-9]+ failed|failed - Step [0-9]+' "$test_log"; then
-            log "XCTest did not start because CoreDevice failed; retrying ($attempt/$test_attempt_limit)"
-            if [[ "$reset_automation_on_timeout" == "1" ]] \
-                && rg -qi 'Timed out while enabling automation mode' "$test_log" \
-                && ! automation_mode_requires_authentication; then
-                # This recovery is opt-in because killing a healthy writer can
-                # discard its grant. It is safe for the unattended optimizer
-                # only after automationmodetool confirms passwordless mode.
-                log "resetting the stale device Automation Mode writer before retry"
-                reset_device_automation "$device" writer || true
-            else
+        if ((attempt < test_attempt_limit)); then
+            if is_xctest_session_failure "$test_log"; then
+                log "XCTest automation session failed; resetting stale device runners before retry ($attempt/$test_attempt_limit)"
                 reset_device_automation "$device" runners || true
+                if [[ "$reset_automation_on_timeout" == "1" ]] \
+                    && ! automation_mode_requires_authentication; then
+                    # The unattended optimizer opts into resetting a stale
+                    # device-side Automation Mode writer only after macOS says
+                    # that recreating it does not require user authentication.
+                    reset_device_automation "$device" writer || true
+                fi
+                sleep 3
+                continue
             fi
-            repair_coredevice "$device" || true
-            continue
+            if is_coredevice_failure "$test_log" \
+                && ! rg -q 'Test Suite .*DeviceScenarioTests.* started|testScenario.*started|Step [0-9]+ failed|failed - Step [0-9]+' "$test_log"; then
+                log "XCTest did not start because CoreDevice failed; retrying ($attempt/$test_attempt_limit)"
+                if [[ "$reset_automation_on_timeout" == "1" ]] \
+                    && rg -qi 'Timed out while enabling automation mode' "$test_log" \
+                    && ! automation_mode_requires_authentication; then
+                    # This recovery is opt-in because killing a healthy writer can
+                    # discard its grant. It is safe for the unattended optimizer
+                    # only after automationmodetool confirms passwordless mode.
+                    log "resetting the stale device Automation Mode writer before retry"
+                    reset_device_automation "$device" writer || true
+                else
+                    reset_device_automation "$device" runners || true
+                fi
+                repair_coredevice "$device" || true
+                continue
+            fi
         fi
         break
     done
@@ -920,7 +966,11 @@ run() {
         fi
         log "test failed: $final_classification"
     fi
-    write_scenario_report "$test_log"
+    local metric_attachments="$artifact_dir/wlt-metric-attachments"
+    if ! export_wlt_metric_attachments "$result_bundle" "$metric_attachments"; then
+        log "could not export WLT metric attachments; optimizer will classify the missing metrics as infrastructure"
+    fi
+    write_scenario_report "$test_log" "$metric_attachments"
     return "$test_status"
 }
 

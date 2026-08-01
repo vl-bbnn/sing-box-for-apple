@@ -1,3 +1,4 @@
+import Darwin
 import Network
 import XCTest
 
@@ -325,6 +326,8 @@ final class DeviceScenarioTests: XCTestCase {
             try tapFirstTwitchVOD(in: app, timeout: timeout)
         case "testflight_install":
             try installTestFlightApp(step, in: app, timeout: timeout)
+        case "dns_probe":
+            try dnsProbe(step)
         case "measure_download":
             try measureDownload(step, timeout: timeout)
         case "screenshot":
@@ -1228,20 +1231,23 @@ final class DeviceScenarioTests: XCTestCase {
         }
         session.finishTasksAndInvalidate()
 
-        let elapsed = max(Date().timeIntervalSince(startedAt), 0.001)
+        let finishedAt = Date()
+        let elapsed = max(finishedAt.timeIntervalSince(startedAt), 0.001)
         let snapshot = result.snapshot()
         let bytesPerSecond = Double(snapshot.bytes) / elapsed
         let measurement = String(
-            format: "host=%@ status=%d bytes=%d elapsed_ms=%.0f bytes_per_second=%.0f kib_per_second=%.1f",
+            format: "host=%@ status=%d bytes=%d elapsed_ms=%.0f bytes_per_second=%.0f kib_per_second=%.1f started_at_unix_ms=%.0f finished_at_unix_ms=%.0f",
             host,
             snapshot.statusCode,
             snapshot.bytes,
             elapsed * 1000,
             bytesPerSecond,
-            bytesPerSecond / 1024
+            bytesPerSecond / 1024,
+            startedAt.timeIntervalSince1970 * 1000,
+            finishedAt.timeIntervalSince1970 * 1000
         )
         let attachment = XCTAttachment(string: measurement)
-        attachment.name = step.name ?? "download-measurement"
+        attachment.name = "wlt-metric-download-\(step.name ?? "download")"
         attachment.lifetime = .keepAlways
         add(attachment)
 
@@ -1257,6 +1263,58 @@ final class DeviceScenarioTests: XCTestCase {
                 bytesPerSecond >= minimumBytesPerSecond,
                 "download too slow from \(host): \(Int(bytesPerSecond)) < \(Int(minimumBytesPerSecond)) B/s"
             )
+        }
+    }
+
+    private func dnsProbe(_ step: DeviceScenario.Step) throws {
+        guard let host = step.text, !host.isEmpty else {
+            throw ScenarioError.invalidStep("dns_probe requires a hostname in text")
+        }
+
+        let queryHost: String
+        if step.cacheBust ?? false {
+            let nonce = UInt64(Date().timeIntervalSince1970 * 1_000_000)
+            queryHost = "wlt-\(nonce).\(host)"
+        } else {
+            queryHost = host
+        }
+        guard queryHost.utf8.count <= 253 else {
+            throw ScenarioError.invalidStep("dns_probe hostname is too long after cache busting")
+        }
+
+        var hints = addrinfo()
+        hints.ai_family = AF_UNSPEC
+        hints.ai_socktype = Int32(SOCK_STREAM.rawValue)
+        hints.ai_flags = AI_ADDRCONFIG
+        var result: UnsafeMutablePointer<addrinfo>?
+        let startedAt = Date()
+        let status = queryHost.withCString { pointer in
+            getaddrinfo(pointer, nil, &hints, &result)
+        }
+        if let result {
+            freeaddrinfo(result)
+        }
+
+        let finishedAt = Date()
+        let elapsed = max(finishedAt.timeIntervalSince(startedAt), 0.001)
+        let success = status == 0
+        let expectedSuccess = step.expectedSuccess ?? true
+        let message = String(
+            format: "host=%@ status=%d elapsed_ms=%.0f success=%@ started_at_unix_ms=%.0f finished_at_unix_ms=%.0f",
+            queryHost,
+            status,
+            elapsed * 1000,
+            success ? "true" : "false",
+            startedAt.timeIntervalSince1970 * 1000,
+            finishedAt.timeIntervalSince1970 * 1000
+        )
+        let attachment = XCTAttachment(string: message)
+        attachment.name = "wlt-metric-dns-\(step.name ?? "dns-probe")"
+        attachment.lifetime = .keepAlways
+        add(attachment)
+
+        if success != expectedSuccess {
+            throw ScenarioError.failed("DNS probe expectation mismatch for \(queryHost): status \(status)")
         }
     }
 
@@ -1503,6 +1561,8 @@ private struct DeviceScenario: Decodable {
         let minimumBytes: Int?
         let minimumBytesPerSecond: Double?
         let rangeBytes: Int?
+        let expectedSuccess: Bool?
+        let cacheBust: Bool?
         let section: String?
         let group: String?
         let outbound: String?
@@ -1535,6 +1595,8 @@ private struct DeviceScenario: Decodable {
             case minimumBytes = "minimum_bytes"
             case minimumBytesPerSecond = "minimum_bytes_per_second"
             case rangeBytes = "range_bytes"
+            case expectedSuccess = "expected_success"
+            case cacheBust = "cache_bust"
             case section
             case endX = "end_x"
             case endY = "end_y"
@@ -1566,6 +1628,8 @@ private struct DeviceScenario: Decodable {
             minimumBytes = try container.decodeIfPresent(Int.self, forKey: .minimumBytes)
             minimumBytesPerSecond = try container.decodeIfPresent(Double.self, forKey: .minimumBytesPerSecond)
             rangeBytes = try container.decodeIfPresent(Int.self, forKey: .rangeBytes)
+            expectedSuccess = try container.decodeIfPresent(Bool.self, forKey: .expectedSuccess)
+            cacheBust = try container.decodeIfPresent(Bool.self, forKey: .cacheBust)
             section = try container.decodeIfPresent(String.self, forKey: .section)
             group = try container.decodeIfPresent(String.self, forKey: .group)
             outbound = try container.decodeIfPresent(String.self, forKey: .outbound)
@@ -1604,6 +1668,8 @@ private struct DeviceScenario: Decodable {
             minimumBytes = nil
             minimumBytesPerSecond = nil
             rangeBytes = nil
+            expectedSuccess = nil
+            cacheBust = nil
             section = nil
             group = nil
             outbound = nil

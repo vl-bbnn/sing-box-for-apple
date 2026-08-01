@@ -25,6 +25,16 @@ die() {
     exit 1
 }
 
+terminate_process_tree() {
+    local parent="$1"
+    local child
+    while IFS= read -r child; do
+        [[ -n "$child" ]] || continue
+        terminate_process_tree "$child"
+    done < <(pgrep -P "$parent" 2>/dev/null || true)
+    kill -TERM "$parent" >/dev/null 2>&1 || true
+}
+
 [[ "$runs" =~ ^[1-9][0-9]*$ ]] || die "WLT_CYCLE_RUNS must be a positive integer"
 [[ "$pause_seconds" =~ ^[0-9]+$ ]] || die "WLT_CYCLE_PAUSE_SECONDS must be a non-negative integer"
 [[ "$heartbeat_seconds" =~ ^[1-9][0-9]*$ ]] || die "WLT_CYCLE_HEARTBEAT_SECONDS must be a positive integer"
@@ -38,7 +48,7 @@ fi
 
 cleanup() {
     if [[ -n "$heartbeat_pid" ]]; then
-        kill "$heartbeat_pid" >/dev/null 2>&1 || true
+        terminate_process_tree "$heartbeat_pid"
         wait "$heartbeat_pid" >/dev/null 2>&1 || true
     fi
     rm -f "$lock_dir/pid"
@@ -86,7 +96,7 @@ start_heartbeat() {
 
 stop_heartbeat() {
     [[ -n "$heartbeat_pid" ]] || return
-    kill "$heartbeat_pid" >/dev/null 2>&1 || true
+    terminate_process_tree "$heartbeat_pid"
     wait "$heartbeat_pid" >/dev/null 2>&1 || true
     heartbeat_pid=""
 }
