@@ -10,8 +10,9 @@ from pathlib import Path
 from typing import Any
 
 
-KEY_VALUE = re.compile(r"([a-z_]+)=([^\s]+)")
+KEY_VALUE = re.compile(r"([a-z][a-z0-9_]*)=([^\s]+)")
 METRIC_PREFIXES = {
+    "wlt-metric-web-assets-": "web_assets_probe",
     "wlt-metric-dns-": "dns_probe",
     "wlt-metric-download-": "https_probe",
 }
@@ -28,6 +29,16 @@ def parse_int(value: str, default: int = 0) -> int:
         return int(float(value))
     except (TypeError, ValueError):
         return default
+
+
+def parse_counts(value: str) -> dict[str, int]:
+    counts: dict[str, int] = {}
+    for item in value.split(","):
+        key, separator, raw_count = item.partition(":")
+        if not separator or not key:
+            continue
+        counts[key] = parse_int(raw_count)
+    return counts
 
 
 def attachment_metric(
@@ -53,7 +64,7 @@ def attachment_metric(
     values = dict(KEY_VALUE.findall(
         exported_path.read_text(encoding="utf-8", errors="replace")
     ))
-    duration_ms = parse_int(values.get("elapsed_ms", ""))
+    duration_ms = parse_int(values.get("elapsed_ms", values.get("duration_ms", "")))
     finished_at_ms = parse_int(values.get("finished_at_unix_ms", ""))
     if finished_at_ms <= 0:
         finished_at_ms = int(float(attachment.get("timestamp", 0)) * 1000)
@@ -61,8 +72,17 @@ def attachment_metric(
     if started_at_ms <= 0 and finished_at_ms > 0:
         started_at_ms = max(0, finished_at_ms - duration_ms)
 
-    status = parse_int(values.get("status", ""), -1)
-    success = parse_bool(values.get("success", ""), 200 <= status < 300)
+    status_key = "page_status" if metric_kind == "web_assets_probe" else "status"
+    status = parse_int(values.get(status_key, ""), -1)
+    site_reject = parse_bool(values.get("site_reject", ""))
+    successful_assets = parse_int(values.get("successful_assets", ""))
+    minimum_successful_assets = parse_int(values.get("minimum_successful_assets", ""))
+    default_success = 200 <= status < 300
+    if metric_kind == "web_assets_probe":
+        default_success = site_reject or (
+            default_success and successful_assets >= minimum_successful_assets
+        )
+    success = parse_bool(values.get("success", ""), default_success)
     metric: dict[str, Any] = {
         "name": metric_name,
         "kind": metric_kind,
@@ -79,12 +99,28 @@ def attachment_metric(
             "successes": 1 if success else 0,
             "status": status,
         })
-    else:
+    elif metric_kind == "https_probe":
         metric.update({
             "host": values.get("host", ""),
             "status": status,
             "bytes": parse_int(values.get("bytes", "")),
             "bytes_per_second": parse_int(values.get("bytes_per_second", "")),
+        })
+    else:
+        metric.update({
+            "page_status": status,
+            "page_bytes": parse_int(values.get("page_bytes", "")),
+            "page_duration_ms": parse_int(values.get("page_duration_ms", "")),
+            "site_reject": site_reject,
+            "discovered_assets": parse_int(values.get("discovered_assets", "")),
+            "requested_assets": parse_int(values.get("requested_assets", "")),
+            "successful_assets": successful_assets,
+            "minimum_successful_assets": minimum_successful_assets,
+            "asset_bytes": parse_int(values.get("asset_bytes", "")),
+            "asset_p50_ms": parse_int(values.get("asset_p50_ms", "")),
+            "asset_p95_ms": parse_int(values.get("asset_p95_ms", "")),
+            "asset_max_ms": parse_int(values.get("asset_max_ms", "")),
+            "error_counts": parse_counts(values.get("error_counts", "")),
         })
     return metric
 

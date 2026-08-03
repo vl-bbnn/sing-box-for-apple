@@ -330,6 +330,8 @@ final class DeviceScenarioTests: XCTestCase {
             try dnsProbe(step)
         case "measure_download":
             try measureDownload(step, timeout: timeout)
+        case "web_assets_probe":
+            try webAssetsProbe(step, timeout: timeout)
         case "screenshot":
             attachScreenshot(named: step.name ?? "scenario")
         case "dump_ui":
@@ -1266,6 +1268,216 @@ final class DeviceScenarioTests: XCTestCase {
         }
     }
 
+    private func webAssetsProbe(_ step: DeviceScenario.Step, timeout: TimeInterval) throws {
+        guard let rawURL = step.text, let pageURL = URL(string: rawURL), pageURL.host != nil else {
+            throw ScenarioError.invalidStep("web_assets_probe requires an absolute URL in text")
+        }
+        let maximumAssets = step.maximumAssets ?? 10
+        let minimumSuccessfulAssets = step.minimumSuccessfulAssets ?? 3
+        let minimumAssetBytes = step.minimumAssetBytes ?? 32_768
+        let assetReadLimitBytes = step.assetReadLimitBytes ?? 1_048_576
+        let concurrency = step.concurrency ?? 6
+        let allowSiteChallenge = step.allowSiteChallenge ?? false
+        guard (1 ... 32).contains(maximumAssets) else {
+            throw ScenarioError.invalidStep("maximum_assets must be within 1...32")
+        }
+        guard (1 ... maximumAssets).contains(minimumSuccessfulAssets) else {
+            throw ScenarioError.invalidStep("minimum_successful_assets must be within 1...maximum_assets")
+        }
+        guard (1 ... maximumAssets).contains(concurrency) else {
+            throw ScenarioError.invalidStep("concurrency must be within 1...maximum_assets")
+        }
+        guard assetReadLimitBytes > 0 else {
+            throw ScenarioError.invalidStep("asset_read_limit_bytes must be positive")
+        }
+
+        let configuration = URLSessionConfiguration.ephemeral
+        configuration.requestCachePolicy = .reloadIgnoringLocalAndRemoteCacheData
+        configuration.timeoutIntervalForRequest = timeout
+        configuration.timeoutIntervalForResource = timeout
+        configuration.httpMaximumConnectionsPerHost = concurrency
+        let session = URLSession(configuration: configuration)
+        let pageResult = WebPageResultBox()
+        let pageCompleted = DispatchSemaphore(value: 0)
+        var pageRequest = URLRequest(url: pageURL)
+        pageRequest.cachePolicy = .reloadIgnoringLocalAndRemoteCacheData
+        pageRequest.timeoutInterval = timeout
+        pageRequest.setValue(Self.webUserAgent, forHTTPHeaderField: "User-Agent")
+        pageRequest.setValue("text/html,application/xhtml+xml", forHTTPHeaderField: "Accept")
+        let startedAt = Date()
+        let pageStartedAt = Date()
+        let pageTask = session.dataTask(with: pageRequest) { data, response, error in
+            let httpResponse = response as? HTTPURLResponse
+            pageResult.store(
+                data: data ?? Data(),
+                statusCode: httpResponse?.statusCode ?? 0,
+                resolvedURL: httpResponse?.url,
+                error: error?.localizedDescription
+            )
+            pageCompleted.signal()
+        }
+        pageTask.resume()
+        guard pageCompleted.wait(timeout: .now() + timeout + 5) == .success else {
+            pageTask.cancel()
+            session.invalidateAndCancel()
+            throw ScenarioError.failed("web page timeout from \(pageURL.host ?? "unknown")")
+        }
+        let pageElapsedMilliseconds = Date().timeIntervalSince(pageStartedAt) * 1000
+        let pageSnapshot = pageResult.snapshot()
+        if let error = pageSnapshot.error {
+            session.invalidateAndCancel()
+            throw ScenarioError.failed("web page failed from \(pageURL.host ?? "unknown"): \(error)")
+        }
+        guard !pageSnapshot.data.isEmpty else {
+            session.invalidateAndCancel()
+            throw ScenarioError.failed("web page returned an empty response")
+        }
+        let html = String(data: pageSnapshot.data, encoding: .utf8)
+            ?? String(data: pageSnapshot.data, encoding: .isoLatin1)
+            ?? ""
+        let siteChallenge = (400 ..< 500).contains(pageSnapshot.statusCode) && (
+            html.localizedCaseInsensitiveContains("challenge-error-text") ||
+                html.localizedCaseInsensitiveContains("captcha")
+            )
+        if siteChallenge && allowSiteChallenge {
+            session.finishTasksAndInvalidate()
+            let finishedAt = Date()
+            let measurement = String(
+                format: "page_status=%d page_bytes=%d page_duration_ms=%.0f site_reject=true discovered_assets=0 requested_assets=0 successful_assets=0 asset_bytes=0 duration_ms=%.0f asset_p50_ms=0 asset_p95_ms=0 asset_max_ms=0 started_at_unix_ms=%.0f finished_at_unix_ms=%.0f error_counts=SITE_CHALLENGE:1",
+                pageSnapshot.statusCode,
+                pageSnapshot.data.count,
+                pageElapsedMilliseconds,
+                finishedAt.timeIntervalSince(startedAt) * 1000,
+                startedAt.timeIntervalSince1970 * 1000,
+                finishedAt.timeIntervalSince1970 * 1000
+            )
+            let attachment = XCTAttachment(string: measurement)
+            attachment.name = "wlt-metric-web-assets-\(step.name ?? "web-assets")"
+            attachment.lifetime = .keepAlways
+            add(attachment)
+            return
+        }
+        try require((200 ..< 400).contains(pageSnapshot.statusCode), "web page HTTP status: \(pageSnapshot.statusCode)")
+        let baseURL = pageSnapshot.resolvedURL ?? pageURL
+        let discoveredAssets = try extractWebAssets(from: html, relativeTo: baseURL)
+        let assets = Array(discoveredAssets.prefix(maximumAssets))
+        guard assets.count >= minimumSuccessfulAssets else {
+            session.invalidateAndCancel()
+            throw ScenarioError.failed("web page exposed only \(assets.count) usable image assets")
+        }
+
+        let assetResults = WebAssetResultsBox()
+        let assetGroup = DispatchGroup()
+        for assetURL in assets {
+            assetGroup.enter()
+            var request = URLRequest(url: assetURL)
+            request.cachePolicy = .reloadIgnoringLocalAndRemoteCacheData
+            request.timeoutInterval = timeout
+            request.setValue(Self.webUserAgent, forHTTPHeaderField: "User-Agent")
+            request.setValue("image/avif,image/webp,image/apng,image/svg+xml,image/*,*/*;q=0.8", forHTTPHeaderField: "Accept")
+            request.setValue(baseURL.absoluteString, forHTTPHeaderField: "Referer")
+            request.setValue("bytes=0-\(assetReadLimitBytes - 1)", forHTTPHeaderField: "Range")
+            let assetStartedAt = Date()
+            let task = session.dataTask(with: request) { data, response, error in
+                let httpResponse = response as? HTTPURLResponse
+                let bytes = min(data?.count ?? 0, assetReadLimitBytes)
+                let statusCode = httpResponse?.statusCode ?? 0
+                let contentType = httpResponse?.mimeType ?? ""
+                let validContent = contentType.lowercased().hasPrefix("image/") || bytes >= 4_096
+                let success = error == nil && (200 ..< 400).contains(statusCode) && bytes > 0 && validContent
+                let problem = error?.localizedDescription ?? (validContent ? "" : "INVALID_CONTENT")
+                assetResults.append(
+                    WebAssetResult(
+                        success: success,
+                        statusCode: statusCode,
+                        bytes: bytes,
+                        durationMilliseconds: Date().timeIntervalSince(assetStartedAt) * 1000,
+                        error: problem
+                    )
+                )
+                assetGroup.leave()
+            }
+            task.resume()
+        }
+        let waves = Int(ceil(Double(assets.count) / Double(concurrency)))
+        let completed = assetGroup.wait(timeout: .now() + timeout * Double(waves) + 10) == .success
+        if !completed {
+            session.invalidateAndCancel()
+        } else {
+            session.finishTasksAndInvalidate()
+        }
+
+        let finishedAt = Date()
+        let results = assetResults.snapshot()
+        let successful = results.filter(\.success)
+        let durations = results.map(\.durationMilliseconds).sorted()
+        let totalAssetBytes = successful.reduce(0) { $0 + $1.bytes }
+        let errors = Dictionary(grouping: results.filter { !$0.success }) { result in
+            if !result.error.isEmpty { return result.error.replacingOccurrences(of: " ", with: "_") }
+            return "HTTP_\(result.statusCode)"
+        }.mapValues(\.count)
+        let errorSummary = errors.sorted { $0.key < $1.key }.map { "\($0.key):\($0.value)" }.joined(separator: ",")
+        let measurement = String(
+            format: "page_status=%d page_bytes=%d page_duration_ms=%.0f site_reject=false discovered_assets=%d requested_assets=%d successful_assets=%d minimum_successful_assets=%d asset_bytes=%d duration_ms=%.0f asset_p50_ms=%.0f asset_p95_ms=%.0f asset_max_ms=%.0f started_at_unix_ms=%.0f finished_at_unix_ms=%.0f error_counts=%@",
+            pageSnapshot.statusCode,
+            pageSnapshot.data.count,
+            pageElapsedMilliseconds,
+            discoveredAssets.count,
+            assets.count,
+            successful.count,
+            minimumSuccessfulAssets,
+            totalAssetBytes,
+            finishedAt.timeIntervalSince(startedAt) * 1000,
+            percentile(durations, 0.50),
+            percentile(durations, 0.95),
+            durations.last ?? 0,
+            startedAt.timeIntervalSince1970 * 1000,
+            finishedAt.timeIntervalSince1970 * 1000,
+            errorSummary.isEmpty ? "none" : errorSummary
+        )
+        let attachment = XCTAttachment(string: measurement)
+        attachment.name = "wlt-metric-web-assets-\(step.name ?? "web-assets")"
+        attachment.lifetime = .keepAlways
+        add(attachment)
+
+        try require(completed, "web asset requests timed out: \(results.count)/\(assets.count)")
+        try require(results.count == assets.count, "web asset requests incomplete: \(results.count)/\(assets.count)")
+        try require(
+            successful.count >= minimumSuccessfulAssets,
+            "too few image assets loaded: \(successful.count) < \(minimumSuccessfulAssets); errors=\(errorSummary)"
+        )
+        try require(totalAssetBytes >= minimumAssetBytes, "image assets too short: \(totalAssetBytes) < \(minimumAssetBytes)")
+    }
+
+    private func extractWebAssets(from html: String, relativeTo baseURL: URL) throws -> [URL] {
+        let pattern = #"\b(srcset|data-srcset|src|data-src|data-original|data-lazy-src)\s*=\s*([\"'])(.*?)\2"#
+        let expression = try NSRegularExpression(pattern: pattern, options: [.caseInsensitive, .dotMatchesLineSeparators])
+        let fullRange = NSRange(html.startIndex ..< html.endIndex, in: html)
+        var seen = Set<String>()
+        var result: [URL] = []
+        for match in expression.matches(in: html, range: fullRange) {
+            guard let attributeRange = Range(match.range(at: 1), in: html),
+                  let valueRange = Range(match.range(at: 3), in: html) else { continue }
+            let attribute = String(html[attributeRange])
+            let rawValue = String(html[valueRange]).replacingOccurrences(of: "&amp;", with: "&")
+            let candidates = attribute.lowercased().contains("srcset")
+                ? rawValue.split(separator: ",").map { $0.trimmingCharacters(in: .whitespacesAndNewlines).split(separator: " ").first.map(String.init) ?? "" }
+                : [rawValue.trimmingCharacters(in: .whitespacesAndNewlines)]
+            for candidate in candidates where !candidate.isEmpty && !candidate.lowercased().hasPrefix("data:") {
+                guard let url = URL(string: candidate, relativeTo: baseURL)?.absoluteURL,
+                      let scheme = url.scheme?.lowercased(), scheme == "http" || scheme == "https" else { continue }
+                if seen.insert(url.absoluteString).inserted { result.append(url) }
+            }
+        }
+        return result
+    }
+
+    private func percentile(_ values: [Double], _ fraction: Double) -> Double {
+        guard !values.isEmpty else { return 0 }
+        let index = max(0, min(values.count - 1, Int(ceil(Double(values.count) * fraction)) - 1))
+        return values[index]
+    }
+
     private func dnsProbe(_ step: DeviceScenario.Step) throws {
         guard let host = step.text, !host.isEmpty else {
             throw ScenarioError.invalidStep("dns_probe requires a hostname in text")
@@ -1284,7 +1496,7 @@ final class DeviceScenarioTests: XCTestCase {
 
         var hints = addrinfo()
         hints.ai_family = AF_UNSPEC
-        hints.ai_socktype = Int32(SOCK_STREAM.rawValue)
+        hints.ai_socktype = SOCK_STREAM
         hints.ai_flags = AI_ADDRCONFIG
         var result: UnsafeMutablePointer<addrinfo>?
         let startedAt = Date()
@@ -1487,11 +1699,61 @@ final class DeviceScenarioTests: XCTestCase {
         guard condition() else { throw ScenarioError.failed(message) }
     }
 
+    private static let webUserAgent = "Mozilla/5.0 (iPhone; CPU iPhone OS 18_0 like Mac OS X) AppleWebKit/605.1.15 Version/18.0 Mobile/15E148 Safari/604.1"
+
     private func attachScreenshot(named name: String) {
         let attachment = XCTAttachment(screenshot: XCUIScreen.main.screenshot())
         attachment.name = name
         attachment.lifetime = .keepAlways
         add(attachment)
+    }
+}
+
+private final class WebPageResultBox: @unchecked Sendable {
+    private let lock = NSLock()
+    private var data = Data()
+    private var statusCode = 0
+    private var resolvedURL: URL?
+    private var error: String?
+
+    func store(data: Data, statusCode: Int, resolvedURL: URL?, error: String?) {
+        lock.lock()
+        self.data = data
+        self.statusCode = statusCode
+        self.resolvedURL = resolvedURL
+        self.error = error
+        lock.unlock()
+    }
+
+    func snapshot() -> (data: Data, statusCode: Int, resolvedURL: URL?, error: String?) {
+        lock.lock()
+        defer { lock.unlock() }
+        return (data, statusCode, resolvedURL, error)
+    }
+}
+
+private struct WebAssetResult: Sendable {
+    let success: Bool
+    let statusCode: Int
+    let bytes: Int
+    let durationMilliseconds: Double
+    let error: String
+}
+
+private final class WebAssetResultsBox: @unchecked Sendable {
+    private let lock = NSLock()
+    private var results: [WebAssetResult] = []
+
+    func append(_ result: WebAssetResult) {
+        lock.lock()
+        results.append(result)
+        lock.unlock()
+    }
+
+    func snapshot() -> [WebAssetResult] {
+        lock.lock()
+        defer { lock.unlock() }
+        return results
     }
 }
 
@@ -1561,6 +1823,12 @@ private struct DeviceScenario: Decodable {
         let minimumBytes: Int?
         let minimumBytesPerSecond: Double?
         let rangeBytes: Int?
+        let maximumAssets: Int?
+        let minimumSuccessfulAssets: Int?
+        let minimumAssetBytes: Int?
+        let assetReadLimitBytes: Int?
+        let concurrency: Int?
+        let allowSiteChallenge: Bool?
         let expectedSuccess: Bool?
         let cacheBust: Bool?
         let section: String?
@@ -1595,6 +1863,12 @@ private struct DeviceScenario: Decodable {
             case minimumBytes = "minimum_bytes"
             case minimumBytesPerSecond = "minimum_bytes_per_second"
             case rangeBytes = "range_bytes"
+            case maximumAssets = "maximum_assets"
+            case minimumSuccessfulAssets = "minimum_successful_assets"
+            case minimumAssetBytes = "minimum_asset_bytes"
+            case assetReadLimitBytes = "asset_read_limit_bytes"
+            case concurrency
+            case allowSiteChallenge = "allow_site_challenge"
             case expectedSuccess = "expected_success"
             case cacheBust = "cache_bust"
             case section
@@ -1628,6 +1902,12 @@ private struct DeviceScenario: Decodable {
             minimumBytes = try container.decodeIfPresent(Int.self, forKey: .minimumBytes)
             minimumBytesPerSecond = try container.decodeIfPresent(Double.self, forKey: .minimumBytesPerSecond)
             rangeBytes = try container.decodeIfPresent(Int.self, forKey: .rangeBytes)
+            maximumAssets = try container.decodeIfPresent(Int.self, forKey: .maximumAssets)
+            minimumSuccessfulAssets = try container.decodeIfPresent(Int.self, forKey: .minimumSuccessfulAssets)
+            minimumAssetBytes = try container.decodeIfPresent(Int.self, forKey: .minimumAssetBytes)
+            assetReadLimitBytes = try container.decodeIfPresent(Int.self, forKey: .assetReadLimitBytes)
+            concurrency = try container.decodeIfPresent(Int.self, forKey: .concurrency)
+            allowSiteChallenge = try container.decodeIfPresent(Bool.self, forKey: .allowSiteChallenge)
             expectedSuccess = try container.decodeIfPresent(Bool.self, forKey: .expectedSuccess)
             cacheBust = try container.decodeIfPresent(Bool.self, forKey: .cacheBust)
             section = try container.decodeIfPresent(String.self, forKey: .section)
@@ -1668,6 +1948,12 @@ private struct DeviceScenario: Decodable {
             minimumBytes = nil
             minimumBytesPerSecond = nil
             rangeBytes = nil
+            maximumAssets = nil
+            minimumSuccessfulAssets = nil
+            minimumAssetBytes = nil
+            assetReadLimitBytes = nil
+            concurrency = nil
+            allowSiteChallenge = nil
             expectedSuccess = nil
             cacheBust = nil
             section = nil
