@@ -21,6 +21,19 @@ public class ExtensionProfile: ObservableObject {
   @Published public var status: NEVPNStatus
   @Published public var connectedDate: Date?
 
+  private func traceDeviceStart(_ stage: String, error: Error? = nil) {
+    #if os(iOS) && SFI_DEV
+    let message: String
+    if let error {
+      message = "WLT_DEVICE_START stage=\(stage) status=\(status.rawValue) error=\(error.localizedDescription)"
+    } else {
+      message = "WLT_DEVICE_START stage=\(stage) status=\(status.rawValue)"
+    }
+    NSLog("%@", message)
+    PacketTunnelDiagnostics.append("(app): \(message)")
+    #endif
+  }
+
   public init(_ manager: NEVPNManager) {
     self.manager = manager
     connection = manager.connection
@@ -150,7 +163,10 @@ public class ExtensionProfile: ObservableObject {
       return
     }
     guard let manager else { return }
+    traceDeviceStart("entered")
+    traceDeviceStart("fetch_profile_begin")
     try await fetchProfile()
+    traceDeviceStart("fetch_profile_done")
     manager.isEnabled = true
     let alwaysOn = await SharedPreferences.alwaysOn.get()
     let onDemandEnabled = await SharedPreferences.onDemandEnabled.get()
@@ -182,14 +198,21 @@ public class ExtensionProfile: ObservableObject {
         }
       }
     #endif
+    traceDeviceStart("save_preferences_begin")
     try await manager.saveToPreferences()
+    traceDeviceStart("save_preferences_done")
+    traceDeviceStart("prepare_options_begin")
     let options = try await prepareStartOptions()
+    traceDeviceStart("prepare_options_done")
     #if os(macOS)
       let whitelistTransportStarted = try await WhitelistTransportManager.shared.startIfNeeded()
     #endif
     do {
+      traceDeviceStart("start_tunnel_begin")
       try manager.connection.startVPNTunnel(options: options)
+      traceDeviceStart("start_tunnel_done")
     } catch {
+      traceDeviceStart("start_tunnel_failed", error: error)
       #if os(macOS)
         if whitelistTransportStarted {
           await WhitelistTransportManager.shared.stop()
@@ -325,6 +348,7 @@ public class ExtensionProfile: ObservableObject {
       return
     }
     guard let manager else { return }
+    traceDeviceStart("stop_entered")
     if manager.isOnDemandEnabled {
       if let proto = manager.protocolConfiguration as? NETunnelProviderProtocol {
         var config = proto.providerConfiguration ?? [:]
@@ -334,7 +358,9 @@ public class ExtensionProfile: ObservableObject {
       manager.isOnDemandEnabled = false
       try await manager.saveToPreferences()
     }
+    traceDeviceStart("stop_tunnel_begin")
     manager.connection.stopVPNTunnel()
+    traceDeviceStart("stop_tunnel_done")
     Task.detached(priority: .utility) {
       do {
         try LibboxNewStandaloneCommandClient()!.serviceClose()
@@ -364,10 +390,30 @@ public class ExtensionProfile: ObservableObject {
 
   public static func load() async throws -> ExtensionProfile? {
     let managers = try await NETunnelProviderManager.loadAllFromPreferences()
-    if managers.isEmpty {
+    let providerBundleIdentifier = Variant.useSystemExtension
+      ? AppConfiguration.systemExtensionBundleID
+      : AppConfiguration.extensionBundleID
+    let matchingManagers = managers.filter { manager in
+      guard let tunnelProtocol = manager.protocolConfiguration as? NETunnelProviderProtocol else {
+        return false
+      }
+      return tunnelProtocol.providerBundleIdentifier == providerBundleIdentifier
+    }
+    #if os(iOS) && SFI_DEV
+      let statuses = matchingManagers
+        .map { "\($0.connection.status.rawValue):\($0.localizedDescription ?? "")" }
+        .joined(separator: ",")
+      let message = "WLT_DEVICE_PROFILE stage=load managers=\(managers.count) matching=\(matchingManagers.count) active=\(matchingManagers.filter { $0.connection.status.isConnected }.count) statuses=\(statuses)"
+      NSLog("%@", message)
+      PacketTunnelDiagnostics.append("(app): \(message)")
+    #endif
+    guard !matchingManagers.isEmpty else {
       return nil
     }
-    return ExtensionProfile(managers[0])
+    let manager = matchingManagers.first(where: { $0.connection.status.isConnected })
+      ?? matchingManagers.first(where: { $0.localizedDescription == Variant.applicationName })
+      ?? matchingManagers[0]
+    return ExtensionProfile(manager)
   }
 
   public static func install() async throws {

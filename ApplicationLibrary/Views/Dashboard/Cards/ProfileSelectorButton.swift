@@ -30,6 +30,7 @@ struct ProfileSelectorButton: View {
         .buttonStyle(.plain)
         .selectorBackground()
         #endif
+        .accessibilityIdentifier("wlt.profile.selector")
     }
 
     private var buttonHeight: CGFloat {

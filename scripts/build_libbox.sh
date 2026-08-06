@@ -139,11 +139,32 @@ if [[ "${LIBBOX_SKIP_TOOL_INSTALL:-0}" != "1" ]]; then
 	make lib_install
 fi
 export PATH="$PATH:$(go env GOPATH)/bin"
+
+# gomobile does not overwrite generated ObjC binding sources. A second local
+# build otherwise fails with "file exists" in one of these platform workdirs.
+# They are build-only output; keep source and unrelated build artifacts intact.
+for generated_bind_dir in \
+	build/ios-arm64/Libbox \
+	build/iossimulator-amd64/Libbox \
+	build/iossimulator-arm64/Libbox \
+	build/macos-amd64/Libbox \
+	build/macos-arm64/Libbox; do
+	rm -rf "$generated_bind_dir"
+done
+
 go run ./cmd/internal/build_libbox -target apple -platform "$platforms"
 
 source_xcframework="$repo_dir/Libbox.xcframework"
 if [[ ! -d "$source_xcframework" && -d "$client_root/Libbox.xcframework" ]]; then
 	source_xcframework="$client_root/Libbox.xcframework"
+fi
+# The sing-box Apple builder preserves its upstream behavior and moves the
+# result to a sibling sing-box-for-apple checkout when one exists. A client
+# worktree is not that sibling, so also accept the builder's actual target and
+# relocate it into this worktree's variant directory below.
+builder_copy_xcframework="$(dirname "$repo_dir")/sing-box-for-apple/Libbox.xcframework"
+if [[ ! -d "$source_xcframework" && -d "$builder_copy_xcframework" ]]; then
+	source_xcframework="$builder_copy_xcframework"
 fi
 if [[ ! -d "$source_xcframework" ]]; then
 	echo "Libbox.xcframework was not produced" >&2

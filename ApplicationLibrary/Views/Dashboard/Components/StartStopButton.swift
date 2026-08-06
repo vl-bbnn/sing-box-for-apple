@@ -43,6 +43,9 @@ public struct StartStopButton: View {
 
         var body: some View {
             Button {
+                #if os(iOS) && SFI_DEV
+                    NSLog("WLT_DEVICE_START stage=button_action status=\(profile.status.rawValue)")
+                #endif
                 Task {
                     await switchProfile(!profile.status.isConnected)
                 }
@@ -98,6 +101,7 @@ public struct StartStopButton: View {
                 #endif
             }
             .labelStyle(.iconOnly)
+            .accessibilityIdentifier("wlt.connection.toggle")
             #if os(iOS)
                 .modifier(PrimaryTintModifier())
             #endif
@@ -157,12 +161,21 @@ public struct StartStopButton: View {
         private nonisolated func switchProfile(_ isEnabled: Bool) async {
             do {
                 if isEnabled {
+                    #if os(iOS) && SFI_DEV
+                        NSLog("WLT_DEVICE_START stage=button_start")
+                    #endif
                     await MainActor.run { isStarting = true }
                     try await profile.start()
+                    #if os(iOS) && SFI_DEV
+                        NSLog("WLT_DEVICE_START stage=button_start_returned")
+                    #endif
                 } else {
                     try await profile.stop()
                 }
             } catch {
+                #if os(iOS) && SFI_DEV
+                    NSLog("WLT_DEVICE_START stage=button_start_failed error=\(error.localizedDescription)")
+                #endif
                 await MainActor.run {
                     isStarting = false
                     let action = isEnabled ? "start service" : "stop service"

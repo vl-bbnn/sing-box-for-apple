@@ -15,6 +15,7 @@ struct MainView: View {
     @State private var showGroups = false
     @State private var showConnections = false
     @State private var buttonState = ButtonVisibilityState()
+    @State private var deviceScenarioAutostartAttempted = false
 
     private let profileEditor: (Binding<String>, Bool) -> AnyView = { text, isEditable in
         AnyView(ProfileEditorWrapperView(text: text, isEditable: isEditable))
@@ -149,7 +150,10 @@ struct MainView: View {
                     Task { @MainActor in updateButtonVisibility() }
                 }
                 .onReceive(environments.$extensionProfile) { _ in
-                    Task { @MainActor in updateButtonVisibility() }
+                    Task { @MainActor in
+                        updateButtonVisibility()
+                        scheduleDeviceScenarioAutostart()
+                    }
                 }
                 .onReceive(environments.$emptyProfiles) { _ in
                     Task { @MainActor in updateButtonVisibility() }
@@ -163,12 +167,15 @@ struct MainView: View {
         }
         .onAppear {
             environments.postReload()
+            scheduleDeviceScenarioAutostart()
         }
         .alert($alert)
         .globalChecks()
         .onChangeCompat(of: scenePhase) { newValue in
             if newValue == .active {
                 environments.postReload()
+                scheduleDeviceScenarioAutostart()
+                scheduleDeviceScenarioLogExport()
             }
         }
         .onChangeCompat(of: selection) { newValue in
@@ -182,6 +189,75 @@ struct MainView: View {
         .environment(\.profileEditor, profileEditor)
         .handlesExternalEvents(preferring: [], allowing: ["*"])
         .onOpenURL(perform: openURL)
+        .overlay(alignment: .topLeading) {
+            deviceScenarioConnectionControl
+                .padding(.top, 170)
+                .padding(.leading, 6)
+        }
+    }
+
+    @ViewBuilder
+    private var deviceScenarioConnectionControl: some View {
+        #if os(iOS) && SFI_DEV
+            if ProcessInfo.processInfo.environment["WLT_DEVICE_SCENARIO"] == "1",
+               let profile = environments.extensionProfile
+            {
+                HStack(spacing: 0) {
+                    deviceScenarioConnectionButton(start: false, profile: profile)
+                    deviceScenarioConnectionButton(start: true, profile: profile)
+                }
+            }
+        #endif
+    }
+
+    private func deviceScenarioConnectionButton(
+        start: Bool,
+        profile: ExtensionProfile
+    ) -> some View {
+        Button {
+            Task { @MainActor in
+                let operation = start ? "start" : "stop"
+                do {
+                    // Remote profile refresh can replace the underlying
+                    // NEVPNManager while this view still holds an observed
+                    // ExtensionProfile. Resolve the command target immediately
+                    // before issuing the explicit test operation.
+                    let currentProfile = try await ExtensionProfile.load() ?? profile
+                    currentProfile.register()
+                    if currentProfile !== profile {
+                        environments.extensionProfile = currentProfile
+                    }
+                    let buttonMessage =
+                        "WLT_DEVICE_SCENARIO_CONTROL stage=button operation=\(operation) displayed_status=\(profile.status.rawValue) loaded_status=\(currentProfile.status.rawValue)"
+                    NSLog("%@", buttonMessage)
+                    PacketTunnelDiagnostics.append("(app): \(buttonMessage)")
+                    if start {
+                        try await currentProfile.start()
+                    } else {
+                        try await currentProfile.stop()
+                    }
+                    let completedMessage =
+                        "WLT_DEVICE_SCENARIO_CONTROL stage=completed operation=\(operation)"
+                    NSLog("%@", completedMessage)
+                    PacketTunnelDiagnostics.append("(app): \(completedMessage)")
+                    environments.postReload()
+                } catch {
+                    let failedMessage =
+                        "WLT_DEVICE_SCENARIO_CONTROL stage=failed operation=\(operation) error=\(error.localizedDescription)"
+                    NSLog("%@", failedMessage)
+                    PacketTunnelDiagnostics.append("(app): \(failedMessage)")
+                }
+            }
+        } label: {
+            Color.black.opacity(0.001)
+                .frame(width: 44, height: 44)
+                .contentShape(Rectangle())
+        }
+        .id(start ? "wlt-scenario-start-control" : "wlt-scenario-stop-control")
+        .accessibilityLabel(start ? "WLT scenario start" : "WLT scenario stop")
+        .accessibilityIdentifier(
+            start ? "wlt.scenario.connection.start" : "wlt.scenario.connection.stop"
+        )
     }
 
     private func updateButtonVisibility() {
@@ -189,6 +265,62 @@ struct MainView: View {
             profile: environments.extensionProfile,
             commandClient: environments.commandClient
         )
+    }
+
+    private func scheduleDeviceScenarioLogExport() {
+        guard ProcessInfo.processInfo.environment["WLT_DEVICE_SCENARIO"] == "1" else { return }
+        // Do not touch the command client during initial app launch: XCTest
+        // must finish establishing automation before any extension IPC starts.
+        guard environments.extensionProfile?.status.isConnected == true else { return }
+        DispatchQueue.main.asyncAfter(deadline: .now() + 1) {
+            guard environments.extensionProfile?.status.isConnected == true else { return }
+            environments.connect()
+            DispatchQueue.main.asyncAfter(deadline: .now() + 3) {
+                let text = environments.commandClient.logList
+                    .map(\.message)
+                    .joined(separator: "\n")
+                let url = FilePath.cacheDirectory.appendingPathComponent("wlt-device-service.log")
+                try? text.write(to: url, atomically: true, encoding: .utf8)
+            }
+        }
+    }
+
+    private func scheduleDeviceScenarioAutostart() {
+        #if os(iOS) && SFI_DEV
+            guard ProcessInfo.processInfo.environment["WLT_DEVICE_AUTOSTART"] == "1" else {
+                return
+            }
+            guard !deviceScenarioAutostartAttempted else { return }
+            guard let profile = environments.extensionProfile else { return }
+            deviceScenarioAutostartAttempted = true
+            NSLog("WLT_DEVICE_AUTOSTART stage=begin")
+            Task { @MainActor in
+                do {
+                    let selectedProfileID = await SharedPreferences.selectedProfileID.get()
+                    if let selectedProfile = try await ProfileManager.get(selectedProfileID),
+                       selectedProfile.type == .remote
+                    {
+                        NSLog("WLT_DEVICE_AUTOSTART stage=remote_profile_update_begin")
+                        try await selectedProfile.updateRemoteProfile()
+                        NSLog("WLT_DEVICE_AUTOSTART stage=remote_profile_update_done")
+                    }
+                    if profile.status.isConnected {
+                        NSLog("WLT_DEVICE_AUTOSTART stage=already_connected")
+                        scheduleDeviceScenarioLogExport()
+                        return
+                    }
+                    try await profile.start()
+                    NSLog("WLT_DEVICE_AUTOSTART stage=start_returned")
+                    try? await Task.sleep(nanoseconds: 10_000_000_000)
+                    scheduleDeviceScenarioLogExport()
+                } catch {
+                    NSLog(
+                        "WLT_DEVICE_AUTOSTART stage=failed error=%@",
+                        error.localizedDescription
+                    )
+                }
+            }
+        #endif
     }
 
     private struct StatusText: View {
@@ -200,6 +332,7 @@ struct MainView: View {
                 .foregroundStyle(.secondary)
                 .lineLimit(1)
                 .fixedSize()
+                .accessibilityIdentifier("wlt.connection.status")
         }
 
         private var statusText: Text {
