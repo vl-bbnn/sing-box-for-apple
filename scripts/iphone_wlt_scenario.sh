@@ -217,8 +217,9 @@ automation_mode_requires_authentication() {
     local status
     status="$(/usr/bin/automationmodetool status 2>&1 || true)"
     printf '%s\n' "$status" >"$artifact_dir/automation-mode-status.txt"
-    rg -q '^This device requires user authentication to enable Automation Mode\.$' \
-        "$artifact_dir/automation-mode-status.txt"
+    rg -q '^Automation Mode is disabled\.$' "$artifact_dir/automation-mode-status.txt" \
+        && rg -q '^This device requires user authentication to enable Automation Mode\.$' \
+            "$artifact_dir/automation-mode-status.txt"
 }
 
 record_competing_coredevice_sessions() {

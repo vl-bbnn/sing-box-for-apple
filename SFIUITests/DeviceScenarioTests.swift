@@ -342,9 +342,11 @@ final class DeviceScenarioTests: XCTestCase {
     }
 
     private func openWiFiSettings(timeout: TimeInterval) throws -> (XCUIApplication, XCUIElement) {
+        dismissNotificationPermissionAlertIfPresent(timeout: min(timeout, 2))
         let settings = XCUIApplication(bundleIdentifier: "com.apple.Preferences")
         settings.launch()
         try require(settings.wait(for: .runningForeground, timeout: timeout), "Settings did not enter foreground")
+        dismissNotificationPermissionAlertIfPresent(timeout: min(timeout, 2))
 
         var openedWiFiPage = false
         for _ in 0 ..< 5 {
@@ -389,6 +391,28 @@ final class DeviceScenarioTests: XCTestCase {
         ).firstMatch
         try require(wifiSwitch.waitForExistence(timeout: timeout), "Wi-Fi switch not found in Settings")
         return (settings, wifiSwitch)
+    }
+
+    private func dismissNotificationPermissionAlertIfPresent(timeout: TimeInterval) {
+        let springboard = XCUIApplication(bundleIdentifier: "com.apple.springboard")
+        let notificationPrompt = springboard.staticTexts.matching(
+            NSPredicate(
+                format: "label CONTAINS[c] %@ OR label CONTAINS[c] %@",
+                "Send You Notifications",
+                "Notifications may include"
+            )
+        ).firstMatch
+        guard notificationPrompt.waitForExistence(timeout: timeout) else { return }
+
+        let denyButton = springboard.buttons.matching(
+            NSPredicate(
+                format: "label IN %@",
+                ["Don’t Allow", "Don't Allow", "Не разрешать"]
+            )
+        ).firstMatch
+        guard denyButton.waitForExistence(timeout: 2) else { return }
+        denyButton.tap()
+        _ = notificationPrompt.waitForNonExistence(timeout: 3)
     }
 
     private func waitForWiFiSwitch(
