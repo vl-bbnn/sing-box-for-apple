@@ -20,6 +20,11 @@
     { "action": "assert_connection_status", "app": "vpn", "text": "Stopped", "timeout": 30, "fatal": true },
     { "action": "tap_any", "app": "vpn", "identifiers": ["wlt.profile.refresh"], "timeout": 10, "fatal": true },
     { "action": "wait", "seconds": 5 },
+    { "action": "enable_wifi", "app": "springboard", "timeout": 30, "fatal": true },
+    { "action": "wait", "seconds": 5 },
+    { "action": "web_assets_probe", "name": "wifi-rozetked-images", "text": "https://rozetked.me/", "maximum_assets": 10, "minimum_successful_assets": 8, "minimum_asset_bytes": 32768, "asset_read_limit_bytes": 1048576, "concurrency": 6, "section": "wifi-rozetked", "timeout": 60 },
+    { "action": "web_assets_probe", "name": "wifi-4pda-images", "text": "https://4pda.to/", "maximum_assets": 10, "minimum_successful_assets": 3, "minimum_asset_bytes": 32768, "asset_read_limit_bytes": 1048576, "concurrency": 6, "allow_site_challenge": true, "section": "wifi-4pda", "timeout": 60 },
+    { "action": "web_assets_probe", "name": "wifi-lostfilm-images", "text": "https://lostfilm.tv/", "maximum_assets": 10, "minimum_successful_assets": 6, "minimum_asset_bytes": 32768, "asset_read_limit_bytes": 1048576, "concurrency": 6, "section": "wifi-lostfilm", "timeout": 60 },
     { "action": "disable_wifi", "app": "springboard", "timeout": 30, "fatal": true },
     { "action": "wait", "seconds": 15 },
     { "action": "activate", "app": "vpn", "timeout": 20, "fatal": true },
@@ -30,6 +35,11 @@
     { "action": "web_assets_probe", "name": "4pda-images", "text": "https://4pda.to/", "maximum_assets": 10, "minimum_successful_assets": 3, "minimum_asset_bytes": 32768, "asset_read_limit_bytes": 1048576, "concurrency": 6, "allow_site_challenge": true, "section": "4pda", "timeout": 60 },
     { "action": "select_outbound", "app": "vpn", "group": "whitelist-exit", "outbound": "eu", "timeout": 30, "fatal": true },
     { "action": "web_assets_probe", "name": "lostfilm-images", "text": "https://lostfilm.tv/", "maximum_assets": 10, "minimum_successful_assets": 6, "minimum_asset_bytes": 32768, "asset_read_limit_bytes": 1048576, "concurrency": 6, "section": "lostfilm", "timeout": 60 },
+    { "action": "wait", "seconds": 180 },
+    { "action": "select_outbound", "app": "vpn", "group": "whitelist-exit", "outbound": "ru", "timeout": 30, "fatal": true },
+    { "action": "web_assets_probe", "name": "rozetked-images-after-hold", "text": "https://rozetked.me/", "maximum_assets": 10, "minimum_successful_assets": 8, "minimum_asset_bytes": 32768, "asset_read_limit_bytes": 1048576, "concurrency": 6, "section": "rozetked-after-hold", "timeout": 60 },
+    { "action": "select_outbound", "app": "vpn", "group": "whitelist-exit", "outbound": "eu", "timeout": 30, "fatal": true },
+    { "action": "web_assets_probe", "name": "lostfilm-images-after-hold", "text": "https://lostfilm.tv/", "maximum_assets": 10, "minimum_successful_assets": 6, "minimum_asset_bytes": 32768, "asset_read_limit_bytes": 1048576, "concurrency": 6, "section": "lostfilm-after-hold", "timeout": 60 },
     { "action": "activate", "app": "vpn", "timeout": 20 },
     { "action": "assert_connection_status", "app": "vpn", "text": "Started", "timeout": 20 }
   ]
