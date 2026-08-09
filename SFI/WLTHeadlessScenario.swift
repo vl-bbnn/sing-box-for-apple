@@ -457,7 +457,7 @@ enum WLTHeadlessScenarioRunner {
                                 )
                             } else {
                                 result.transitionRequest = TransitionRequest(
-                                    id: "repetition-(index)-phase-(phaseIndex)-(phase.name)",
+                                    id: "repetition-\(index)-phase-\(phaseIndex)-\(phase.name)",
                                     transport: phase.requiredTransport
                                 )
                                 result.status = "waiting_for_transition"
