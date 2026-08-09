@@ -16,6 +16,7 @@ struct MainView: View {
     @State private var showConnections = false
     @State private var buttonState = ButtonVisibilityState()
     @State private var deviceScenarioAutostartAttempted = false
+    @State private var headlessScenarioAttempted = false
 
     private let profileEditor: (Binding<String>, Bool) -> AnyView = { text, isEditable in
         AnyView(ProfileEditorWrapperView(text: text, isEditable: isEditable))
@@ -153,6 +154,7 @@ struct MainView: View {
                     Task { @MainActor in
                         updateButtonVisibility()
                         scheduleDeviceScenarioAutostart()
+                        scheduleHeadlessScenario()
                     }
                 }
                 .onReceive(environments.$emptyProfiles) { _ in
@@ -168,6 +170,7 @@ struct MainView: View {
         .onAppear {
             environments.postReload()
             scheduleDeviceScenarioAutostart()
+            scheduleHeadlessScenario()
         }
         .alert($alert)
         .globalChecks()
@@ -175,6 +178,7 @@ struct MainView: View {
             if newValue == .active {
                 environments.postReload()
                 scheduleDeviceScenarioAutostart()
+                scheduleHeadlessScenario()
                 scheduleDeviceScenarioLogExport()
             }
         }
@@ -296,20 +300,43 @@ struct MainView: View {
             NSLog("WLT_DEVICE_AUTOSTART stage=begin")
             Task { @MainActor in
                 do {
+                    let refreshRemoteProfile =
+                        ProcessInfo.processInfo.environment["WLT_DEVICE_AUTOSTART_REFRESH_PROFILE"] == "1"
                     let selectedProfileID = await SharedPreferences.selectedProfileID.get()
                     if let selectedProfile = try await ProfileManager.get(selectedProfileID),
                        selectedProfile.type == .remote
                     {
-                        NSLog("WLT_DEVICE_AUTOSTART stage=remote_profile_update_begin")
-                        try await selectedProfile.updateRemoteProfile()
-                        NSLog("WLT_DEVICE_AUTOSTART stage=remote_profile_update_done")
+                        if refreshRemoteProfile {
+                            NSLog("WLT_DEVICE_AUTOSTART stage=remote_profile_update_begin")
+                            try await selectedProfile.updateRemoteProfile()
+                            NSLog("WLT_DEVICE_AUTOSTART stage=remote_profile_update_done")
+                        } else {
+                            let message =
+                                "WLT_DEVICE_AUTOSTART stage=remote_profile_update_skipped policy=no-refresh"
+                            NSLog("%@", message)
+                            PacketTunnelDiagnostics.append("(app): \(message)")
+                        }
+                    } else if !refreshRemoteProfile {
+                        let message =
+                            "WLT_DEVICE_AUTOSTART stage=remote_profile_update_skipped policy=no-refresh"
+                        NSLog("%@", message)
+                        PacketTunnelDiagnostics.append("(app): \(message)")
                     }
-                    if profile.status.isConnected {
+                    // A remote-profile update can replace the NEVPNManager.
+                    // Resolve the command target immediately before start even
+                    // in no-refresh mode so autonomous launches never retain a
+                    // stale manager from the initial SwiftUI render.
+                    let currentProfile = try await ExtensionProfile.load() ?? profile
+                    currentProfile.register()
+                    if currentProfile !== profile {
+                        environments.extensionProfile = currentProfile
+                    }
+                    if currentProfile.status.isConnected {
                         NSLog("WLT_DEVICE_AUTOSTART stage=already_connected")
                         scheduleDeviceScenarioLogExport()
                         return
                     }
-                    try await profile.start()
+                    try await currentProfile.start()
                     NSLog("WLT_DEVICE_AUTOSTART stage=start_returned")
                     try? await Task.sleep(nanoseconds: 10_000_000_000)
                     scheduleDeviceScenarioLogExport()
@@ -319,6 +346,21 @@ struct MainView: View {
                         error.localizedDescription
                     )
                 }
+            }
+        #endif
+    }
+
+    private func scheduleHeadlessScenario() {
+        #if os(iOS) && SFI_DEV
+            guard WLTHeadlessScenarioRunner.isRequested() else { return }
+            guard !headlessScenarioAttempted else { return }
+            guard let profile = environments.extensionProfile else { return }
+            headlessScenarioAttempted = true
+            Task { @MainActor in
+                await WLTHeadlessScenarioRunner.run(
+                    profile: profile,
+                    environments: environments
+                )
             }
         #endif
     }

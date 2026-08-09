@@ -1,0 +1,32 @@
+{
+  "run_id": "host-overrides-this-value",
+  "repetitions": 1,
+  "required_transport": "wifi",
+  "vpn_mode": "off",
+  "startup_timeout_seconds": 120,
+  "settle_seconds": 1,
+  "route_workloads": [
+    {
+      "route": "ru",
+      "http_probes": [
+        {
+          "name": "neutral-wifi-smoke",
+          "url": "https://example.com/",
+          "minimum_bytes": 100,
+          "timeout_seconds": 30,
+          "resource_sample_limit": 0,
+          "policy_status_codes": []
+        }
+      ],
+      "playback_probes": []
+    }
+  ],
+  "warm_probe": {
+    "name": "warm-neutral-wifi-smoke",
+    "url": "https://example.com/",
+    "minimum_bytes": 100,
+    "timeout_seconds": 30,
+    "resource_sample_limit": 0,
+    "policy_status_codes": []
+  }
+}

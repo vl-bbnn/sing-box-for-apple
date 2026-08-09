@@ -192,6 +192,10 @@ final class DeviceScenarioTests: XCTestCase {
             try disableWiFi(timeout: timeout)
         case "enable_wifi":
             try setWiFiRadio(enabled: true, timeout: timeout)
+            try require(
+                waitForWiFiOnly(timeout: timeout),
+                "Wi-Fi radio enabled but NWPath did not become wifi=true cellular=false"
+            )
             shouldRestoreWiFi = false
             XCUIDevice.shared.press(.home)
         case "tap":
@@ -439,7 +443,12 @@ final class DeviceScenarioTests: XCTestCase {
         }
     }
 
-    private func activeNetworkUsesWiFi(timeout: TimeInterval) -> Bool? {
+    private struct ActiveNetworkPathState {
+        let usesWiFi: Bool
+        let usesCellular: Bool
+    }
+
+    private func activeNetworkPathState(timeout: TimeInterval) -> ActiveNetworkPathState? {
         let monitor = NWPathMonitor()
         let queue = DispatchQueue(label: "pro.2b2n.vpn.tests.network-path")
         monitor.start(queue: queue)
@@ -456,7 +465,10 @@ final class DeviceScenarioTests: XCTestCase {
                     path.isExpensive ? "true" : "false",
                     path.isConstrained ? "true" : "false"
                 )
-                return path.usesInterfaceType(.wifi)
+                return ActiveNetworkPathState(
+                    usesWiFi: path.usesInterfaceType(.wifi),
+                    usesCellular: path.usesInterfaceType(.cellular)
+                )
             }
             Thread.sleep(forTimeInterval: 0.2)
         }
@@ -467,7 +479,11 @@ final class DeviceScenarioTests: XCTestCase {
     private func waitForCellularOnly(timeout: TimeInterval) -> Bool {
         let deadline = Date().addingTimeInterval(timeout)
         while Date() < deadline {
-            if activeNetworkUsesWiFi(timeout: 1) == false { return true }
+            if let state = activeNetworkPathState(timeout: 1),
+               !state.usesWiFi,
+               state.usesCellular {
+                return true
+            }
             Thread.sleep(forTimeInterval: 0.5)
         }
         return false
@@ -486,7 +502,7 @@ final class DeviceScenarioTests: XCTestCase {
         XCUIDevice.shared.press(.home)
         try require(
             waitForCellularOnly(timeout: timeout),
-            "Wi-Fi remained the active network after disable_wifi"
+            "NWPath did not become wifi=false cellular=true after disable_wifi"
         )
     }
 
@@ -495,7 +511,10 @@ final class DeviceScenarioTests: XCTestCase {
 
         do {
             try setWiFiRadio(enabled: true, timeout: 30)
-            try require(waitForWiFiActive(timeout: 30), "Wi-Fi radio enabled but no Wi-Fi path became active")
+            try require(
+                waitForWiFiOnly(timeout: 30),
+                "Wi-Fi radio enabled but NWPath did not become wifi=true cellular=false"
+            )
             attachScreenshot(named: "teardown-wifi-reconnected-settings")
             XCUIDevice.shared.press(.home)
         } catch {
@@ -505,10 +524,14 @@ final class DeviceScenarioTests: XCTestCase {
         shouldRestoreWiFi = false
     }
 
-    private func waitForWiFiActive(timeout: TimeInterval) -> Bool {
+    private func waitForWiFiOnly(timeout: TimeInterval) -> Bool {
         let deadline = Date().addingTimeInterval(timeout)
         while Date() < deadline {
-            if activeNetworkUsesWiFi(timeout: 1) == true { return true }
+            if let state = activeNetworkPathState(timeout: 1),
+               state.usesWiFi,
+               !state.usesCellular {
+                return true
+            }
             Thread.sleep(forTimeInterval: 0.5)
         }
         return false
@@ -723,28 +746,78 @@ final class DeviceScenarioTests: XCTestCase {
             ? ["1080p60 HDR", "1080p60", "720p60 HDR", "720p60"]
             : step.preferredValues
 
-        func openQualityModeSheet() {
-            let qualityButton = app.descendants(matching: .any).matching(
-                identifier: "id.player.watch.quality.button"
-            ).firstMatch
-            if qualityButton.waitForExistence(timeout: 3) {
-                qualityButton.tap()
-                return
+        func textExists(_ values: [String], wait: TimeInterval = 0.4) -> Bool {
+            element(containingAny: values, in: app).waitForExistence(timeout: wait)
+        }
+
+        func dismissBottomSheet() {
+            app.coordinate(withNormalizedOffset: CGVector(dx: 0.5, dy: 0.16)).tap()
+            Thread.sleep(forTimeInterval: 0.4)
+        }
+
+        func resolutionRows() -> (rows: [XCUIElement], diagnostics: [String]) {
+            var rows: [XCUIElement] = []
+            var diagnostics: [String] = []
+            let snapshot = Array(app.buttons.allElementsBoundByIndex.prefix(100))
+            for (index, candidate) in snapshot.enumerated() {
+                guard candidate.exists else { continue }
+                let frame = candidate.frame
+                if index < 40 {
+                    diagnostics.append(
+                        String(
+                            format: "%d: x=%.0f y=%.0f w=%.0f h=%.0f label=%@ id=%@ selected=%@",
+                            index,
+                            frame.minX,
+                            frame.minY,
+                            frame.width,
+                            frame.height,
+                            candidate.label,
+                            candidate.identifier,
+                            candidate.isSelected ? "true" : "false"
+                        )
+                    )
+                }
+                guard frame.width >= 380,
+                      frame.height >= 40,
+                      frame.height <= 60,
+                      frame.minY >= 420 else { continue }
+                rows.append(candidate)
+            }
+            rows.sort { $0.frame.minY < $1.frame.minY }
+            return (rows, diagnostics)
+        }
+
+        func fixedResolutionListIsVisible() -> Bool {
+            if preferred.contains(where: { textExists([$0], wait: 0.1) }) {
+                return true
+            }
+            // The mode chooser has four rows; the 4K test video exposes a
+            // longer fixed-resolution list. Requiring at least five rows keeps
+            // the chooser itself from being mistaken for the destination.
+            return resolutionRows().rows.count >= 5
+        }
+
+        func openAdvancedResolutionList() -> Bool {
+            if fixedResolutionListIsVisible() { return true }
+            let advanced = element(
+                containingAny: ["Другое", "Other", "Дополнительно", "Advanced"],
+                in: app
+            )
+            if advanced.waitForExistence(timeout: 1), advanced.isHittable {
+                advanced.tap()
+                Thread.sleep(forTimeInterval: 0.6)
+                return fixedResolutionListIsVisible()
             }
 
-            // Current YouTube iOS exposes the settings sheet as a localized
-            // row ("Качество" / "Quality") rather than the historical AX id.
-            // The row's value (for example "Авто (360p60 HDR)") is accepted
-            // as a fallback because the label can be omitted in some locales.
-            let qualityRow = element(containingAny: ["Качество", "Quality", "Авто (", "Auto ("], in: app)
-            if qualityRow.waitForExistence(timeout: 3), qualityRow.isHittable {
-                qualityRow.tap()
-            } else {
-                // The sheet is rendered by a non-accessible native surface on
-                // some YouTube builds. Its first row remains at a stable
-                // relative position below the player controls.
-                app.coordinate(withNormalizedOffset: CGVector(dx: 0.5, dy: 0.72)).tap()
-            }
+            // The quality-mode sheet is sometimes drawn without AX labels.
+            // Its final row opens the fixed-resolution list. This coordinate
+            // is used only after the caller has opened a candidate settings
+            // row, and success still requires a real resolution list with at
+            // least four full-width rows. A playback-speed sheet therefore
+            // cannot be mistaken for quality selection.
+            app.coordinate(withNormalizedOffset: CGVector(dx: 0.5, dy: 0.85)).tap()
+            Thread.sleep(forTimeInterval: 0.6)
+            return fixedResolutionListIsVisible()
         }
 
         let closeEngagementPanel = app.descendants(matching: .any).matching(
@@ -767,24 +840,84 @@ final class DeviceScenarioTests: XCTestCase {
         app.coordinate(withNormalizedOffset: CGVector(dx: 0.5, dy: 0.2)).tap()
         let overflow = app.descendants(matching: .any).matching(identifier: "id.player.overflow.button").firstMatch
         try require(overflow.waitForExistence(timeout: timeout), "YouTube player overflow button not found")
-        overflow.tap()
-        openQualityModeSheet()
 
-        // YouTube first opens a quality mode sheet.  On current iOS builds
-        // the fixed-resolution list is behind the localized "Другое"
-        // ("Other") row; the resolution labels are not present until that
-        // row is activated.  Prefer AX text, with a coordinate fallback for
-        // the native sheet when its contents are not exposed to XCTest.
-        let otherQuality = element(containingAny: ["Другое", "Other"], in: app)
-        if otherQuality.waitForExistence(timeout: 3), otherQuality.isHittable {
-            otherQuality.tap()
-            Thread.sleep(forTimeInterval: 0.6)
-        } else {
-            app.coordinate(withNormalizedOffset: CGVector(dx: 0.5, dy: 0.85)).tap()
-            Thread.sleep(forTimeInterval: 0.6)
+        func openPlayerSettings() {
+            if !overflow.exists || !overflow.isHittable {
+                app.coordinate(withNormalizedOffset: CGVector(dx: 0.5, dy: 0.2)).tap()
+            }
+            if overflow.waitForExistence(timeout: 3), overflow.isHittable {
+                overflow.tap()
+                Thread.sleep(forTimeInterval: 0.4)
+            }
+        }
+
+        var fixedListOpened = false
+        var navigationAttempts: [String] = []
+
+        openPlayerSettings()
+        let qualityButton = app.descendants(matching: .any).matching(
+            identifier: "id.player.watch.quality.button"
+        ).firstMatch
+        if qualityButton.waitForExistence(timeout: 1), qualityButton.isHittable {
+            qualityButton.tap()
+            Thread.sleep(forTimeInterval: 0.5)
+            fixedListOpened = openAdvancedResolutionList()
+            navigationAttempts.append("historical_quality_identifier=\(fixedListOpened)")
+        }
+
+        if !fixedListOpened {
+            dismissBottomSheet()
+            openPlayerSettings()
+            // Current YouTube exposes either a localized Quality row or an
+            // Auto(...) value. Prefer it over geometry whenever AX publishes
+            // the row.
+            let qualityRow = element(
+                containingAny: ["Качество", "Quality", "Авто (", "Auto ("],
+                in: app
+            )
+            if qualityRow.waitForExistence(timeout: 1), qualityRow.isHittable {
+                qualityRow.tap()
+                Thread.sleep(forTimeInterval: 0.5)
+                fixedListOpened = openAdvancedResolutionList()
+                navigationAttempts.append("localized_quality_row=\(fixedListOpened)")
+            }
+        }
+
+        if !fixedListOpened {
+            // Some YouTube 21.x settings sheets expose no useful row labels.
+            // Probe the visible full-width settings rows from top to bottom.
+            // Every candidate must lead to a validated fixed-resolution list;
+            // wrong destinations such as the 1.00x playback-speed sheet are
+            // dismissed and never treated as quality evidence.
+            for y in [0.50, 0.56, 0.62, 0.68, 0.74] where !fixedListOpened {
+                dismissBottomSheet()
+                openPlayerSettings()
+                app.coordinate(withNormalizedOffset: CGVector(dx: 0.5, dy: y)).tap()
+                Thread.sleep(forTimeInterval: 0.5)
+                let speedSheet = textExists(
+                    ["1.00x", "Playback speed", "Скорость воспроизведения", "Normal", "Обычная"],
+                    wait: 0.2
+                )
+                fixedListOpened = !speedSheet && openAdvancedResolutionList()
+                navigationAttempts.append(
+                    String(format: "coordinate_y=%.2f speed_sheet=%@ fixed_list=%@", y, speedSheet ? "true" : "false", fixedListOpened ? "true" : "false")
+                )
+            }
+        }
+
+        let navigation = XCTAttachment(string: navigationAttempts.joined(separator: "\n"))
+        navigation.name = "youtube-quality-navigation"
+        navigation.lifetime = .keepAlways
+        add(navigation)
+
+        guard fixedListOpened else {
+            attachUIHierarchy(app, named: "youtube-quality-navigation-failed")
+            attachScreenshot(named: "youtube-quality-navigation-failed")
+            throw ScenarioError.failed("YouTube fixed-resolution list did not open")
         }
 
         let selected: String
+        var selectionMethod = "accessibility_label"
         do {
             // Some releases publish the fixed-resolution rows normally.
             selected = try tapFirstPreferred(preferred, in: app, timeout: min(timeout, 2))
@@ -792,29 +925,9 @@ final class DeviceScenarioTests: XCTestCase {
             // YouTube 21.x renders the resolution strings visually while AX
             // exposes only unlabeled full-width 48pt buttons.  Preserve their
             // visual order and activate the third/fourth row for 1080p/720p.
-            var unlabeledRows: [XCUIElement] = []
-            var buttonDiagnostics: [String] = []
-            let buttons = app.buttons
-            for attempt in 0 ..< 15 {
-                unlabeledRows.removeAll()
-                buttonDiagnostics.removeAll()
-                for index in 0 ..< min(buttons.count, 100) {
-                    let candidate = buttons.element(boundBy: index)
-                    guard candidate.exists else { continue }
-                    let frame = candidate.frame
-                    if index < 40 {
-                        buttonDiagnostics.append(String(format: "%d: x=%.0f y=%.0f w=%.0f h=%.0f label=%@ id=%@", index, frame.minX, frame.minY, frame.width, frame.height, candidate.label, candidate.identifier))
-                    }
-                    guard frame.width >= 380,
-                          frame.height >= 40,
-                          frame.height <= 56,
-                          frame.minY >= 450 else { continue }
-                    unlabeledRows.append(candidate)
-                }
-                if !unlabeledRows.isEmpty || attempt == 14 { break }
-                Thread.sleep(forTimeInterval: 0.4)
-            }
-            unlabeledRows.sort { $0.frame.minY < $1.frame.minY }
+            let rowSnapshot = resolutionRows()
+            let unlabeledRows = rowSnapshot.rows
+            let buttonDiagnostics = rowSnapshot.diagnostics
 
             let preferredRow: (value: String, index: Int)?
             if let value = preferred.first(where: { $0.localizedCaseInsensitiveContains("1080p60") }) {
@@ -831,6 +944,7 @@ final class DeviceScenarioTests: XCTestCase {
                 throw error
             }
             selected = preferredRow.value
+            selectionMethod = "validated_resolution_row_\(preferredRow.index)"
 
             let rowFrames = unlabeledRows.map {
                 String(format: "x=%.0f y=%.0f w=%.0f h=%.0f", $0.frame.minX, $0.frame.minY, $0.frame.width, $0.frame.height)
@@ -840,27 +954,20 @@ final class DeviceScenarioTests: XCTestCase {
             geometry.lifetime = .keepAlways
             add(geometry)
 
-            if unlabeledRows.indices.contains(preferredRow.index) {
-                unlabeledRows[preferredRow.index].tap()
-            } else {
-                // Application coordinates exclude the status bar.  The
-                // visible 1080p/720p row centres therefore map to roughly
-                // 0.58/0.64 rather than the full-screen 0.61/0.66 values.
-                let fallbackY = preferredRow.index == 2 ? 0.58 : 0.64
-                app.coordinate(withNormalizedOffset: CGVector(dx: 0.5, dy: fallbackY)).tap()
+            guard unlabeledRows.indices.contains(preferredRow.index) else {
+                throw ScenarioError.failed(
+                    "validated YouTube resolution list is missing row \(preferredRow.index)"
+                )
             }
+            unlabeledRows[preferredRow.index].tap()
         }
         Thread.sleep(forTimeInterval: 1)
-        app.coordinate(withNormalizedOffset: CGVector(dx: 0.5, dy: 0.2)).tap()
-        if overflow.waitForExistence(timeout: 3) {
-            overflow.tap()
-            let settingsEvidence = element(containingAny: [selected], in: app)
-            if !settingsEvidence.waitForExistence(timeout: 2) {
-                openQualityModeSheet()
-            }
-        }
-        let evidence = element(containingAny: [selected], in: app)
-        try require(evidence.waitForExistence(timeout: timeout), "selected YouTube quality is not visible: \(selected)")
+        let selection = XCTAttachment(
+            string: "selected=\(selected) method=\(selectionMethod) fixed_resolution_list_validated=true"
+        )
+        selection.name = "youtube-quality-selection"
+        selection.lifetime = .keepAlways
+        add(selection)
         attachScreenshot(named: "youtube-quality-\(safeName(selected))")
     }
 
