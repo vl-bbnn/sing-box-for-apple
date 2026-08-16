@@ -29,6 +29,9 @@ open class ExtensionProvider: NEPacketTunnelProvider {
   private static let whitelistTransportMemoryRecoverySkipLogInterval: TimeInterval = 30
   private let lifecycleStateLock = NSLock()
   private var stopTunnelGeneration: UInt64 = 0
+  private var commandServerGeneration: UInt64 = 0
+  private var commandServerState = "absent"
+  private var diagnosticsHeartbeatSequence: UInt64 = 0
 
   public private(set) var commandServer: LibboxCommandServer?
   private lazy var platformInterface = ExtensionPlatformInterface(self)
@@ -276,6 +279,9 @@ open class ExtensionProvider: NEPacketTunnelProvider {
       throw ExtensionStartupError(
         "(packet-tunnel): start command server error: \(error.localizedDescription)")
     }
+    let activeCommandServerGeneration = markCommandServerStarted()
+    recordLifecycleIncident(
+      "(packet-tunnel): command server started generation=\(activeCommandServerGeneration)")
     recordStartupStage(
       "command-server", startedAt: stageStartedAt, totalStartedAt: startupStartedAt)
 
@@ -340,6 +346,7 @@ open class ExtensionProvider: NEPacketTunnelProvider {
     diagnosticsStartedAt = Date()
     diagnosticsLastMemoryPressureAt = nil
     diagnosticsLastThermalState = nil
+    resetDiagnosticsHeartbeatSequence()
     #if os(iOS) && SFI_DEV
       diagnosticsLastMemoryRecoveryAt = nil
       diagnosticsLastMemoryRecoverySkipAt = nil
@@ -376,13 +383,17 @@ open class ExtensionProvider: NEPacketTunnelProvider {
     let timer = DispatchSource.makeTimerSource(queue: DispatchQueue.global(qos: .utility))
     timer.schedule(deadline: .now() + .seconds(5), repeating: .seconds(5), leeway: .seconds(1))
     timer.setEventHandler { [weak self] in
+      guard let self else {
+        return
+      }
+      let heartbeatSequence = self.nextDiagnosticsHeartbeatSequence()
       let memoryBytes = PacketTunnelDiagnostics.residentMemoryBytes()
       let memoryDescription = memoryBytes.map { PacketTunnelDiagnostics.formatBytes($0) }
         ?? "unknown"
-      let thermalDescription = self?.thermalStateDescription() ?? "unknown"
-      self?.recordLifecycleEvent(
-        "(packet-tunnel): heartbeat memory=\(memoryDescription) thermal=\(thermalDescription)")
-      if let self, thermalDescription != self.diagnosticsLastThermalState {
+      let thermalDescription = self.thermalStateDescription()
+      self.recordLifecycleEvent(
+        "(packet-tunnel): heartbeat sequence=\(heartbeatSequence) memory=\(memoryDescription) thermal=\(thermalDescription)")
+      if thermalDescription != self.diagnosticsLastThermalState {
         let previousThermalState = self.diagnosticsLastThermalState ?? "unknown"
         self.diagnosticsLastThermalState = thermalDescription
         self.recordLifecycleIncident(
@@ -390,7 +401,7 @@ open class ExtensionProvider: NEPacketTunnelProvider {
       }
       #if os(iOS) && SFI_DEV
         if let memoryBytes {
-          self?.scheduleWhitelistTransportMemoryRecoveryIfNeeded(
+          self.scheduleWhitelistTransportMemoryRecoveryIfNeeded(
             memoryBytes: memoryBytes,
             reason: "heartbeat"
           )
@@ -674,7 +685,12 @@ open class ExtensionProvider: NEPacketTunnelProvider {
   }
 
   private func enrichDiagnosticsMessage(_ message: String) -> String {
-    var fields: [String] = []
+    let commandServer = commandServerDiagnosticsSnapshot()
+    var fields = [
+      "pid=\(getpid())",
+      "command_generation=\(commandServer.generation)",
+      "command_state=\(commandServer.state)",
+    ]
     if let diagnosticsSessionID {
       fields.append("session=\(diagnosticsSessionID)")
     }
@@ -804,6 +820,52 @@ open class ExtensionProvider: NEPacketTunnelProvider {
     lifecycleStateLock.unlock()
   }
 
+  private func markCommandServerStarted() -> UInt64 {
+    lifecycleStateLock.lock()
+    commandServerGeneration &+= 1
+    commandServerState = "listening"
+    let generation = commandServerGeneration
+    lifecycleStateLock.unlock()
+    return generation
+  }
+
+  private func markCommandServerClosing() -> UInt64 {
+    lifecycleStateLock.lock()
+    commandServerState = "closing"
+    let generation = commandServerGeneration
+    lifecycleStateLock.unlock()
+    return generation
+  }
+
+  private func markCommandServerClosed() -> UInt64 {
+    lifecycleStateLock.lock()
+    commandServerState = "closed"
+    let generation = commandServerGeneration
+    lifecycleStateLock.unlock()
+    return generation
+  }
+
+  private func commandServerDiagnosticsSnapshot() -> (generation: UInt64, state: String) {
+    lifecycleStateLock.lock()
+    let snapshot = (commandServerGeneration, commandServerState)
+    lifecycleStateLock.unlock()
+    return snapshot
+  }
+
+  private func resetDiagnosticsHeartbeatSequence() {
+    lifecycleStateLock.lock()
+    diagnosticsHeartbeatSequence = 0
+    lifecycleStateLock.unlock()
+  }
+
+  private func nextDiagnosticsHeartbeatSequence() -> UInt64 {
+    lifecycleStateLock.lock()
+    diagnosticsHeartbeatSequence &+= 1
+    let sequence = diagnosticsHeartbeatSequence
+    lifecycleStateLock.unlock()
+    return sequence
+  }
+
   private func throwIfStopTunnelRequested(since generation: UInt64) throws {
     if currentStopTunnelGeneration() != generation {
       throw ExtensionStartupError("(packet-tunnel) error: start service canceled by stopTunnel")
@@ -905,9 +967,15 @@ open class ExtensionProvider: NEPacketTunnelProvider {
     stopDiagnosticsHeartbeat()
     stopService()
     if let server = commandServer {
+      let generation = markCommandServerClosing()
+      recordLifecycleIncident(
+        "(packet-tunnel): command server closing generation=\(generation)")
       try? await Task.sleep(nanoseconds: 100 * NSEC_PER_MSEC)
       server.close()
       commandServer = nil
+      let closedGeneration = markCommandServerClosed()
+      recordLifecycleIncident(
+        "(packet-tunnel): command server closed generation=\(closedGeneration)")
     }
     #if os(macOS)
       if Variant.useSystemExtension {
