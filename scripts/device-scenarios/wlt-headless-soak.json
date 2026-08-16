@@ -1,0 +1,70 @@
+{
+  "run_id": "host-overrides-this-value",
+  "repetitions": 1,
+  "required_transport": "cellular",
+  "vpn_mode": "wlt",
+  "startup_timeout_seconds": 180,
+  "settle_seconds": 2,
+  "route_workloads": [
+    {
+      "route": "ru",
+      "http_probes": [
+        {
+          "name": "soak-initial-ru-1mib",
+          "url": "https://speed.cloudflare.com/__down?bytes=1048576&seed=ios-soak-initial-ru",
+          "minimum_bytes": 1000000,
+          "timeout_seconds": 90,
+          "resource_sample_limit": 0,
+          "policy_status_codes": []
+        }
+      ],
+      "playback_probes": []
+    },
+    {
+      "route": "eu",
+      "http_probes": [
+        {
+          "name": "soak-initial-eu-1mib",
+          "url": "https://speed.cloudflare.com/__down?bytes=1048576&seed=ios-soak-initial-eu",
+          "minimum_bytes": 1000000,
+          "timeout_seconds": 90,
+          "resource_sample_limit": 0,
+          "policy_status_codes": []
+        }
+      ],
+      "playback_probes": []
+    },
+    {
+      "route": "ru",
+      "http_probes": [
+        {
+          "name": "soak-ru-return-youtube-cdn",
+          "url": "https://i.ytimg.com/vi/aqz-KE-bpKQ/maxresdefault.jpg",
+          "minimum_bytes": 10000,
+          "timeout_seconds": 60,
+          "resource_sample_limit": 0,
+          "policy_status_codes": []
+        }
+      ],
+      "playback_probes": []
+    }
+  ],
+  "soak_duration_seconds": 1800,
+  "soak_interval_seconds": 300,
+  "soak_probe": {
+    "name": "soak-periodic-ru-1mib",
+    "url": "https://speed.cloudflare.com/__down?bytes=1048576&seed=ios-soak-periodic",
+    "minimum_bytes": 1000000,
+    "timeout_seconds": 90,
+    "resource_sample_limit": 0,
+    "policy_status_codes": []
+  },
+  "warm_probe": {
+    "name": "soak-warm-neutral-64kib",
+    "url": "https://speed.cloudflare.com/__down?bytes=65536&seed=ios-soak-warm",
+    "minimum_bytes": 65536,
+    "timeout_seconds": 60,
+    "resource_sample_limit": 0,
+    "policy_status_codes": []
+  }
+}

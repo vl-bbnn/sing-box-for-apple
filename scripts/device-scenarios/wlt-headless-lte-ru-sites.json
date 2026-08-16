@@ -1,0 +1,48 @@
+{
+  "run_id": "host-overrides-this-value",
+  "repetitions": 1,
+  "required_transport": "cellular",
+  "vpn_mode": "wlt",
+  "startup_timeout_seconds": 180,
+  "settle_seconds": 2,
+  "route_workloads": [
+    {
+      "route": "ru",
+      "http_probes": [
+        {
+          "name": "rozetked",
+          "url": "https://rozetked.me/",
+          "minimum_bytes": 1000,
+          "timeout_seconds": 60,
+          "resource_sample_limit": 10,
+          "policy_status_codes": []
+        },
+        {
+          "name": "4pda-policy-control",
+          "url": "https://4pda.to/",
+          "minimum_bytes": 0,
+          "timeout_seconds": 60,
+          "resource_sample_limit": 0,
+          "policy_status_codes": [403]
+        },
+        {
+          "name": "zol",
+          "url": "https://zol.ru/",
+          "minimum_bytes": 1000,
+          "timeout_seconds": 60,
+          "resource_sample_limit": 10,
+          "policy_status_codes": []
+        }
+      ],
+      "playback_probes": []
+    }
+  ],
+  "warm_probe": {
+    "name": "warm-neutral-64kib",
+    "url": "https://speed.cloudflare.com/__down?bytes=65536&seed=headless-wlt-ru-sites-warm",
+    "minimum_bytes": 65536,
+    "timeout_seconds": 60,
+    "resource_sample_limit": 0,
+    "policy_status_codes": []
+  }
+}

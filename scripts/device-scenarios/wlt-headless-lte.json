@@ -1,0 +1,133 @@
+{
+  "run_id": "host-overrides-this-value",
+  "repetitions": 3,
+  "required_transport": "cellular",
+  "startup_timeout_seconds": 180,
+  "settle_seconds": 2,
+  "route_workloads": [
+    {
+      "route": "ru",
+      "http_probes": [
+        {
+          "name": "rozetked",
+          "url": "https://rozetked.me/",
+          "minimum_bytes": 1000,
+          "timeout_seconds": 60,
+          "resource_sample_limit": 10,
+          "policy_status_codes": []
+        },
+        {
+          "name": "4pda-policy-control",
+          "url": "https://4pda.to/",
+          "minimum_bytes": 0,
+          "timeout_seconds": 60,
+          "resource_sample_limit": 0,
+          "policy_status_codes": [403]
+        },
+        {
+          "name": "zol",
+          "url": "https://zol.ru/",
+          "minimum_bytes": 1000,
+          "timeout_seconds": 60,
+          "resource_sample_limit": 10,
+          "policy_status_codes": []
+        },
+        {
+          "name": "neutral-1mib",
+          "url": "https://speed.cloudflare.com/__down?bytes=1048576&seed=headless-wlt",
+          "minimum_bytes": 1000000,
+          "timeout_seconds": 120,
+          "resource_sample_limit": 0,
+          "policy_status_codes": []
+        },
+        {
+          "name": "youtube-connectivity",
+          "url": "https://www.youtube.com/generate_204",
+          "minimum_bytes": 0,
+          "timeout_seconds": 30,
+          "resource_sample_limit": 0,
+          "policy_status_codes": []
+        },
+        {
+          "name": "youtube-image-cdn",
+          "url": "https://i.ytimg.com/vi/aqz-KE-bpKQ/maxresdefault.jpg",
+          "minimum_bytes": 10000,
+          "timeout_seconds": 60,
+          "resource_sample_limit": 0,
+          "policy_status_codes": []
+        }
+      ],
+      "playback_probes": [
+        {
+          "name": "youtube-web-playback",
+          "url": "https://www.youtube.com/embed/aqz-KE-bpKQ?autoplay=1&mute=1&playsinline=1",
+          "adapter": "youtube_iframe",
+          "timeout_seconds": 60,
+          "observation_seconds": 45,
+          "minimum_advance_seconds": 30
+        }
+      ]
+    },
+    {
+      "route": "eu",
+      "http_probes": [
+        {
+          "name": "lostfilm",
+          "url": "https://lostfilm.tv/",
+          "minimum_bytes": 1000,
+          "timeout_seconds": 60,
+          "resource_sample_limit": 10,
+          "policy_status_codes": []
+        },
+        {
+          "name": "neutral-eu-1mib",
+          "url": "https://speed.cloudflare.com/__down?bytes=1048576&seed=headless-wlt-eu",
+          "minimum_bytes": 1000000,
+          "timeout_seconds": 120,
+          "resource_sample_limit": 0,
+          "policy_status_codes": []
+        }
+      ],
+      "playback_probes": []
+    },
+    {
+      "route": "ru",
+      "http_probes": [
+        {
+          "name": "twitch-directory",
+          "url": "https://www.twitch.tv/directory/category/just-chatting",
+          "minimum_bytes": 1000,
+          "timeout_seconds": 60,
+          "resource_sample_limit": 10,
+          "policy_status_codes": []
+        },
+        {
+          "name": "twitch-image-cdn",
+          "url": "https://static-cdn.jtvnw.net/ttv-boxart/Just%20Chatting-285x380.jpg",
+          "minimum_bytes": 5000,
+          "timeout_seconds": 60,
+          "resource_sample_limit": 0,
+          "policy_status_codes": []
+        }
+      ],
+      "playback_probes": [
+        {
+          "name": "twitch-hls-160p30-playback",
+          "url": "https://d1m7jfoe9zdc1j.cloudfront.net/e21cbed6c44513182153_gaules_318677786229_1786421848/160p30/index-dvr.m3u8",
+          "adapter": "html_video",
+          "timeout_seconds": 60,
+          "observation_seconds": 45,
+          "minimum_advance_seconds": 30
+        }
+      ]
+    }
+  ],
+  "warm_probe": {
+    "name": "warm-neutral-64kib",
+    "url": "https://speed.cloudflare.com/__down?bytes=65536&seed=headless-wlt-warm",
+    "minimum_bytes": 65536,
+    "timeout_seconds": 60,
+    "resource_sample_limit": 0,
+    "policy_status_codes": []
+  }
+}

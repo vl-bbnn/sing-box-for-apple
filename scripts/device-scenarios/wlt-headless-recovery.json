@@ -1,0 +1,119 @@
+{
+  "run_id": "host-overrides-this-value",
+  "repetitions": 1,
+  "required_transport": "cellular",
+  "vpn_mode": "wlt",
+  "startup_timeout_seconds": 180,
+  "settle_seconds": 2,
+  "route_workloads": [
+    {
+      "route": "ru",
+      "http_probes": [
+        {
+          "name": "validation-sentinel",
+          "url": "https://speed.cloudflare.com/__down?bytes=65536&seed=recovery-validation",
+          "minimum_bytes": 65536,
+          "timeout_seconds": 45,
+          "resource_sample_limit": 0,
+          "policy_status_codes": []
+        }
+      ],
+      "playback_probes": []
+    }
+  ],
+  "network_recovery_phases": [
+    {
+      "name": "lte-before",
+      "required_transport": "cellular",
+      "transition_timeout_seconds": 180,
+      "route_workloads": [
+        {
+          "route": "ru",
+          "http_probes": [
+            {
+              "name": "lte-before-neutral-1mib",
+              "url": "https://speed.cloudflare.com/__down?bytes=1048576&seed=ios-recovery-501",
+              "minimum_bytes": 1000000,
+              "timeout_seconds": 90,
+              "resource_sample_limit": 0,
+              "policy_status_codes": []
+            },
+            {
+              "name": "lte-before-youtube-image",
+              "url": "https://i.ytimg.com/vi/aqz-KE-bpKQ/maxresdefault.jpg",
+              "minimum_bytes": 10000,
+              "timeout_seconds": 60,
+              "resource_sample_limit": 0,
+              "policy_status_codes": []
+            }
+          ],
+          "playback_probes": []
+        }
+      ]
+    },
+    {
+      "name": "wifi-transition",
+      "required_transport": "wifi",
+      "transition_timeout_seconds": 180,
+      "route_workloads": [
+        {
+          "route": "ru",
+          "http_probes": [
+            {
+              "name": "wifi-transition-neutral-1mib",
+              "url": "https://speed.cloudflare.com/__down?bytes=1048576&seed=ios-recovery-502",
+              "minimum_bytes": 1000000,
+              "timeout_seconds": 90,
+              "resource_sample_limit": 0,
+              "policy_status_codes": []
+            }
+          ],
+          "playback_probes": []
+        }
+      ]
+    },
+    {
+      "name": "lte-after",
+      "required_transport": "cellular",
+      "transition_timeout_seconds": 180,
+      "route_workloads": [
+        {
+          "route": "eu",
+          "http_probes": [
+            {
+              "name": "lte-after-dns",
+              "url": "https://www.cloudflare.com/cdn-cgi/trace?seed=ios-recovery-dns",
+              "minimum_bytes": 0,
+              "timeout_seconds": 45,
+              "resource_sample_limit": 0,
+              "policy_status_codes": []
+            },
+            {
+              "name": "lte-after-neutral-1mib",
+              "url": "https://speed.cloudflare.com/__down?bytes=1048576&seed=ios-recovery-503",
+              "minimum_bytes": 1000000,
+              "timeout_seconds": 90,
+              "resource_sample_limit": 0,
+              "policy_status_codes": []
+            }
+          ],
+          "playback_probes": []
+        },
+        {
+          "route": "ru",
+          "http_probes": [
+            {
+              "name": "lte-after-youtube-image",
+              "url": "https://i.ytimg.com/vi/aqz-KE-bpKQ/maxresdefault.jpg",
+              "minimum_bytes": 10000,
+              "timeout_seconds": 60,
+              "resource_sample_limit": 0,
+              "policy_status_codes": []
+            }
+          ],
+          "playback_probes": []
+        }
+      ]
+    }
+  ]
+}
