@@ -174,6 +174,8 @@ build_app() {
 		-configuration "$configuration" \
 		-destination 'generic/platform=iOS' \
 		-derivedDataPath "$derived_data_path" \
+		-disableAutomaticPackageResolution \
+		-onlyUsePackageVersionsFromResolvedFile \
 		-skipPackagePluginValidation \
 		build >"$build_dir/xcodebuild-sfi-device.log" 2>&1
 	local app

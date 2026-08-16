@@ -19,9 +19,13 @@ close_mirroring="${WLT_SCENARIO_CLOSE_MIRRORING:-0}"
 preflight_app="${WLT_SCENARIO_PREFLIGHT_APP:-1}"
 test_attempt_limit="${WLT_SCENARIO_TEST_ATTEMPTS:-2}"
 reset_automation_on_timeout="${WLT_SCENARIO_RESET_AUTOMATION_ON_TIMEOUT:-0}"
+reset_runners_before_test="${WLT_SCENARIO_RESET_RUNNERS_BEFORE_TEST:-0}"
 preflight_wait_seconds="${WLT_SCENARIO_PREFLIGHT_WAIT_SECONDS:-180}"
 install_app_mode="${WLT_SCENARIO_INSTALL_APP:-auto}"
+target_app_override="${WLT_SCENARIO_TARGET_APP:-}"
 leave_running="${WLT_SCENARIO_LEAVE_RUNNING:-0}"
+scenario_repetitions="${WLT_SCENARIO_REPETITIONS:-1}"
+ui_authorization="${WLT_SCENARIO_UI_AUTHORIZATION:-deny}"
 coredevice_framework_cli="/Library/Developer/PrivateFrameworks/CoreDevice.framework/Versions/A/Resources/bin/devicectl"
 coredevice_cli_path="${WLT_SCENARIO_COREDEVICE_CLI:-}"
 if [[ -z "$coredevice_cli_path" && -x "$coredevice_framework_cli" ]]; then
@@ -35,6 +39,7 @@ timestamp="$(date '+%Y-%m-%d-%H%M%S')"
 artifact_dir="${WLT_SCENARIO_ARTIFACT_DIR:-$artifact_root/wlt-device-scenario-$timestamp}"
 final_classification="not_started"
 test_attempts=0
+automation_authorization_prompt=0
 
 log() {
     printf '[wlt-device-scenario] %s\n' "$*" >&2
@@ -63,10 +68,39 @@ terminate_process_tree() {
     kill -TERM "$parent" >/dev/null 2>&1 || true
 }
 
+process_is_descendant() {
+    local child="$1"
+    local ancestor="$2"
+    local parent
+    while [[ "$child" =~ ^[0-9]+$ ]] && ((child > 1)); do
+        [[ "$child" == "$ancestor" ]] && return 0
+        parent="$(ps -o ppid= -p "$child" 2>/dev/null | tr -d ' ')"
+        [[ "$parent" =~ ^[0-9]+$ ]] || break
+        child="$parent"
+    done
+    return 1
+}
+
+stop_interactive_xcode_diagnostics() {
+    local xcode_pid="$1"
+    local diagnostic_pid command
+    while kill -0 "$xcode_pid" >/dev/null 2>&1; do
+        while IFS= read -r diagnostic_pid; do
+            [[ "$diagnostic_pid" =~ ^[0-9]+$ ]] || continue
+            process_is_descendant "$diagnostic_pid" "$xcode_pid" || continue
+            command="$(ps -o command= -p "$diagnostic_pid" 2>/dev/null || true)"
+            [[ "$command" == *"devicectl diagnose"* ]] || continue
+            log "stopping automatic devicectl diagnostics so XCTest recovery remains unattended"
+            terminate_process_tree "$diagnostic_pid"
+        done < <(pgrep -f '/devicectl diagnose' 2>/dev/null || true)
+        sleep 2
+    done
+}
+
 run_with_host_timeout() {
     local timeout_seconds="$1"
     shift
-    local marker pid watchdog status
+    local marker pid watchdog diagnostics_watchdog status
     marker="$(mktemp "${TMPDIR:-/tmp}/wlt-host-timeout.XXXXXX")"
     # Night cycles can run under a managed PTY. Never let xcodebuild or a
     # devicectl diagnostics child inherit that terminal as stdin: a background
@@ -74,6 +108,8 @@ run_with_host_timeout() {
     # watchdog until its full deadline.
     "$@" </dev/null &
     pid=$!
+    stop_interactive_xcode_diagnostics "$pid" &
+    diagnostics_watchdog=$!
     (
         sleep "$timeout_seconds"
         if kill -0 "$pid" >/dev/null 2>&1; then
@@ -89,6 +125,8 @@ run_with_host_timeout() {
     else
         status=$?
     fi
+    terminate_process_tree "$diagnostics_watchdog"
+    wait "$diagnostics_watchdog" >/dev/null 2>&1 || true
     terminate_process_tree "$watchdog"
     wait "$watchdog" >/dev/null 2>&1 || true
     if [[ -s "$marker" ]]; then
@@ -221,6 +259,51 @@ automation_mode_requires_authentication() {
         "$artifact_dir/automation-mode-status.txt"
 }
 
+capture_automation_timeout_state() {
+    local device="$1"
+    run_devicectl device info lockState \
+        --device "$device" \
+        --timeout 15 \
+        --json-output "$artifact_dir/automation-timeout-lock-state.json" \
+        --quiet >/dev/null 2>&1 || true
+    run_devicectl device capture screenshot \
+        --device "$device" \
+        --destination "$artifact_dir/automation-timeout-screen.png" \
+        --timeout 20 \
+        --json-output "$artifact_dir/automation-timeout-screenshot.json" \
+        --quiet >/dev/null 2>&1 || true
+}
+
+automation_timeout_requires_device_passcode() {
+    local screenshot="$artifact_dir/automation-timeout-screen.png"
+    local ocr="$artifact_dir/automation-timeout-ocr.txt"
+    [[ -s "$screenshot" ]] || return 1
+    xcrun swift -e '
+import Foundation
+import ImageIO
+import Vision
+
+let imageURL = URL(fileURLWithPath: CommandLine.arguments[1])
+guard
+    let source = CGImageSourceCreateWithURL(imageURL as CFURL, nil),
+    let image = CGImageSourceCreateImageAtIndex(source, 0, nil)
+else {
+    exit(2)
+}
+let request = VNRecognizeTextRequest()
+request.recognitionLevel = .accurate
+request.usesLanguageCorrection = false
+let handler = VNImageRequestHandler(cgImage: image, options: [:])
+try handler.perform([request])
+for observation in request.results ?? [] {
+    if let text = observation.topCandidates(1).first?.string {
+        print(text)
+    }
+}
+' "$screenshot" >"$ocr" 2>/dev/null || return 1
+    rg -qi 'Enter iPhone Passcode for.*XCTest|Enable UI Automation' "$ocr"
+}
+
 record_competing_coredevice_sessions() {
     local destination="$artifact_dir/coredevice-competing-sessions.txt"
     local current_user
@@ -274,6 +357,8 @@ classify_log_failure() {
     local path="$1"
     if rg -qi 'WLT_HOST_TIMEOUT' "$path"; then
         printf 'host_command_timeout\n'
+    elif rg -qi 'Timed out while enabling automation mode' "$path"; then
+        printf 'automation_mode_timeout\n'
     elif rg -qi 'device was not, or could not be, unlocked|reason: Locked|DeviceLocked|device is locked' "$path"; then
         printf 'device_locked\n'
     elif rg -qi 'invalid code signature|profile has not been explicitly trusted|untrusted developer|RequestDenied.*Security' "$path"; then
@@ -621,11 +706,12 @@ patch_xctestrun_environment() {
     local plist="$1"
     local encoded="$2"
     local persistent="$3"
-    /usr/bin/python3 - "$plist" "$encoded" "$persistent" <<'PY'
+    local target_app="$4"
+    /usr/bin/python3 - "$plist" "$encoded" "$persistent" "$target_app" <<'PY'
 import plistlib
 import sys
 
-path, encoded, persistent = sys.argv[1:]
+path, encoded, persistent, target_app = sys.argv[1:]
 with open(path, "rb") as handle:
     root = plistlib.load(handle)
 
@@ -643,6 +729,16 @@ for target in targets:
         continue
     target.setdefault("EnvironmentVariables", {})["WLT_DEVICE_SCENARIO_BASE64"] = encoded
     target.setdefault("EnvironmentVariables", {})["WLT_DEVICE_LEAVE_RUNNING"] = persistent
+    if target_app:
+        target["UITargetAppPath"] = target_app
+        dependent_paths = target.get("DependentProductPaths")
+        if isinstance(dependent_paths, list):
+            target["DependentProductPaths"] = [
+                target_app
+                if str(item).rstrip("/").endswith(("/dev-vpn.app", "/SFI.app"))
+                else item
+                for item in dependent_paths
+            ]
     matched += 1
 
 if matched != 1:
@@ -652,12 +748,77 @@ with open(path, "wb") as handle:
 PY
 }
 
+build_effective_scenario() {
+    local source="$1"
+    local destination="$2"
+    local repetitions="$3"
+    /usr/bin/python3 - "$source" "$destination" "$repetitions" <<'PY'
+import copy
+import json
+import sys
+
+source, destination, repetitions_text = sys.argv[1:]
+repetitions = int(repetitions_text)
+with open(source, "r", encoding="utf-8") as handle:
+    scenario = json.load(handle)
+
+if repetitions == 1:
+    effective = scenario
+else:
+    source_steps = scenario.get("steps")
+    cleanup_steps = scenario.get("cleanup_steps", [])
+    if not isinstance(source_steps, list) or not source_steps:
+        raise SystemExit("repeated scenario requires a non-empty steps array")
+    if not isinstance(cleanup_steps, list):
+        raise SystemExit("cleanup_steps must be an array")
+
+    def tagged(step, repetition, boundary_cleanup=False):
+        result = copy.deepcopy(step)
+        prefix = f"r{repetition:02d}-"
+        if result.get("name"):
+            result["name"] = prefix + str(result["name"])
+        if result.get("section"):
+            result["section"] = prefix + str(result["section"])
+        if boundary_cleanup:
+            # A failed boundary would contaminate the next repetition. Abort
+            # the single XCTest session so it cannot manufacture apparently
+            # comparable samples from an unknown device state.
+            result["fatal"] = True
+        return result
+
+    steps = []
+    for repetition in range(1, repetitions + 1):
+        steps.extend(tagged(step, repetition) for step in source_steps)
+        if repetition != repetitions:
+            steps.extend(
+                tagged(step, repetition, boundary_cleanup=True)
+                for step in cleanup_steps
+            )
+
+    effective = copy.deepcopy(scenario)
+    effective["name"] = (
+        f"{scenario.get('name', 'WLT device scenario')} "
+        f"[{repetitions} repetitions; one XCTest session]"
+    )
+    effective["steps"] = steps
+    effective["wlt_single_session_repetitions"] = repetitions
+
+with open(destination, "w", encoding="utf-8") as handle:
+    json.dump(effective, handle, ensure_ascii=False, indent=2)
+    handle.write("\n")
+PY
+}
+
 find_xctestrun() {
     find "$build_dir/Build/Products" -maxdepth 2 -name '*.xctestrun' \
         ! -name 'wlt-device-scenario.xctestrun' -type f -print | sort | tail -n 1
 }
 
 find_target_app() {
+    if [[ -n "$target_app_override" ]]; then
+        printf '%s\n' "$target_app_override"
+        return
+    fi
     find "$build_dir/Build/Products/${configuration}-iphoneos" -maxdepth 1 -name '*.app' -type d -print |
         while IFS= read -r candidate; do
             case "$(basename "$candidate")" in
@@ -734,6 +895,24 @@ preflight_target_app() {
             --timeout 60; then
             return 0
         fi
+        if rg -q 'CoreDeviceError error 10004|process identifier of the launched application could not be determined' \
+            "$artifact_dir/devicectl-$launch_label.log"; then
+            # The test-only launch environment can make SwiftUI hand off the
+            # scene before CoreDevice observes a stable PID.  That is not a
+            # trust verdict: the same signed app can still launch normally and
+            # XCTest applies its own launch environment later.  Confirm the
+            # installed app and developer trust with one plain launch instead
+            # of blocking an otherwise unattended cycle.
+            log "test-environment trust preflight exited before PID; retrying one plain app launch"
+            launch_label="launch-app-plain"
+            if devicectl_retry "$launch_label" device process launch \
+                --device "$device" \
+                --terminate-existing \
+                "$bundle_identifier" \
+                --timeout 60; then
+                return 0
+            fi
+        fi
         launch_classification="$(classify_log_failure "$artifact_dir/devicectl-$launch_label.log")"
         if [[ "$launch_classification" == "app_not_installed" && "$app_installed" == "0" && "$install_app_mode" != "never" && "$install_app_mode" != "0" ]]; then
             log "target app is missing; installing the existing build once"
@@ -790,9 +969,19 @@ run() {
     validate_positive_integer WLT_SCENARIO_BUILD_HOST_TIMEOUT "$build_host_timeout"
     validate_positive_integer WLT_SCENARIO_TEST_HOST_TIMEOUT "$test_host_timeout"
     validate_positive_integer WLT_SCENARIO_TEST_ATTEMPTS "$test_attempt_limit"
+    validate_positive_integer WLT_SCENARIO_REPETITIONS "$scenario_repetitions"
     validate_non_negative_integer WLT_SCENARIO_PREFLIGHT_WAIT_SECONDS "$preflight_wait_seconds"
-    [[ "$reset_automation_on_timeout" == "0" || "$reset_automation_on_timeout" == "1" ]] \
-        || die "WLT_SCENARIO_RESET_AUTOMATION_ON_TIMEOUT must be 0 or 1"
+    case "$ui_authorization" in
+        supervised) ;;
+        deny)
+            die "XCUITest is disabled by default because iOS can require a device passcode for Automation Mode. Use iphone_wlt_headless.sh for unattended transport tests, or set WLT_SCENARIO_UI_AUTHORIZATION=supervised only while an operator is present"
+            ;;
+        *) die "WLT_SCENARIO_UI_AUTHORIZATION must be deny or supervised" ;;
+    esac
+    [[ "$reset_automation_on_timeout" == "0" ]] \
+        || die "WLT_SCENARIO_RESET_AUTOMATION_ON_TIMEOUT=1 is unsafe: a writer reset can discard the iPhone Automation Mode grant and require a device passcode"
+    [[ "$reset_runners_before_test" == "0" || "$reset_runners_before_test" == "1" ]] \
+        || die "WLT_SCENARIO_RESET_RUNNERS_BEFORE_TEST must be 0 or 1"
     case "$install_app_mode" in
         auto | always | never | 0 | 1) ;;
         *) die "WLT_SCENARIO_INSTALL_APP must be auto, always, never, 0, or 1" ;;
@@ -808,6 +997,7 @@ run() {
     mkdir -p "$artifact_dir" "$build_dir"
     final_classification="host_setup_failed"
     test_attempts=0
+    automation_authorization_prompt=0
     trap 'status=$?; printf "exit_status=%s\nclassification=%s\ntest_attempts=%s\n" "$status" "$final_classification" "$test_attempts" >"$artifact_dir/status.txt"; write_result "$status" "$final_classification" "$test_attempts"; printf "%s\n" "$artifact_dir"' EXIT
     close_iphone_mirroring
     final_classification="device_unavailable"
@@ -837,15 +1027,19 @@ run() {
             || die "build-for-testing failed; see $artifact_dir/xcodebuild-build.log"
     fi
 
-    local source_xctestrun patched_xctestrun encoded
+    local source_xctestrun patched_xctestrun encoded effective_scenario
     source_xctestrun="$(find_xctestrun)"
     [[ -n "$source_xctestrun" ]] || die "xctestrun was not produced"
     patched_xctestrun="$build_dir/Build/Products/wlt-device-scenario.xctestrun"
     cp "$source_xctestrun" "$patched_xctestrun"
-    encoded="$(base64 <"$scenario_path" | tr -d '\n')"
-    patch_xctestrun_environment "$patched_xctestrun" "$encoded" "$leave_running"
+    effective_scenario="$artifact_dir/scenario.json"
+    build_effective_scenario "$scenario_path" "$effective_scenario" "$scenario_repetitions"
+    encoded="$(base64 <"$effective_scenario" | tr -d '\n')"
+    patch_xctestrun_environment "$patched_xctestrun" "$encoded" "$leave_running" "$target_app_override"
     cp "$patched_xctestrun" "$artifact_dir/$(basename "$source_xctestrun")"
-    cp "$scenario_path" "$artifact_dir/scenario.json"
+    if [[ "$scenario_repetitions" != "1" ]]; then
+        cp "$scenario_path" "$artifact_dir/scenario-source.json"
+    fi
 
     local app
     app="$(find_target_app)"
@@ -859,13 +1053,21 @@ run() {
 
     if automation_mode_requires_authentication; then
         final_classification="automation_authorization_required"
-        die "Automation Mode requires one-time authentication; configure the Mac once with automationmodetool before starting unattended cycles"
+        die "the Mac requires Automation Mode authentication; configure the dedicated Mac once with automationmodetool. This does not suppress a separate iPhone passcode sheet on current iOS betas"
     fi
 
-    # A runner left by another Xcode project can own Automation Mode without
-    # appearing in the host process table. Clear only stale Runner apps before
-    # starting this explicitly requested device scenario.
-    reset_device_automation "$device" runners || true
+    # Preserve an already-authorized Runner by default. Current iOS betas can
+    # tie the device-side Automation Mode grant to that process; killing it
+    # before every XCTest invocation causes a fresh passcode sheet even though
+    # the Mac is configured for passwordless Automation Mode. A proven XCTest
+    # session failure is still recovered inside the retry loop below. Keep the
+    # eager reset as an explicit diagnostic escape hatch only.
+    if [[ "$reset_runners_before_test" == "1" ]]; then
+        reset_device_automation "$device" runners || true
+    else
+        log "preserving existing device Runner processes and Automation Mode grant"
+        reset_device_automation "$device" inventory || true
+    fi
 
     log "running $(basename "$scenario_path")"
     final_classification="test_infrastructure_failed"
@@ -895,34 +1097,32 @@ run() {
         if ((test_status == 0)); then
             break
         fi
+        if rg -qi 'Timed out while enabling automation mode' "$test_log"; then
+            # A new XCTest session can raise a fresh device-passcode prompt on
+            # current iOS betas. Retrying the same command cannot authorize it
+            # and merely produces another prompt, so preserve the screen and
+            # stop after exactly one attempt. The next run must follow an
+            # explicit external authorization or another material state fix.
+            capture_automation_timeout_state "$device"
+            if automation_timeout_requires_device_passcode; then
+                automation_authorization_prompt=1
+                log "iPhone passcode is required to enable UI Automation; refusing an identical automatic retry"
+            else
+                log "Automation Mode timed out; refusing an identical automatic retry"
+            fi
+            break
+        fi
         if ((attempt < test_attempt_limit)); then
             if is_xctest_session_failure "$test_log"; then
                 log "XCTest automation session failed; resetting stale device runners before retry ($attempt/$test_attempt_limit)"
                 reset_device_automation "$device" runners || true
-                if [[ "$reset_automation_on_timeout" == "1" ]] \
-                    && ! automation_mode_requires_authentication; then
-                    # The unattended optimizer opts into resetting a stale
-                    # device-side Automation Mode writer only after macOS says
-                    # that recreating it does not require user authentication.
-                    reset_device_automation "$device" writer || true
-                fi
                 sleep 3
                 continue
             fi
             if is_coredevice_failure "$test_log" \
                 && ! rg -q 'Test Suite .*DeviceScenarioTests.* started|testScenario.*started|Step [0-9]+ failed|failed - Step [0-9]+' "$test_log"; then
                 log "XCTest did not start because CoreDevice failed; retrying ($attempt/$test_attempt_limit)"
-                if [[ "$reset_automation_on_timeout" == "1" ]] \
-                    && rg -qi 'Timed out while enabling automation mode' "$test_log" \
-                    && ! automation_mode_requires_authentication; then
-                    # This recovery is opt-in because killing a healthy writer can
-                    # discard its grant. It is safe for the unattended optimizer
-                    # only after automationmodetool confirms passwordless mode.
-                    log "resetting the stale device Automation Mode writer before retry"
-                    reset_device_automation "$device" writer || true
-                else
-                    reset_device_automation "$device" runners || true
-                fi
+                reset_device_automation "$device" runners || true
                 repair_coredevice "$device" || true
                 continue
             fi
@@ -943,7 +1143,11 @@ run() {
     if [[ "$test_status" == "0" ]]; then
         final_classification="passed"
     else
-        final_classification="$(classify_log_failure "$test_log")"
+        if [[ "$automation_authorization_prompt" == "1" ]]; then
+            final_classification="automation_authorization_required"
+        else
+            final_classification="$(classify_log_failure "$test_log")"
+        fi
         if [[ "$final_classification" == "coredevice_unavailable" ]] \
             && rg -qi 'Timed out while enabling automation mode' "$test_log" \
             && record_competing_coredevice_sessions; then
