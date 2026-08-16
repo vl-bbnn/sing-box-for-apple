@@ -146,7 +146,7 @@ public struct AppView: View {
                   .onChangeCompat(of: whitelistTransportEnabled) { newValue in
                     Task {
                       await SharedPreferences.whitelistTransportEnabled.set(newValue)
-                      #if os(macOS)
+                      #if os(macOS) && SFI_DEV
                         if !newValue {
                           await WhitelistTransportManager.shared.stop()
                         }

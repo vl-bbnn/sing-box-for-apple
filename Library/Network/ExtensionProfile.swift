@@ -77,7 +77,7 @@ public class ExtensionProfile: ObservableObject {
         self.connection = connection
         self.status = connection.status
         self.connectedDate = connection.connectedDate
-        #if os(macOS)
+        #if os(macOS) && SFI_DEV
           if connection.status == .disconnected || connection.status == .invalid {
             await WhitelistTransportManager.shared.stop()
           }
@@ -204,7 +204,7 @@ public class ExtensionProfile: ObservableObject {
     traceDeviceStart("prepare_options_begin")
     let options = try await prepareStartOptions()
     traceDeviceStart("prepare_options_done")
-    #if os(macOS)
+    #if os(macOS) && SFI_DEV
       let whitelistTransportStarted = try await WhitelistTransportManager.shared.startIfNeeded()
     #endif
     do {
@@ -213,7 +213,7 @@ public class ExtensionProfile: ObservableObject {
       traceDeviceStart("start_tunnel_done")
     } catch {
       traceDeviceStart("start_tunnel_failed", error: error)
-      #if os(macOS)
+      #if os(macOS) && SFI_DEV
         if whitelistTransportStarted {
           await WhitelistTransportManager.shared.stop()
         }
@@ -224,7 +224,7 @@ public class ExtensionProfile: ObservableObject {
 
   public func reloadService() async throws {
     if isMock { return }
-    #if os(macOS)
+    #if os(macOS) && SFI_DEV
       try await WhitelistTransportManager.shared.startIfNeeded()
     #endif
     let options = try await prepareStartOptions()
@@ -368,7 +368,7 @@ public class ExtensionProfile: ObservableObject {
         logger.debug("serviceClose error: \(error.localizedDescription)")
       }
     }
-    #if os(macOS)
+    #if os(macOS) && SFI_DEV
       await WhitelistTransportManager.shared.stop()
     #endif
   }
