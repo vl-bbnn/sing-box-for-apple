@@ -223,6 +223,14 @@ struct MainView: View {
     }
 
     private func openURL(url: URL) {
+        #if SFI_DEV
+        if let request = WLTDeviceControl.Request(url: url) {
+            Task {
+                await WLTDeviceControl.shared.execute(request)
+            }
+            return
+        }
+        #endif
         if url.host == "import-remote-profile" {
             var error: NSError?
             importRemoteProfile = LibboxParseRemoteProfileImportLink(url.absoluteString, &error)

@@ -1,5 +1,29 @@
 # iPhone Device Scenarios
 
+For unattended WLT start/stop/status control, prefer the Dev-only CoreDevice
+harness. It does not use XCTest UI Automation and therefore does not ask for
+the iPhone passcode on each run:
+
+```sh
+DEVICE_ID=<CoreDevice identifier> \
+WLT_APP_BUNDLE_ID=<installed SFI Dev bundle identifier> \
+scripts/iphone_wlt_control.sh ping
+```
+
+The supported actions are `ping`, `status`, `start`, `stop`, `probe`, and
+`start-probe`. The traffic probe uses a fixed public HTTPS 204 endpoint;
+`start-probe` measures from receipt of the control request until that probe
+succeeds through the connected VPN. The app accepts the control URL only when
+compiled with `SFI_DEV`. Results contain only an opaque request ID, action, VPN
+status, elapsed time, and an error domain/code; profile names, URLs, tokens, and
+configuration content are never written. The host retrieves the result through
+the paired device's app data container.
+
+Use the XCUITest scenario runner only for assertions that genuinely require the
+accessibility hierarchy or taps. Apple may require an interactive passcode to
+enable UI Automation; the CoreDevice control path intentionally avoids that
+gate.
+
 `iphone_wlt_scenario.sh` runs an XCUITest scenario on one physical iPhone. The
 phone may use cellular data exclusively because UI control travels over USB.
 

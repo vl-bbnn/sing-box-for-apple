@@ -1,0 +1,335 @@
+#if SFI_DEV
+import Foundation
+import Library
+import NetworkExtension
+
+actor WLTDeviceControl {
+    static let shared = WLTDeviceControl()
+
+    struct Request: Equatable {
+        let id: UUID
+        let action: Action
+
+        init?(url: URL) {
+            guard url.scheme == "sing-box", url.host == "wlt-test-control" else {
+                return nil
+            }
+            let actionName = url.pathComponents.dropFirst().first
+            guard let actionName, let action = Action(rawValue: actionName) else {
+                return nil
+            }
+            guard
+                let components = URLComponents(url: url, resolvingAgainstBaseURL: false),
+                let requestValue = components.queryItems?
+                    .first(where: { $0.name == "request" })?.value,
+                let id = UUID(uuidString: requestValue)
+            else {
+                return nil
+            }
+            self.id = id
+            self.action = action
+        }
+    }
+
+    enum Action: String, Codable {
+        case ping
+        case probe
+        case start
+        case startProbe = "start-probe"
+        case status
+        case stop
+    }
+
+    private struct Result: Codable {
+        let schema: Int
+        let requestID: String
+        let action: Action
+        let state: String
+        let vpnStatus: String
+        let receivedAtUnixMS: Int64
+        let finishedAtUnixMS: Int64
+        let elapsedMS: Int64
+        let errorDomain: String?
+        let errorCode: Int?
+
+        enum CodingKeys: String, CodingKey {
+            case schema
+            case requestID = "request_id"
+            case action
+            case state
+            case vpnStatus = "vpn_status"
+            case receivedAtUnixMS = "received_at_unix_ms"
+            case finishedAtUnixMS = "finished_at_unix_ms"
+            case elapsedMS = "elapsed_ms"
+            case errorDomain = "error_domain"
+            case errorCode = "error_code"
+        }
+    }
+
+    private enum ControlError: Int, Error {
+        case busy = 1
+        case networkExtensionNotInstalled = 2
+        case unexpectedStatus = 3
+        case timeout = 4
+        case probeFailed = 5
+        case probeRequiresConnectedVPN = 6
+    }
+
+    private var isRunning = false
+
+    func execute(_ request: Request) async {
+        let receivedAt = unixMilliseconds()
+        guard !isRunning else {
+            writeResult(
+                request: request,
+                receivedAt: receivedAt,
+                state: "failed",
+                vpnStatus: "unknown",
+                error: ControlError.busy
+            )
+            return
+        }
+        isRunning = true
+        defer { isRunning = false }
+
+        do {
+            let status = try await perform(request.action)
+            writeResult(
+                request: request,
+                receivedAt: receivedAt,
+                state: "succeeded",
+                vpnStatus: status.map(statusDescription) ?? "not_checked",
+                error: nil
+            )
+        } catch {
+            let currentStatus = await loadCurrentStatus()
+            writeResult(
+                request: request,
+                receivedAt: receivedAt,
+                state: "failed",
+                vpnStatus: currentStatus.map(statusDescription) ?? "unknown",
+                error: error
+            )
+        }
+    }
+
+    private func perform(_ action: Action) async throws -> NEVPNStatus? {
+        if action == .ping {
+            return nil
+        }
+        guard let profile = try await ExtensionProfile.load() else {
+            throw ControlError.networkExtensionNotInstalled
+        }
+        await profile.register()
+
+        switch action {
+        case .ping:
+            return nil
+        case .probe:
+            guard await profile.status == .connected else {
+                throw ControlError.probeRequiresConnectedVPN
+            }
+            try await probeTraffic()
+            return await profile.status
+        case .status:
+            return await profile.status
+        case .start:
+            return try await start(profile)
+        case .startProbe:
+            _ = try await start(profile)
+            try await probeTraffic()
+            return await profile.status
+        case .stop:
+            return try await stop(profile)
+        }
+    }
+
+    private func loadCurrentStatus() async -> NEVPNStatus? {
+        guard let profile = try? await ExtensionProfile.load() else {
+            return nil
+        }
+        return await profile.status
+    }
+
+    private func start(_ profile: ExtensionProfile) async throws -> NEVPNStatus {
+        let initialStatus = await profile.status
+        switch initialStatus {
+        case .connected:
+            return initialStatus
+        case .connecting, .reasserting:
+            return try await waitForStatus(profile, desired: .connected)
+        case .disconnecting:
+            _ = try await waitForStatus(profile, desired: .disconnected)
+        case .disconnected, .invalid:
+            break
+        @unknown default:
+            throw ControlError.unexpectedStatus
+        }
+        try await profile.start()
+        return try await waitForStatus(profile, desired: .connected)
+    }
+
+    private func stop(_ profile: ExtensionProfile) async throws -> NEVPNStatus {
+        let initialStatus = await profile.status
+        switch initialStatus {
+        case .disconnected, .invalid:
+            return initialStatus
+        case .disconnecting:
+            return try await waitForStatus(profile, desired: .disconnected)
+        case .connecting, .connected, .reasserting:
+            try await profile.stop()
+            return try await waitForStatus(profile, desired: .disconnected)
+        @unknown default:
+            throw ControlError.unexpectedStatus
+        }
+    }
+
+    private func waitForStatus(
+        _ profile: ExtensionProfile,
+        desired: NEVPNStatus,
+        timeout: TimeInterval = 30
+    ) async throws -> NEVPNStatus {
+        let deadline = Date().addingTimeInterval(timeout)
+        while Date() < deadline {
+            let status = await profile.status
+            if status == desired {
+                return status
+            }
+            if status == .invalid {
+                throw ControlError.unexpectedStatus
+            }
+            try await Task.sleep(nanoseconds: 100_000_000)
+        }
+        throw ControlError.timeout
+    }
+
+    private func probeTraffic(timeout: TimeInterval = 15) async throws {
+        let endpoint = URL(string: "https://cp.cloudflare.com/generate_204")!
+        let deadline = Date().addingTimeInterval(timeout)
+        let configuration = URLSessionConfiguration.ephemeral
+        configuration.requestCachePolicy = .reloadIgnoringLocalAndRemoteCacheData
+        configuration.timeoutIntervalForRequest = 3
+        configuration.urlCache = nil
+        let session = URLSession(configuration: configuration)
+        defer { session.invalidateAndCancel() }
+        var lastError: Error?
+        while Date() < deadline {
+            var request = URLRequest(url: endpoint)
+            request.cachePolicy = .reloadIgnoringLocalAndRemoteCacheData
+            request.timeoutInterval = 3
+            request.setValue("no-cache", forHTTPHeaderField: "Cache-Control")
+            do {
+                let (_, response) = try await session.data(for: request)
+                if let response = response as? HTTPURLResponse, response.statusCode == 204 {
+                    return
+                }
+            } catch {
+                lastError = error
+            }
+            try await Task.sleep(nanoseconds: 200_000_000)
+        }
+        if let lastError {
+            throw lastError
+        }
+        throw ControlError.probeFailed
+    }
+
+    private func writeResult(
+        request: Request,
+        receivedAt: Int64,
+        state: String,
+        vpnStatus: String,
+        error: Error?
+    ) {
+        let finishedAt = unixMilliseconds()
+        let nsError = error as NSError?
+        let result = Result(
+            schema: 1,
+            requestID: request.id.uuidString.lowercased(),
+            action: request.action,
+            state: state,
+            vpnStatus: vpnStatus,
+            receivedAtUnixMS: receivedAt,
+            finishedAtUnixMS: finishedAt,
+            elapsedMS: max(0, finishedAt - receivedAt),
+            errorDomain: nsError?.domain,
+            errorCode: nsError?.code
+        )
+        do {
+            let directory = try resultDirectory()
+            let destination = directory.appendingPathComponent(
+                "\(request.id.uuidString.lowercased()).json",
+                isDirectory: false
+            )
+            let data = try JSONEncoder().encode(result)
+            try data.write(to: destination, options: .atomic)
+        } catch {
+            NSLog("WLT device control could not write sanitized result")
+        }
+    }
+
+    private func resultDirectory() throws -> URL {
+        guard
+            let caches = FileManager.default.urls(
+                for: .cachesDirectory,
+                in: .userDomainMask
+            ).first
+        else {
+            throw CocoaError(.fileNoSuchFile)
+        }
+        let directory = caches.appendingPathComponent("wlt-test-control", isDirectory: true)
+        try FileManager.default.createDirectory(
+            at: directory,
+            withIntermediateDirectories: true
+        )
+        pruneResults(in: directory)
+        return directory
+    }
+
+    private func pruneResults(in directory: URL, keeping newestCount: Int = 64) {
+        let keys: Set<URLResourceKey> = [.contentModificationDateKey, .isRegularFileKey]
+        guard
+            let files = try? FileManager.default.contentsOfDirectory(
+                at: directory,
+                includingPropertiesForKeys: Array(keys),
+                options: [.skipsHiddenFiles]
+            )
+        else {
+            return
+        }
+        let results = files.filter { $0.pathExtension == "json" }.sorted { left, right in
+            let leftDate = try? left.resourceValues(forKeys: keys).contentModificationDate
+            let rightDate = try? right.resourceValues(forKeys: keys).contentModificationDate
+            let normalizedLeftDate = leftDate ?? .distantPast
+            let normalizedRightDate = rightDate ?? .distantPast
+            return normalizedLeftDate > normalizedRightDate
+        }
+        for staleResult in results.dropFirst(newestCount) {
+            try? FileManager.default.removeItem(at: staleResult)
+        }
+    }
+
+    private func unixMilliseconds() -> Int64 {
+        Int64((Date().timeIntervalSince1970 * 1_000).rounded())
+    }
+
+    private func statusDescription(_ status: NEVPNStatus) -> String {
+        switch status {
+        case .invalid:
+            return "invalid"
+        case .disconnected:
+            return "disconnected"
+        case .connecting:
+            return "connecting"
+        case .connected:
+            return "connected"
+        case .reasserting:
+            return "reasserting"
+        case .disconnecting:
+            return "disconnecting"
+        @unknown default:
+            return "unknown"
+        }
+    }
+}
+#endif
