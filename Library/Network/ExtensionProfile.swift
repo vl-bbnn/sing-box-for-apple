@@ -142,6 +142,28 @@ public class ExtensionProfile: ObservableObject {
   }
 
   public func start() async throws {
+    try await start(configContentTransform: nil)
+  }
+
+  #if SFI_DEV
+    public func start(
+      wltRuntimeParameters: WhitelistTransportConfig.RuntimeParameters?
+    ) async throws {
+      let transform = wltRuntimeParameters.map { parameters in
+        { configContent in
+          try WhitelistTransportConfig.applyingRuntimeParameters(
+            parameters,
+            to: configContent
+          )
+        }
+      }
+      try await start(configContentTransform: transform)
+    }
+  #endif
+
+  private func start(
+    configContentTransform: ((String) throws -> String)?
+  ) async throws {
     if isMock {
       status = .connecting
       try await Task.sleep(nanoseconds: 500_000_000)
@@ -183,7 +205,9 @@ public class ExtensionProfile: ObservableObject {
       }
     #endif
     try await manager.saveToPreferences()
-    let options = try await prepareStartOptions()
+    let options = try await prepareStartOptions(
+      configContentTransform: configContentTransform
+    )
     #if os(macOS)
       let whitelistTransportStarted = try await WhitelistTransportManager.shared.startIfNeeded()
     #endif
@@ -232,7 +256,9 @@ public class ExtensionProfile: ObservableObject {
     }
   }
 
-  private func prepareStartOptions() async throws -> [String: NSObject] {
+  private func prepareStartOptions(
+    configContentTransform: ((String) throws -> String)? = nil
+  ) async throws -> [String: NSObject] {
     var options: [String: NSObject] = [
       "manualStart": NSNumber(value: true)
     ]
@@ -246,7 +272,10 @@ public class ExtensionProfile: ObservableObject {
         ])
     }
 
-    let configContent = try await profile.readAsync()
+    var configContent = try await profile.readAsync()
+    if let configContentTransform {
+      configContent = try configContentTransform(configContent)
+    }
     options["configContent"] = NSString(string: configContent)
 
     #if !os(macOS)

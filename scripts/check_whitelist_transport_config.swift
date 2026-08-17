@@ -104,6 +104,72 @@ struct WhitelistTransportConfigCheck {
       core: false,
       legacy: false
     )
+
+    assertRuntimeCandidateOverlay()
+  }
+
+  private static func assertRuntimeCandidateOverlay() {
+    let candidate = """
+      {
+        "parameters": {
+          "max_active": 52,
+          "max_open": 20,
+          "dns_open_reserve": 4,
+          "max_pending": 48,
+          "queue_timeout": "2.5s",
+          "idle_timeout": "30s",
+          "peer_write_buffer": 192,
+          "kcp_window": 1024,
+          "kcp_buffer": 2097152
+        }
+      }
+      """
+    let config = """
+      {
+        "services": [
+          {
+            "type": "wlt",
+            "tag": "wlt-turnable",
+            "turnable_config": "opaque-value",
+            "max_active_streams": 56
+          }
+        ],
+        "outbounds": [{"type": "direct", "tag": "direct"}]
+      }
+      """
+    do {
+      let parameters = try WhitelistTransportConfig.decodeRuntimeCandidate(
+        Data(candidate.utf8)
+      )
+      let overlaid = try WhitelistTransportConfig.applyingRuntimeParameters(
+        parameters,
+        to: config
+      )
+      guard
+        let data = overlaid.data(using: .utf8),
+        let object = try JSONSerialization.jsonObject(with: data) as? [String: Any],
+        let services = object["services"] as? [[String: Any]],
+        let service = services.first,
+        service["max_active_streams"] as? Int == 52,
+        service["max_open_attempts"] as? Int == 20,
+        service["dial_queue_timeout"] as? String == "2.5s",
+        service["turnable_config"] as? String == "opaque-value"
+      else {
+        fatalError("runtime candidate overlay did not preserve/apply expected fields")
+      }
+    } catch {
+      fatalError("valid runtime candidate failed: \(error)")
+    }
+
+    let partial = #"{"parameters":{"max_active":52}}"#
+    do {
+      _ = try WhitelistTransportConfig.decodeRuntimeCandidate(Data(partial.utf8))
+      fatalError("partial runtime candidate was accepted")
+    } catch WhitelistTransportConfig.RuntimeCandidateError.invalidSchema {
+      // Expected.
+    } catch {
+      fatalError("partial runtime candidate returned unexpected error: \(error)")
+    }
   }
 
   private static func assertDetection(

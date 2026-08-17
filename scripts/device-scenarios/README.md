@@ -12,12 +12,18 @@ scripts/iphone_wlt_control.sh ping
 
 The supported actions are `ping`, `status`, `start`, `stop`, `probe`, and
 `start-probe`. The traffic probe uses a fixed public HTTPS 204 endpoint;
-`start-probe` measures from receipt of the control request until that probe
-succeeds through the connected VPN. The app accepts the control URL only when
-compiled with `SFI_DEV`. Results contain only an opaque request ID, action, VPN
-status, elapsed time, and an error domain/code; profile names, URLs, tokens, and
-configuration content are never written. The host retrieves the result through
-the paired device's app data container.
+`start-probe` reports VPN startup and probe time separately. Set
+`WLT_CONTROL_CANDIDATE_FILE` to an optimizer `candidate.json` when testing a
+temporary parameter set. The candidate must contain the exact nine-field WLT
+runtime schema. It is copied to the Dev app container, applied only to the
+in-memory `configContent` passed to PacketTunnel, and removed after the request;
+the stored local/remote profile is never rewritten or refreshed.
+
+The app accepts the control URL only when compiled with `SFI_DEV`. Results
+contain only an opaque request ID, action, VPN/network state, timings, the
+applied non-secret runtime parameters, and an error domain/code. Profile names,
+URLs, tokens, auth snapshots, and configuration content are never written. The
+host retrieves the result through the paired device's app data container.
 
 Use the XCUITest scenario runner only for assertions that genuinely require the
 accessibility hierarchy or taps. Apple may require an interactive passcode to

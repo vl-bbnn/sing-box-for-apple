@@ -1,6 +1,8 @@
 #if SFI_DEV
 import Foundation
 import Library
+import CoreTelephony
+import Network
 import NetworkExtension
 
 actor WLTDeviceControl {
@@ -49,6 +51,11 @@ actor WLTDeviceControl {
         let receivedAtUnixMS: Int64
         let finishedAtUnixMS: Int64
         let elapsedMS: Int64
+        let vpnStartupMS: Int64?
+        let probeElapsedMS: Int64?
+        let runtimeParameters: WhitelistTransportConfig.RuntimeParameters?
+        let networkInitial: NetworkSnapshot?
+        let networkFinal: NetworkSnapshot?
         let errorDomain: String?
         let errorCode: Int?
 
@@ -61,9 +68,35 @@ actor WLTDeviceControl {
             case receivedAtUnixMS = "received_at_unix_ms"
             case finishedAtUnixMS = "finished_at_unix_ms"
             case elapsedMS = "elapsed_ms"
+            case vpnStartupMS = "vpn_startup_ms"
+            case probeElapsedMS = "probe_elapsed_ms"
+            case runtimeParameters = "runtime_parameters"
+            case networkInitial = "network_initial"
+            case networkFinal = "network_final"
             case errorDomain = "error_domain"
             case errorCode = "error_code"
         }
+    }
+
+    private struct NetworkSnapshot: Codable {
+        let status: String
+        let cellular: Bool
+        let wifi: Bool
+        let radioTechnology: String
+
+        enum CodingKeys: String, CodingKey {
+            case status
+            case cellular
+            case wifi
+            case radioTechnology = "radio_technology"
+        }
+    }
+
+    private struct Outcome {
+        let status: NEVPNStatus?
+        let vpnStartupMS: Int64?
+        let probeElapsedMS: Int64?
+        let runtimeParameters: WhitelistTransportConfig.RuntimeParameters?
     }
 
     private enum ControlError: Int, Error {
@@ -73,49 +106,81 @@ actor WLTDeviceControl {
         case timeout = 4
         case probeFailed = 5
         case probeRequiresConnectedVPN = 6
+        case runtimeCandidateRequiresStoppedVPN = 7
     }
 
     private var isRunning = false
 
     func execute(_ request: Request) async {
         let receivedAt = unixMilliseconds()
+        let candidateURL = runtimeCandidateURL(request.id)
         guard !isRunning else {
+            try? FileManager.default.removeItem(at: candidateURL)
             writeResult(
                 request: request,
                 receivedAt: receivedAt,
                 state: "failed",
                 vpnStatus: "unknown",
+                outcome: nil,
+                networkInitial: nil,
+                networkFinal: nil,
                 error: ControlError.busy
             )
             return
         }
         isRunning = true
         defer { isRunning = false }
+        pruneRuntimeCandidates(excluding: candidateURL)
+        defer { try? FileManager.default.removeItem(at: candidateURL) }
 
         do {
-            let status = try await perform(request.action)
+            let runtimeParameters = try loadRuntimeCandidate(
+                for: request.action,
+                at: candidateURL
+            )
+            let networkInitial = await captureNetworkSnapshot()
+            let outcome = try await perform(
+                request.action,
+                runtimeParameters: runtimeParameters
+            )
+            let networkFinal = await captureNetworkSnapshot()
             writeResult(
                 request: request,
                 receivedAt: receivedAt,
                 state: "succeeded",
-                vpnStatus: status.map(statusDescription) ?? "not_checked",
+                vpnStatus: outcome.status.map(statusDescription) ?? "not_checked",
+                outcome: outcome,
+                networkInitial: networkInitial,
+                networkFinal: networkFinal,
                 error: nil
             )
         } catch {
             let currentStatus = await loadCurrentStatus()
+            let networkFinal = await captureNetworkSnapshot()
             writeResult(
                 request: request,
                 receivedAt: receivedAt,
                 state: "failed",
                 vpnStatus: currentStatus.map(statusDescription) ?? "unknown",
+                outcome: nil,
+                networkInitial: nil,
+                networkFinal: networkFinal,
                 error: error
             )
         }
     }
 
-    private func perform(_ action: Action) async throws -> NEVPNStatus? {
+    private func perform(
+        _ action: Action,
+        runtimeParameters: WhitelistTransportConfig.RuntimeParameters?
+    ) async throws -> Outcome {
         if action == .ping {
-            return nil
+            return Outcome(
+                status: nil,
+                vpnStartupMS: nil,
+                probeElapsedMS: nil,
+                runtimeParameters: nil
+            )
         }
         guard let profile = try await ExtensionProfile.load() else {
             throw ControlError.networkExtensionNotInstalled
@@ -124,23 +189,65 @@ actor WLTDeviceControl {
 
         switch action {
         case .ping:
-            return nil
+            return Outcome(
+                status: nil,
+                vpnStartupMS: nil,
+                probeElapsedMS: nil,
+                runtimeParameters: nil
+            )
         case .probe:
             guard await profile.status == .connected else {
                 throw ControlError.probeRequiresConnectedVPN
             }
+            let probeStartedAt = unixMilliseconds()
             try await probeTraffic()
-            return await profile.status
+            return Outcome(
+                status: await profile.status,
+                vpnStartupMS: nil,
+                probeElapsedMS: max(0, unixMilliseconds() - probeStartedAt),
+                runtimeParameters: nil
+            )
         case .status:
-            return await profile.status
+            return Outcome(
+                status: await profile.status,
+                vpnStartupMS: nil,
+                probeElapsedMS: nil,
+                runtimeParameters: nil
+            )
         case .start:
-            return try await start(profile)
+            let startedAt = unixMilliseconds()
+            let status = try await start(
+                profile,
+                runtimeParameters: runtimeParameters
+            )
+            return Outcome(
+                status: status,
+                vpnStartupMS: max(0, unixMilliseconds() - startedAt),
+                probeElapsedMS: nil,
+                runtimeParameters: runtimeParameters
+            )
         case .startProbe:
-            _ = try await start(profile)
+            let startedAt = unixMilliseconds()
+            _ = try await start(
+                profile,
+                runtimeParameters: runtimeParameters
+            )
+            let startupMS = max(0, unixMilliseconds() - startedAt)
+            let probeStartedAt = unixMilliseconds()
             try await probeTraffic()
-            return await profile.status
+            return Outcome(
+                status: await profile.status,
+                vpnStartupMS: startupMS,
+                probeElapsedMS: max(0, unixMilliseconds() - probeStartedAt),
+                runtimeParameters: runtimeParameters
+            )
         case .stop:
-            return try await stop(profile)
+            return Outcome(
+                status: try await stop(profile),
+                vpnStartupMS: nil,
+                probeElapsedMS: nil,
+                runtimeParameters: nil
+            )
         }
     }
 
@@ -151,12 +258,21 @@ actor WLTDeviceControl {
         return await profile.status
     }
 
-    private func start(_ profile: ExtensionProfile) async throws -> NEVPNStatus {
+    private func start(
+        _ profile: ExtensionProfile,
+        runtimeParameters: WhitelistTransportConfig.RuntimeParameters?
+    ) async throws -> NEVPNStatus {
         let initialStatus = await profile.status
         switch initialStatus {
         case .connected:
+            if runtimeParameters != nil {
+                throw ControlError.runtimeCandidateRequiresStoppedVPN
+            }
             return initialStatus
         case .connecting, .reasserting:
+            if runtimeParameters != nil {
+                throw ControlError.runtimeCandidateRequiresStoppedVPN
+            }
             return try await waitForStatus(profile, desired: .connected)
         case .disconnecting:
             _ = try await waitForStatus(profile, desired: .disconnected)
@@ -165,7 +281,7 @@ actor WLTDeviceControl {
         @unknown default:
             throw ControlError.unexpectedStatus
         }
-        try await profile.start()
+        try await profile.start(wltRuntimeParameters: runtimeParameters)
         return try await waitForStatus(profile, desired: .connected)
     }
 
@@ -239,12 +355,15 @@ actor WLTDeviceControl {
         receivedAt: Int64,
         state: String,
         vpnStatus: String,
+        outcome: Outcome?,
+        networkInitial: NetworkSnapshot?,
+        networkFinal: NetworkSnapshot?,
         error: Error?
     ) {
         let finishedAt = unixMilliseconds()
         let nsError = error as NSError?
         let result = Result(
-            schema: 1,
+            schema: 2,
             requestID: request.id.uuidString.lowercased(),
             action: request.action,
             state: state,
@@ -252,6 +371,11 @@ actor WLTDeviceControl {
             receivedAtUnixMS: receivedAt,
             finishedAtUnixMS: finishedAt,
             elapsedMS: max(0, finishedAt - receivedAt),
+            vpnStartupMS: outcome?.vpnStartupMS,
+            probeElapsedMS: outcome?.probeElapsedMS,
+            runtimeParameters: outcome?.runtimeParameters,
+            networkInitial: networkInitial,
+            networkFinal: networkFinal,
             errorDomain: nsError?.domain,
             errorCode: nsError?.code
         )
@@ -284,6 +408,71 @@ actor WLTDeviceControl {
         )
         pruneResults(in: directory)
         return directory
+    }
+
+    private func runtimeCandidateURL(_ requestID: UUID) -> URL {
+        let caches = FileManager.default.urls(
+            for: .cachesDirectory,
+            in: .userDomainMask
+        ).first!
+        return caches.appendingPathComponent(
+            "wlt-test-candidate-\(requestID.uuidString.lowercased()).json",
+            isDirectory: false
+        )
+    }
+
+    private func loadRuntimeCandidate(
+        for action: Action,
+        at url: URL
+    ) throws -> WhitelistTransportConfig.RuntimeParameters? {
+        guard action == .start || action == .startProbe else {
+            return nil
+        }
+        guard FileManager.default.fileExists(atPath: url.path) else {
+            return nil
+        }
+        return try WhitelistTransportConfig.decodeRuntimeCandidate(
+            Data(contentsOf: url)
+        )
+    }
+
+    private func pruneRuntimeCandidates(excluding current: URL) {
+        let directory = current.deletingLastPathComponent()
+        guard let files = try? FileManager.default.contentsOfDirectory(
+            at: directory,
+            includingPropertiesForKeys: nil,
+            options: [.skipsHiddenFiles]
+        ) else {
+            return
+        }
+        for file in files where
+            file.lastPathComponent != current.lastPathComponent
+            && file.lastPathComponent.hasPrefix("wlt-test-candidate-")
+            && file.pathExtension == "json"
+        {
+            try? FileManager.default.removeItem(at: file)
+        }
+    }
+
+    private func captureNetworkSnapshot() async -> NetworkSnapshot {
+        let monitor = NWPathMonitor()
+        monitor.pathUpdateHandler = { _ in }
+        monitor.start(queue: DispatchQueue(label: "WLTDeviceControl.NetworkSnapshot"))
+        try? await Task.sleep(nanoseconds: 300_000_000)
+        let path = monitor.currentPath
+        monitor.cancel()
+        let radioValues = CTTelephonyNetworkInfo()
+            .serviceCurrentRadioAccessTechnology?
+            .values
+            .sorted() ?? []
+        return NetworkSnapshot(
+            status: path.status == .satisfied ? "satisfied" : "unsatisfied",
+            cellular: path.usesInterfaceType(.cellular),
+            wifi: path.usesInterfaceType(.wifi),
+            radioTechnology: radioValues.isEmpty
+                ? "unknown"
+                : radioValues.joined(separator: ",")
+        )
     }
 
     private func pruneResults(in directory: URL, keeping newestCount: Int = 64) {
