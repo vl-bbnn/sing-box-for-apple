@@ -21,6 +21,16 @@ public enum ProfileManager {
         }
     }
 
+    public nonisolated static func get(remoteURL: String) async throws -> Profile? {
+        try await Database.sharedWriter.read { db in
+            try Profile
+                .filter(Column("type") == ProfileType.remote.rawValue)
+                .filter(Column("remoteURL") == remoteURL)
+                .order(Column("order").asc)
+                .fetchOne(db)
+        }
+    }
+
     public nonisolated static func delete(_ profile: Profile) async throws {
         _ = try await Database.sharedWriter.write { db in
             try profile.delete(db)

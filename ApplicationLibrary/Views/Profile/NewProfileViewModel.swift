@@ -91,8 +91,6 @@ public final class NewProfileViewModel: BaseViewModel {
     }
 
     private nonisolated func createProfileBackground() async throws -> Profile {
-        let nextProfileID = try await ProfileManager.nextID()
-
         var savePath = ""
         var remoteURL: String?
         var lastUpdated: Date?
@@ -104,6 +102,16 @@ public final class NewProfileViewModel: BaseViewModel {
         let remotePath = await remotePath
         let autoUpdate = await autoUpdate
         let autoUpdateInterval = await autoUpdateInterval
+
+        if profileType == .remote, let existingProfile = try await ProfileManager.get(remoteURL: remotePath) {
+            // A repeated import link is also used as a device shortcut. Keep it
+            // usable while the profile server is unavailable: refresh is best
+            // effort and the last-known-good local profile remains selected.
+            try? await existingProfile.updateRemoteProfile()
+            return existingProfile
+        }
+
+        let nextProfileID = try await ProfileManager.nextID()
 
         if profileType == .local {
             let profileConfigDirectory = FilePath.sharedDirectory.appendingPathComponent("configs", isDirectory: true)
