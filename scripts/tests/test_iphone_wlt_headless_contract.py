@@ -5,6 +5,8 @@ import unittest
 SCRIPTS = Path(__file__).resolve().parents[1]
 HEADLESS = (SCRIPTS / "iphone_wlt_headless.sh").read_text(encoding="utf-8")
 DUAL_SIM = (SCRIPTS / "iphone_wlt_dual_sim.sh").read_text(encoding="utf-8")
+REFRESH = (SCRIPTS / "iphone_wlt_profile_refresh.sh").read_text(encoding="utf-8")
+COMPARISON = (SCRIPTS / "iphone_wlt_comparison.sh").read_text(encoding="utf-8")
 SWIFT = (SCRIPTS.parent / "SFI" / "WLTHeadlessScenario.swift").read_text(
     encoding="utf-8"
 )
@@ -24,6 +26,38 @@ class IPhoneWltHeadlessContractTests(unittest.TestCase):
         resume = HEADLESS[start:end]
         self.assertNotIn("        --terminate-existing", resume)
         self.assertIn('"$bundle_id"', resume)
+
+    def test_optimizer_refreshes_candidate_on_wifi_before_lte(self) -> None:
+        self.assertIn('refresh_profile="${WLT_HEADLESS_REFRESH_PROFILE:-0}"', HEADLESS)
+        self.assertIn('WLT_REFRESH_CANDIDATE_FILE="$candidate_file"', HEADLESS)
+        self.assertLess(
+            HEADLESS.index('"$refresh_script" >/dev/null'),
+            HEADLESS.index('if [[ "$prepare_transport" == "1" ]]'),
+        )
+        self.assertIn('WLT_DEVICE_AUTOSTART_REFRESH_PROFILE:"1"', REFRESH)
+        self.assertIn('"$transition_script" wifi', REFRESH)
+        self.assertIn("runtime-verification.json", REFRESH)
+        self.assertIn('if [[ "$wifi_restored" == "1" ]]', REFRESH)
+        self.assertIn("wifi_restored=1", REFRESH)
+        initial_refresh = REFRESH.split(
+            'log "proving unrestricted Wi-Fi before remote-profile refresh"', 1
+        )[1].split('environment_json=', 1)[0]
+        final_refresh = REFRESH.split(
+            'log "refresh verified; stopping VPN and restoring Wi-Fi"', 1
+        )[1]
+        self.assertNotIn("WLT_TRANSITION_ALLOW_MIXED_WIFI=1", initial_refresh)
+        self.assertIn("WLT_TRANSITION_ALLOW_MIXED_WIFI=1", final_refresh)
+
+    def test_cellular_cleanup_accepts_wifi_assist_without_disabling_sim_lines(self) -> None:
+        final_cleanup = HEADLESS.split(
+            'log "cellular scenario finished; restoring stopped VPN plus Wi-Fi"', 1
+        )[1]
+        self.assertIn("WLT_TRANSITION_ALLOW_MIXED_WIFI=1", final_cleanup)
+
+    def test_comparison_refreshes_only_the_lte_wlt_phase(self) -> None:
+        self.assertIn('if [[ "$name" == "lte-wlt" ]]', COMPARISON)
+        self.assertIn('WLT_HEADLESS_REFRESH_PROFILE="$phase_refresh"', COMPARISON)
+        self.assertIn('WLT_HEADLESS_CANDIDATE_FILE="$candidate_file"', COMPARISON)
 
     def test_transition_change_is_not_dependent_on_unique_legacy_id(self) -> None:
         self.assertIn('"$transition_id" != "$handled_transition_id"', HEADLESS)

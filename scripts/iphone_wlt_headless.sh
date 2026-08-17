@@ -23,7 +23,10 @@ lte_rescan_shortcut="${WLT_HEADLESS_LTE_RESCAN_SHORTCUT:-wltrescan}"
 lte_rescan_after_seconds="${WLT_HEADLESS_LTE_RESCAN_AFTER_SECONDS:-25}"
 lte_rescan_attempts="${WLT_HEADLESS_LTE_RESCAN_ATTEMPTS:-2}"
 prepare_transport="${WLT_HEADLESS_PREPARE_TRANSPORT:-1}"
+refresh_profile="${WLT_HEADLESS_REFRESH_PROFILE:-0}"
+candidate_file="${WLT_HEADLESS_CANDIDATE_FILE:-}"
 transition_script="$script_dir/iphone_network_transition.sh"
+refresh_script="$script_dir/iphone_wlt_profile_refresh.sh"
 
 log() {
     printf '[wlt-headless] %s\n' "$*" >&2
@@ -141,6 +144,13 @@ validate_positive_integer WLT_HEADLESS_LTE_RESCAN_AFTER_SECONDS "$lte_rescan_aft
     || die "WLT_HEADLESS_LTE_RESCAN_ATTEMPTS must be a non-negative integer"
 [[ "$prepare_transport" == "0" || "$prepare_transport" == "1" ]] \
     || die "WLT_HEADLESS_PREPARE_TRANSPORT must be 0 or 1"
+[[ "$refresh_profile" == "0" || "$refresh_profile" == "1" ]] \
+    || die "WLT_HEADLESS_REFRESH_PROFILE must be 0 or 1"
+if [[ "$refresh_profile" == "1" ]]; then
+    [[ -x "$refresh_script" ]] || die "profile refresh runner is missing"
+    [[ -n "$candidate_file" && -f "$candidate_file" ]] \
+        || die "WLT_HEADLESS_CANDIDATE_FILE is required for profile refresh"
+fi
 
 mkdir -p "$artifact_dir"
 temporary_dir="$(mktemp -d)"
@@ -188,6 +198,17 @@ jq -e --arg bundle "$bundle_id" '
   [.result.apps[]? | select(.bundleIdentifier == $bundle)] | length == 1
 ' "$artifact_dir/installed-app.json" >/dev/null \
     || die "$bundle_id is not installed; install/trust it once on unrestricted Wi-Fi"
+
+if [[ "$refresh_profile" == "1" ]]; then
+    log "refreshing and verifying the selected remote profile on Wi-Fi"
+    DEVICE_ID="$device_id" \
+    WLT_REFRESH_BUNDLE_ID="$bundle_id" \
+    WLT_REFRESH_APP_GROUP="$app_group" \
+    WLT_REFRESH_CANDIDATE_FILE="$candidate_file" \
+    WLT_REFRESH_ARTIFACT_DIR="$artifact_dir/profile-refresh" \
+    WLT_REFRESH_COREDEVICE_CLI="$coredevice_cli" \
+        "$refresh_script" >/dev/null
+fi
 
 if [[ "$prepare_transport" == "1" ]]; then
     transition_mode="wifi"
@@ -279,6 +300,7 @@ if [[ "$final_status" != "passed" && "$final_status" != "failed" ]]; then
     if [[ "$requires_wifi_restore" == "true" ]]; then
         DEVICE_ID="$device_id" \
         WLT_TRANSITION_ARTIFACT_DIR="$artifact_dir/timeout-wifi-restore" \
+        WLT_TRANSITION_ALLOW_MIXED_WIFI=1 \
             "$transition_script" wifi || true
     fi
     copy_support_evidence
@@ -289,9 +311,10 @@ fi
 copy_final_evidence
 wifi_restored="not_requested"
 if [[ "$requires_wifi_restore" == "true" ]]; then
-    log "cellular scenario finished; restoring stopped VPN plus strict Wi-Fi"
+    log "cellular scenario finished; restoring stopped VPN plus Wi-Fi"
     if DEVICE_ID="$device_id" \
         WLT_TRANSITION_ARTIFACT_DIR="$artifact_dir/final-wifi-restore" \
+        WLT_TRANSITION_ALLOW_MIXED_WIFI=1 \
         "$transition_script" wifi; then
         wifi_restored="true"
     else

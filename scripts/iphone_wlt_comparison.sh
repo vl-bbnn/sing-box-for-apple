@@ -8,6 +8,8 @@ device_id="${DEVICE_ID:-}"
 base_configuration="${WLT_COMPARISON_CONFIGURATION:-$script_dir/device-scenarios/wlt-headless-lte.json}"
 repetitions="${WLT_COMPARISON_REPETITIONS:-3}"
 headless_timeout="${WLT_COMPARISON_HEADLESS_TIMEOUT_SECONDS:-2400}"
+refresh_profile="${WLT_HEADLESS_REFRESH_PROFILE:-0}"
+candidate_file="${WLT_HEADLESS_CANDIDATE_FILE:-}"
 timestamp="$(date '+%Y-%m-%d-%H%M%S')"
 artifact_dir="${WLT_COMPARISON_ARTIFACT_DIR:-$repo_root/.local/wlt-comparison-$timestamp}"
 transition_script="$script_dir/iphone_network_transition.sh"
@@ -60,11 +62,17 @@ run_phase() {
     local configuration="$2"
     local output_dir="$artifact_dir/$name"
     local exit_status=0
+    local phase_refresh=0
+    if [[ "$name" == "lte-wlt" ]]; then
+        phase_refresh="$refresh_profile"
+    fi
     log "running $name"
     DEVICE_ID="$device_id" \
     WLT_HEADLESS_TIMEOUT_SECONDS="$headless_timeout" \
     WLT_HEADLESS_CONFIGURATION="$configuration" \
     WLT_HEADLESS_ARTIFACT_DIR="$output_dir" \
+    WLT_HEADLESS_REFRESH_PROFILE="$phase_refresh" \
+    WLT_HEADLESS_CANDIDATE_FILE="$candidate_file" \
         "$headless_script" || exit_status=$?
     [[ -s "$output_dir/result.json" ]] \
         || die "$name produced no result.json"
@@ -78,6 +86,12 @@ run_phase() {
 [[ -f "$summarizer" ]] || die "missing summarizer: $summarizer"
 validate_positive_integer WLT_COMPARISON_REPETITIONS "$repetitions"
 validate_positive_integer WLT_COMPARISON_HEADLESS_TIMEOUT_SECONDS "$headless_timeout"
+[[ "$refresh_profile" == "0" || "$refresh_profile" == "1" ]] \
+    || die "WLT_HEADLESS_REFRESH_PROFILE must be 0 or 1"
+if [[ "$refresh_profile" == "1" ]]; then
+    [[ -n "$candidate_file" && -f "$candidate_file" ]] \
+        || die "WLT_HEADLESS_CANDIDATE_FILE is required for profile refresh"
+fi
 
 mkdir -p "$artifact_dir/configuration"
 trap restore_wifi EXIT

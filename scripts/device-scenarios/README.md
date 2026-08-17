@@ -123,7 +123,11 @@ WLT_COMPARISON_ARTIFACT_DIR=/path/to/checkpoint/comparison-r1 \
 scripts/iphone_wlt_comparison.sh
 ```
 
-The runner restores stopped VPN plus strict Wi-Fi in its exit trap. The Dev app
+The runner restores stopped VPN plus Wi-Fi in its exit trap. Final cleanup may
+accept a mixed Wi-Fi Assist path (`wifi=true cellular=true`) because cellular
+service and both SIM lines must remain enabled; this exception does not apply
+to the strict unrestricted-Wi-Fi gate before provisioning or remote-profile
+refresh. The Dev app
 temporarily disables the iOS idle timer while a headless phase is active and
 restores the previous setting afterward, preventing long playback matrices from
 auto-locking before cleanup. A physical lock at host transition time or a failed
