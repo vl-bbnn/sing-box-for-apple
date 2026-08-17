@@ -10,7 +10,7 @@
   "steps": [
     { "action": "launch", "app": "vpn", "timeout": 30 },
     { "action": "wait_element", "app": "vpn", "identifier": "wlt.profile.selector", "timeout": 30 },
-    { "action": "assert_text", "app": "vpn", "text": "WLT-clean", "timeout": 10 },
+    { "action": "wait_text", "app": "vpn", "text": "WLT-clean", "timeout": 10 },
     { "action": "tap_if_text", "app": "vpn", "text": "Started", "identifier": "wlt.connection.toggle", "timeout": 10 },
     { "action": "assert_text", "app": "vpn", "text": "Stopped", "timeout": 30 },
     { "action": "tap_element", "app": "vpn", "identifier": "wlt.profile.refresh", "timeout": 10 },

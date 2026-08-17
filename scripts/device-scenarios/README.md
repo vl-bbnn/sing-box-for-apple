@@ -10,6 +10,23 @@ editing the repository:
 WLT_DEVICE_SCENARIO=/path/to/scenario.json scripts/iphone_wlt_scenario.sh
 ```
 
+For repeated measurements against an app and UI-test runner that are already
+installed by a previous run, preserve the app container and skip installation:
+
+```sh
+WLT_SCENARIO_USE_DESTINATION_ARTIFACTS=1 \
+WLT_SCENARIO_SKIP_BUILD=1 \
+WLT_SCENARIO_BUILD_DIR=/path/to/existing/DerivedData \
+scripts/iphone_wlt_scenario.sh
+```
+
+Destination-artifacts mode fails early when either bundle is not installed.
+The script also refuses to start while another `xcodebuild` references the same
+iPhone by CoreDevice identifier or UDID. Do not bypass that preflight unless
+the overlap is intentional. If Xcode requests UI Automation permission, keep
+the phone unlocked and enter its passcode; do not terminate the automation-mode
+helper, because doing so resets the authorization.
+
 Coordinates are normalized to the active application's frame: `(0, 0)` is the
 top-left corner and `(1, 1)` is the bottom-right corner. Supported actions are:
 
