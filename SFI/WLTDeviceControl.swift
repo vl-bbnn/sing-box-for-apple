@@ -2,6 +2,7 @@
 import Foundation
 import Library
 import CoreTelephony
+import CryptoKit
 import Network
 import NetworkExtension
 
@@ -83,12 +84,16 @@ actor WLTDeviceControl {
         let cellular: Bool
         let wifi: Bool
         let radioTechnology: String
+        let cellularServiceCount: Int
+        let dataServiceIDHash: String?
 
         enum CodingKeys: String, CodingKey {
             case status
             case cellular
             case wifi
             case radioTechnology = "radio_technology"
+            case cellularServiceCount = "cellular_service_count"
+            case dataServiceIDHash = "data_service_id_hash"
         }
     }
 
@@ -461,17 +466,30 @@ actor WLTDeviceControl {
         try? await Task.sleep(nanoseconds: 300_000_000)
         let path = monitor.currentPath
         monitor.cancel()
-        let radioValues = CTTelephonyNetworkInfo()
-            .serviceCurrentRadioAccessTechnology?
-            .values
-            .sorted() ?? []
+        let telephony = CTTelephonyNetworkInfo()
+        let radioByService = telephony.serviceCurrentRadioAccessTechnology ?? [:]
+        let radioValues = radioByService.values.sorted()
+        let cellularServiceCount = max(
+            radioByService.count,
+            telephony.serviceSubscriberCellularProviders?.count ?? 0
+        )
+        let dataServiceIDHash = telephony.dataServiceIdentifier.flatMap { identifier in
+            identifier.data(using: .utf8).map { data in
+                SHA256.hash(data: data)
+                    .prefix(6)
+                    .map { String(format: "%02x", $0) }
+                    .joined()
+            }
+        }
         return NetworkSnapshot(
             status: path.status == .satisfied ? "satisfied" : "unsatisfied",
             cellular: path.usesInterfaceType(.cellular),
             wifi: path.usesInterfaceType(.wifi),
             radioTechnology: radioValues.isEmpty
                 ? "unknown"
-                : radioValues.joined(separator: ",")
+                : radioValues.joined(separator: ","),
+            cellularServiceCount: cellularServiceCount,
+            dataServiceIDHash: dataServiceIDHash
         )
     }
 
