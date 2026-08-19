@@ -10,8 +10,9 @@ WLT_APP_BUNDLE_ID=<installed SFI Dev bundle identifier> \
 scripts/iphone_wlt_control.sh ping
 ```
 
-The supported actions are `ping`, `status`, `start`, `stop`, `probe`, and
-`start-probe`. The traffic probe uses a fixed public HTTPS 204 endpoint;
+The supported actions are `ping`, `status`, `start`, `stop`, `probe`,
+`start-probe`, and `soak`. The traffic probe uses a fixed public HTTPS 204
+endpoint;
 `start-probe` reports VPN startup and probe time separately. Set
 `WLT_CONTROL_CANDIDATE_FILE` to an optimizer `candidate.json` when testing a
 temporary parameter set. The candidate must contain the exact nine-field WLT
@@ -24,6 +25,25 @@ contain only an opaque request ID, action, VPN/network state, timings, the
 applied non-secret runtime parameters, and an error domain/code. Profile names,
 URLs, tokens, auth snapshots, and configuration content are never written. The
 host retrieves the result through the paired device's app data container.
+
+Use `iphone_wlt_stability.sh` for the unattended endurance/recovery gate. Its
+acceptance default keeps one WLT session active for 30 minutes, probes every 30
+seconds, invokes the device-side `wltrescan` Shortcut halfway through, requires
+the app to observe both loss and recovery, proves traffic again, and checks both
+normal and idempotent VPN stop. The Dev app disables the idle timer while a
+start or soak control action is active, so a slow carrier bootstrap and the long
+run do not repeatedly launch through a locked screen. The runner restores
+stopped VPN plus the `WLT WiFi` Shortcut on exit and never disables a cellular
+plan or changes the selected data SIM.
+
+Stop control relaunches the Dev container app with `--terminate-existing` before
+asking Network Extension to disconnect, so a stuck or suspended previous control
+task cannot suppress emergency cleanup.
+
+For a supervised short mechanism smoke only, set
+`WLT_STABILITY_ALLOW_SHORT=1`, `WLT_STABILITY_DURATION_SECONDS`, and
+`WLT_STABILITY_LOSS_AFTER_SECONDS`. Acceptance evidence must use at least 900
+seconds; the default is 1800 seconds.
 
 Use the XCUITest scenario runner only for assertions that genuinely require the
 accessibility hierarchy or taps. Apple may require an interactive passcode to

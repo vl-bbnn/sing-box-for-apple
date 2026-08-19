@@ -9,6 +9,8 @@ artifact_root="${WLT_TEST_ARTIFACT_ROOT:-$repo_root/.local/wlt-test-artifacts}"
 artifact_dir="${WLT_CONTROL_ARTIFACT_DIR:-$artifact_root/wlt-device-control-$timestamp}"
 timeout_seconds="${WLT_CONTROL_TIMEOUT_SECONDS:-40}"
 candidate_file="${WLT_CONTROL_CANDIDATE_FILE:-}"
+soak_seconds="${WLT_CONTROL_SOAK_SECONDS:-1800}"
+soak_interval_seconds="${WLT_CONTROL_SOAK_INTERVAL_SECONDS:-30}"
 
 log() {
     printf '[wlt-device-control] %s\n' "$*" >&2
@@ -57,12 +59,23 @@ validate_integer() {
 run() {
     local action="${1:-}"
     case "$action" in
-        ping|probe|start|start-probe|status|stop) ;;
-        *) die "usage: $0 <ping|probe|start|start-probe|status|stop>" ;;
+        ping|probe|start|start-probe|status|stop|soak) ;;
+        *) die "usage: $0 <ping|probe|start|start-probe|status|stop|soak>" ;;
     esac
     [[ -n "${WLT_APP_BUNDLE_ID:-}" ]] || die "set WLT_APP_BUNDLE_ID to the installed SFI Dev bundle identifier"
     [[ "$WLT_APP_BUNDLE_ID" =~ ^[A-Za-z0-9.-]+$ ]] || die "WLT_APP_BUNDLE_ID has an invalid format"
     validate_integer "$timeout_seconds" "WLT_CONTROL_TIMEOUT_SECONDS"
+    if [[ "$action" == "soak" ]]; then
+        validate_integer "$soak_seconds" "WLT_CONTROL_SOAK_SECONDS"
+        validate_integer "$soak_interval_seconds" "WLT_CONTROL_SOAK_INTERVAL_SECONDS"
+        (( soak_seconds >= 5 && soak_seconds <= 1800 )) \
+            || die "WLT_CONTROL_SOAK_SECONDS must be between 5 and 1800"
+        (( soak_interval_seconds <= 300 && soak_interval_seconds <= soak_seconds )) \
+            || die "WLT_CONTROL_SOAK_INTERVAL_SECONDS must be at most 300 and no greater than soak duration"
+        if (( timeout_seconds <= soak_seconds )); then
+            timeout_seconds=$((soak_seconds + 60))
+        fi
+    fi
     if [[ -n "$candidate_file" ]]; then
         [[ "$action" == "start" || "$action" == "start-probe" ]] \
             || die "WLT_CONTROL_CANDIDATE_FILE is valid only for start/start-probe"
@@ -93,7 +106,7 @@ PY
     fi
 
     mkdir -p "$artifact_dir"
-    local device request_id result_name remote_result remote_candidate local_result deadline copy_log
+    local device request_id result_name remote_result remote_candidate local_result deadline copy_log payload_url
     device="$(device_id)"
     request_id="$(uuidgen | tr '[:upper:]' '[:lower:]')"
     result_name="$request_id.json"
@@ -117,15 +130,31 @@ PY
             || die "candidate copy failed; see $artifact_dir/candidate-copy.log"
     fi
 
+    payload_url="sing-box://wlt-test-control/$action?request=$request_id"
+    if [[ "$action" == "soak" ]]; then
+        payload_url="$payload_url&duration=$soak_seconds&interval=$soak_interval_seconds"
+    fi
     log "sending $action through CoreDevice (no XCTest/UI Automation)"
-    xcrun devicectl device process launch \
-        --device "$device" \
-        --payload-url "sing-box://wlt-test-control/$action?request=$request_id" \
-        --activate \
-        --timeout 20 \
-        --json-output "$artifact_dir/launch.json" \
-        "$WLT_APP_BUNDLE_ID" >"$artifact_dir/launch.log" 2>&1 \
-        || die "CoreDevice launch failed; see $artifact_dir/launch.log"
+    if [[ "$action" == "stop" ]]; then
+        xcrun devicectl device process launch \
+            --device "$device" \
+            --terminate-existing \
+            --payload-url "$payload_url" \
+            --activate \
+            --timeout 20 \
+            --json-output "$artifact_dir/launch.json" \
+            "$WLT_APP_BUNDLE_ID" >"$artifact_dir/launch.log" 2>&1 \
+            || die "CoreDevice launch failed; see $artifact_dir/launch.log"
+    else
+        xcrun devicectl device process launch \
+            --device "$device" \
+            --payload-url "$payload_url" \
+            --activate \
+            --timeout 20 \
+            --json-output "$artifact_dir/launch.json" \
+            "$WLT_APP_BUNDLE_ID" >"$artifact_dir/launch.log" 2>&1 \
+            || die "CoreDevice launch failed; see $artifact_dir/launch.log"
+    fi
 
     while (( SECONDS < deadline )); do
         if xcrun devicectl device copy from \
@@ -148,7 +177,7 @@ import sys
 
 path, request_id, action, candidate_path = sys.argv[1:]
 result = json.load(open(path))
-if result.get("schema") not in {1, 2}:
+if result.get("schema") not in {1, 2, 3}:
     raise SystemExit("unexpected result schema")
 if result.get("request_id") != request_id:
     raise SystemExit("result request mismatch")
@@ -164,6 +193,13 @@ allowed = {
     "elapsed_ms": result.get("elapsed_ms"),
     "vpn_startup_ms": result.get("vpn_startup_ms"),
     "probe_elapsed_ms": result.get("probe_elapsed_ms"),
+    "soak_elapsed_ms": result.get("soak_elapsed_ms"),
+    "soak_samples": result.get("soak_samples"),
+    "soak_successes": result.get("soak_successes"),
+    "soak_failures": result.get("soak_failures"),
+    "soak_probe_samples": result.get("soak_probe_samples"),
+    "network_loss_observed": result.get("network_loss_observed"),
+    "network_recovered": result.get("network_recovered"),
     "runtime_parameters": result.get("runtime_parameters"),
     "network_initial": result.get("network_initial"),
     "network_final": result.get("network_final"),

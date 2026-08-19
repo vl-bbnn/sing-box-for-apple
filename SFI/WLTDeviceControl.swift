@@ -5,6 +5,7 @@ import CoreTelephony
 import CryptoKit
 import Network
 import NetworkExtension
+import UIKit
 
 actor WLTDeviceControl {
     static let shared = WLTDeviceControl()
@@ -12,6 +13,8 @@ actor WLTDeviceControl {
     struct Request: Equatable {
         let id: UUID
         let action: Action
+        let soakDurationSeconds: Int?
+        let soakIntervalSeconds: Int?
 
         init?(url: URL) {
             guard url.scheme == "sing-box", url.host == "wlt-test-control" else {
@@ -31,6 +34,26 @@ actor WLTDeviceControl {
             }
             self.id = id
             self.action = action
+            if action == .soak {
+                guard
+                    let durationValue = components.queryItems?
+                        .first(where: { $0.name == "duration" })?.value,
+                    let intervalValue = components.queryItems?
+                        .first(where: { $0.name == "interval" })?.value,
+                    let duration = Int(durationValue),
+                    let interval = Int(intervalValue),
+                    (5...1_800).contains(duration),
+                    (1...300).contains(interval),
+                    interval <= duration
+                else {
+                    return nil
+                }
+                soakDurationSeconds = duration
+                soakIntervalSeconds = interval
+            } else {
+                soakDurationSeconds = nil
+                soakIntervalSeconds = nil
+            }
         }
     }
 
@@ -41,6 +64,32 @@ actor WLTDeviceControl {
         case startProbe = "start-probe"
         case status
         case stop
+        case soak
+    }
+
+    private struct SoakProbeSample: Codable {
+        let offsetMS: Int64
+        let success: Bool
+        let elapsedMS: Int64
+        let network: NetworkSnapshot
+        let errorDomain: String?
+        let errorCode: Int?
+
+        enum CodingKeys: String, CodingKey {
+            case offsetMS = "offset_ms"
+            case success
+            case elapsedMS = "elapsed_ms"
+            case network
+            case errorDomain = "error_domain"
+            case errorCode = "error_code"
+        }
+    }
+
+    private struct SoakOutcome {
+        let elapsedMS: Int64
+        let samples: [SoakProbeSample]
+        let networkLossObserved: Bool
+        let networkRecovered: Bool
     }
 
     private struct Result: Codable {
@@ -54,6 +103,13 @@ actor WLTDeviceControl {
         let elapsedMS: Int64
         let vpnStartupMS: Int64?
         let probeElapsedMS: Int64?
+        let soakElapsedMS: Int64?
+        let soakSamples: Int?
+        let soakSuccesses: Int?
+        let soakFailures: Int?
+        let soakProbeSamples: [SoakProbeSample]?
+        let networkLossObserved: Bool?
+        let networkRecovered: Bool?
         let runtimeParameters: WhitelistTransportConfig.RuntimeParameters?
         let networkInitial: NetworkSnapshot?
         let networkFinal: NetworkSnapshot?
@@ -71,6 +127,13 @@ actor WLTDeviceControl {
             case elapsedMS = "elapsed_ms"
             case vpnStartupMS = "vpn_startup_ms"
             case probeElapsedMS = "probe_elapsed_ms"
+            case soakElapsedMS = "soak_elapsed_ms"
+            case soakSamples = "soak_samples"
+            case soakSuccesses = "soak_successes"
+            case soakFailures = "soak_failures"
+            case soakProbeSamples = "soak_probe_samples"
+            case networkLossObserved = "network_loss_observed"
+            case networkRecovered = "network_recovered"
             case runtimeParameters = "runtime_parameters"
             case networkInitial = "network_initial"
             case networkFinal = "network_final"
@@ -101,7 +164,27 @@ actor WLTDeviceControl {
         let status: NEVPNStatus?
         let vpnStartupMS: Int64?
         let probeElapsedMS: Int64?
+        let soak: SoakOutcome?
         let runtimeParameters: WhitelistTransportConfig.RuntimeParameters?
+    }
+
+    private actor ConnectivityObservation {
+        private var sawUnsatisfied = false
+        private var sawSatisfiedAfterLoss = false
+
+        func observe(_ status: Network.NWPath.Status) {
+            if status == .satisfied {
+                if sawUnsatisfied {
+                    sawSatisfiedAfterLoss = true
+                }
+            } else {
+                sawUnsatisfied = true
+            }
+        }
+
+        func result() -> (lossObserved: Bool, recovered: Bool) {
+            (sawUnsatisfied, sawSatisfiedAfterLoss)
+        }
     }
 
     private enum ControlError: Int, Error {
@@ -135,6 +218,28 @@ actor WLTDeviceControl {
         }
         isRunning = true
         defer { isRunning = false }
+        let keepsDeviceAwake = switch request.action {
+        case .start, .startProbe, .soak:
+            true
+        default:
+            false
+        }
+        let previousIdleTimerDisabled: Bool? = if keepsDeviceAwake {
+            await MainActor.run {
+                let previous = UIApplication.shared.isIdleTimerDisabled
+                UIApplication.shared.isIdleTimerDisabled = true
+                return previous
+            }
+        } else {
+            nil
+        }
+        defer {
+            if let previousIdleTimerDisabled {
+                Task { @MainActor in
+                    UIApplication.shared.isIdleTimerDisabled = previousIdleTimerDisabled
+                }
+            }
+        }
         pruneRuntimeCandidates(excluding: candidateURL)
         defer { try? FileManager.default.removeItem(at: candidateURL) }
 
@@ -145,7 +250,7 @@ actor WLTDeviceControl {
             )
             let networkInitial = await captureNetworkSnapshot()
             let outcome = try await perform(
-                request.action,
+                request,
                 runtimeParameters: runtimeParameters
             )
             let networkFinal = await captureNetworkSnapshot()
@@ -176,14 +281,16 @@ actor WLTDeviceControl {
     }
 
     private func perform(
-        _ action: Action,
+        _ request: Request,
         runtimeParameters: WhitelistTransportConfig.RuntimeParameters?
     ) async throws -> Outcome {
+        let action = request.action
         if action == .ping {
             return Outcome(
                 status: nil,
                 vpnStartupMS: nil,
                 probeElapsedMS: nil,
+                soak: nil,
                 runtimeParameters: nil
             )
         }
@@ -198,6 +305,7 @@ actor WLTDeviceControl {
                 status: nil,
                 vpnStartupMS: nil,
                 probeElapsedMS: nil,
+                soak: nil,
                 runtimeParameters: nil
             )
         case .probe:
@@ -210,6 +318,7 @@ actor WLTDeviceControl {
                 status: await profile.status,
                 vpnStartupMS: nil,
                 probeElapsedMS: max(0, unixMilliseconds() - probeStartedAt),
+                soak: nil,
                 runtimeParameters: nil
             )
         case .status:
@@ -217,6 +326,7 @@ actor WLTDeviceControl {
                 status: await profile.status,
                 vpnStartupMS: nil,
                 probeElapsedMS: nil,
+                soak: nil,
                 runtimeParameters: nil
             )
         case .start:
@@ -229,6 +339,7 @@ actor WLTDeviceControl {
                 status: status,
                 vpnStartupMS: max(0, unixMilliseconds() - startedAt),
                 probeElapsedMS: nil,
+                soak: nil,
                 runtimeParameters: runtimeParameters
             )
         case .startProbe:
@@ -244,6 +355,7 @@ actor WLTDeviceControl {
                 status: await profile.status,
                 vpnStartupMS: startupMS,
                 probeElapsedMS: max(0, unixMilliseconds() - probeStartedAt),
+                soak: nil,
                 runtimeParameters: runtimeParameters
             )
         case .stop:
@@ -251,9 +363,90 @@ actor WLTDeviceControl {
                 status: try await stop(profile),
                 vpnStartupMS: nil,
                 probeElapsedMS: nil,
+                soak: nil,
+                runtimeParameters: nil
+            )
+        case .soak:
+            guard await profile.status == .connected else {
+                throw ControlError.probeRequiresConnectedVPN
+            }
+            guard
+                let durationSeconds = request.soakDurationSeconds,
+                let intervalSeconds = request.soakIntervalSeconds
+            else {
+                throw ControlError.unexpectedStatus
+            }
+            let soak = await runSoak(
+                durationSeconds: durationSeconds,
+                intervalSeconds: intervalSeconds
+            )
+            return Outcome(
+                status: await profile.status,
+                vpnStartupMS: nil,
+                probeElapsedMS: nil,
+                soak: soak,
                 runtimeParameters: nil
             )
         }
+    }
+
+    private func runSoak(
+        durationSeconds: Int,
+        intervalSeconds: Int
+    ) async -> SoakOutcome {
+        let startedAt = unixMilliseconds()
+        let deadline = Date().addingTimeInterval(TimeInterval(durationSeconds))
+        let observation = ConnectivityObservation()
+        let monitor = NWPathMonitor()
+        monitor.pathUpdateHandler = { path in
+            let status = path.status
+            Task { await observation.observe(status) }
+        }
+        monitor.start(queue: DispatchQueue(label: "WLTDeviceControl.SoakNetwork"))
+        defer { monitor.cancel() }
+
+        var samples: [SoakProbeSample] = []
+        var nextProbeAt = Date()
+        while true {
+            let probeStartedAt = unixMilliseconds()
+            let network = await captureNetworkSnapshot()
+            var probeError: Error?
+            do {
+                try await probeTraffic(timeout: 8)
+            } catch {
+                probeError = error
+            }
+            let finishedAt = unixMilliseconds()
+            let nsError = probeError as NSError?
+            samples.append(SoakProbeSample(
+                offsetMS: max(0, probeStartedAt - startedAt),
+                success: probeError == nil,
+                elapsedMS: max(0, finishedAt - probeStartedAt),
+                network: network,
+                errorDomain: nsError?.domain,
+                errorCode: nsError?.code
+            ))
+
+            if deadline.timeIntervalSinceNow <= 0 {
+                break
+            }
+            nextProbeAt = nextProbeAt.addingTimeInterval(TimeInterval(intervalSeconds))
+            let delay = min(
+                max(0, nextProbeAt.timeIntervalSinceNow),
+                max(0, deadline.timeIntervalSinceNow)
+            )
+            if delay > 0 {
+                try? await Task.sleep(nanoseconds: UInt64(delay * 1_000_000_000))
+            }
+        }
+
+        let connectivity = await observation.result()
+        return SoakOutcome(
+            elapsedMS: max(0, unixMilliseconds() - startedAt),
+            samples: samples,
+            networkLossObserved: connectivity.lossObserved,
+            networkRecovered: connectivity.recovered
+        )
     }
 
     private func loadCurrentStatus() async -> NEVPNStatus? {
@@ -278,7 +471,11 @@ actor WLTDeviceControl {
             if runtimeParameters != nil {
                 throw ControlError.runtimeCandidateRequiresStoppedVPN
             }
-            return try await waitForStatus(profile, desired: .connected)
+            return try await waitForStatus(
+                profile,
+                desired: .connected,
+                timeout: 90
+            )
         case .disconnecting:
             _ = try await waitForStatus(profile, desired: .disconnected)
         case .disconnected, .invalid:
@@ -287,7 +484,11 @@ actor WLTDeviceControl {
             throw ControlError.unexpectedStatus
         }
         try await profile.start(wltRuntimeParameters: runtimeParameters)
-        return try await waitForStatus(profile, desired: .connected)
+        return try await waitForStatus(
+            profile,
+            desired: .connected,
+            timeout: 90
+        )
     }
 
     private func stop(_ profile: ExtensionProfile) async throws -> NEVPNStatus {
@@ -368,7 +569,7 @@ actor WLTDeviceControl {
         let finishedAt = unixMilliseconds()
         let nsError = error as NSError?
         let result = Result(
-            schema: 2,
+            schema: 3,
             requestID: request.id.uuidString.lowercased(),
             action: request.action,
             state: state,
@@ -378,6 +579,13 @@ actor WLTDeviceControl {
             elapsedMS: max(0, finishedAt - receivedAt),
             vpnStartupMS: outcome?.vpnStartupMS,
             probeElapsedMS: outcome?.probeElapsedMS,
+            soakElapsedMS: outcome?.soak?.elapsedMS,
+            soakSamples: outcome?.soak?.samples.count,
+            soakSuccesses: outcome?.soak?.samples.count(where: { $0.success }),
+            soakFailures: outcome?.soak?.samples.count(where: { !$0.success }),
+            soakProbeSamples: outcome?.soak?.samples,
+            networkLossObserved: outcome?.soak?.networkLossObserved,
+            networkRecovered: outcome?.soak?.networkRecovered,
             runtimeParameters: outcome?.runtimeParameters,
             networkInitial: networkInitial,
             networkFinal: networkFinal,
