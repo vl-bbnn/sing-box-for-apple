@@ -821,7 +821,9 @@ open class ExtensionProvider: NEPacketTunnelProvider {
           .appendingPathComponent("auth-snapshot.json", isDirectory: false)
         let injectedConfig = WhitelistTransportConfig.injectingCoreAuthSnapshotFile(
           into: configContent,
-          snapshotFile: snapshotFile)
+          snapshotFile: snapshotFile,
+          configTrustedAtUnixSeconds:
+            (tunnelOptions?["wltConfigTrustedAt"] as? NSNumber)?.int64Value)
         if injectedConfig != configContent {
           writeLifecycleMessage("(packet-tunnel): core whitelist transport auth snapshot cache configured")
           configContent = injectedConfig

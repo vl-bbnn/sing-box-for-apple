@@ -197,7 +197,8 @@ public enum WhitelistTransportConfig {
 
   public static func injectingCoreAuthSnapshotFile(
     into configContent: String,
-    snapshotFile: URL
+    snapshotFile: URL,
+    configTrustedAtUnixSeconds: Int64? = nil
   ) -> String {
     guard var dictionary = parseConfig(configContent) as? [String: Any],
       var services = dictionary["services"] as? [Any]
@@ -219,6 +220,18 @@ public enum WhitelistTransportConfig {
       }
       if stringValue(service["auth_snapshot_output_file"])?.isEmpty ?? true {
         service["auth_snapshot_output_file"] = snapshotPath
+        changed = true
+      }
+      if let configTrustedAtUnixSeconds, configTrustedAtUnixSeconds > 0 {
+        if (service["config_trusted_at"] as? NSNumber)?.int64Value
+          != configTrustedAtUnixSeconds
+        {
+          service["config_trusted_at"] = NSNumber(value: configTrustedAtUnixSeconds)
+          changed = true
+        }
+      } else if service.removeValue(forKey: "config_trusted_at") != nil {
+        // The timestamp is client-owned. Profile JSON cannot grant trust to
+        // itself when it was not obtained through a successful remote update.
         changed = true
       }
       services[index] = service

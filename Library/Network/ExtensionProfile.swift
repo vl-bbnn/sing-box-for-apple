@@ -277,6 +277,12 @@ public class ExtensionProfile: ObservableObject {
       configContent = try configContentTransform(configContent)
     }
     options["configContent"] = NSString(string: configContent)
+    if profile.type == .remote, let lastUpdated = profile.lastUpdated {
+      let trustedAt = Int64(lastUpdated.timeIntervalSince1970)
+      if trustedAt > 0 {
+        options["wltConfigTrustedAt"] = NSNumber(value: trustedAt)
+      }
+    }
 
     #if !os(macOS)
       options["ignoreMemoryLimit"] = await NSNumber(

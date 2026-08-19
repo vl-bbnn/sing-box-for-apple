@@ -106,6 +106,38 @@ struct WhitelistTransportConfigCheck {
     )
 
     assertRuntimeCandidateOverlay()
+    assertClientOwnedConfigTrust()
+  }
+
+  private static func assertClientOwnedConfigTrust() {
+    let config = #"{"services":[{"type":"wlt","config_trusted_at":1},{"type":"direct"}]}"#
+    let snapshot = URL(fileURLWithPath: "/private/cache/wlt-auth.json")
+    let trusted = WhitelistTransportConfig.injectingCoreAuthSnapshotFile(
+      into: config,
+      snapshotFile: snapshot,
+      configTrustedAtUnixSeconds: 1_787_068_800
+    )
+    guard
+      let trustedData = trusted.data(using: .utf8),
+      let trustedObject = try? JSONSerialization.jsonObject(with: trustedData) as? [String: Any],
+      let trustedServices = trustedObject["services"] as? [[String: Any]],
+      (trustedServices.first?["config_trusted_at"] as? NSNumber)?.int64Value == 1_787_068_800
+    else {
+      fatalError("client-owned config trust timestamp was not injected")
+    }
+
+    let untrusted = WhitelistTransportConfig.injectingCoreAuthSnapshotFile(
+      into: config,
+      snapshotFile: snapshot
+    )
+    guard
+      let untrustedData = untrusted.data(using: .utf8),
+      let untrustedObject = try? JSONSerialization.jsonObject(with: untrustedData) as? [String: Any],
+      let untrustedServices = untrustedObject["services"] as? [[String: Any]],
+      untrustedServices.first?["config_trusted_at"] == nil
+    else {
+      fatalError("profile-provided config trust timestamp was accepted")
+    }
   }
 
   private static func assertRuntimeCandidateOverlay() {
