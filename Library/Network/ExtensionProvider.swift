@@ -15,7 +15,7 @@ import os.log
 open class ExtensionProvider: NEPacketTunnelProvider {
   private static let logger = Logger(category: "ExtensionProvider")
   private static let defaultLogMaxLines = 100_000
-  private static let whitelistTransportLogMaxLines = 100_000
+  private static let whitelistTransportLogMaxLines = 3_000
   private static let whitelistTransportMemoryRecoveryThresholdDefault: UInt64 = 42 * 1024 * 1024
   private static let whitelistTransportMemoryRecoveryUrgentThresholdDefault: UInt64 =
     44 * 1024 * 1024
