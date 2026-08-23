@@ -18,9 +18,11 @@ SFM_SYSTEM_DISTRIBUTION_UNIVERSAL := build/SFM.System-distribution-universal.xml
 XCODE_AUTH_FLAGS :=
 XCODE_EXTRA_FLAGS :=
 IOS_ARCHIVE_FLAGS := APP_SHORTCUTS_ENABLE_FLEXIBLE_MATCHING=NO
+MACOS_ARCHIVE_FLAGS :=
 APP_STORE_ARCHIVE_SIGNING_FLAGS := DEVELOPMENT_TEAM="$(DEVELOPMENT_TEAM)" CODE_SIGN_STYLE=Automatic
 ifneq ($(strip $(CI_BUILD_NUMBER)),)
 IOS_ARCHIVE_FLAGS += CURRENT_PROJECT_VERSION="$(CI_BUILD_NUMBER)"
+MACOS_ARCHIVE_FLAGS += CURRENT_PROJECT_VERSION="$(CI_BUILD_NUMBER)"
 endif
 XCODE_ERROR_FILTER := grep -nE "error:|warning:|AppIntentsSSUTraining|The following build commands failed" || true
 
@@ -98,7 +100,7 @@ release_macos: archive_macos upload_macos
 archive_macos:
 	rm -rf build/SFM.xcarchive build/archive_macos.log
 	mkdir -p build
-	set -o pipefail; xcodebuild archive -scheme SFM -configuration Release -archivePath build/SFM.xcarchive -allowProvisioningUpdates $(XCODE_AUTH_FLAGS) $(XCODE_EXTRA_FLAGS) $(APP_STORE_ARCHIVE_SIGNING_FLAGS) 2>&1 | tee build/archive_macos.log | xcbeautify | grep -A 10 -e "Archive Succeeded" -e "ARCHIVE FAILED" -e "❌" || { status=$$?; echo "---- raw xcodebuild tail (archive_macos) ----"; tail -n 200 build/archive_macos.log; exit $$status; }
+	set -o pipefail; xcodebuild archive -scheme SFM -configuration Release -archivePath build/SFM.xcarchive -allowProvisioningUpdates $(XCODE_AUTH_FLAGS) $(XCODE_EXTRA_FLAGS) $(MACOS_ARCHIVE_FLAGS) $(APP_STORE_ARCHIVE_SIGNING_FLAGS) 2>&1 | tee build/archive_macos.log | xcbeautify | grep -A 10 -e "Archive Succeeded" -e "ARCHIVE FAILED" -e "❌" || { status=$$?; echo "---- raw xcodebuild tail (archive_macos) ----"; tail -n 200 build/archive_macos.log; exit $$status; }
 
 upload_macos:
 	$(MAKE) $(APP_STORE_UPLOAD_PLIST)
