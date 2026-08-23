@@ -126,13 +126,16 @@ final class DeviceScenarioTests: XCTestCase {
             }
             let deadline = Date().addingTimeInterval(timeout)
             while Date() < deadline {
-                if let element = texts.lazy
-                    .map({ textElement($0, in: app, timeout: 0, required: false) })
-                    .first(where: \.exists)
-                {
-                    element.tap()
-                    break
+                var matched = false
+                for text in texts {
+                    let element = try textElement(text, in: app, timeout: 0, required: false)
+                    if element.exists {
+                        element.tap()
+                        matched = true
+                        break
+                    }
                 }
+                if matched { break }
                 Thread.sleep(forTimeInterval: 0.2)
             }
         case "dismiss_pip":
@@ -182,16 +185,20 @@ final class DeviceScenarioTests: XCTestCase {
             guard let texts = step.texts, !texts.isEmpty else {
                 throw ScenarioError.invalidStep("assert_text_any requires texts")
             }
-            try require(
-                texts.contains(where: { textElement($0, in: app, timeout: 0, required: false).exists }),
-                "none of the expected texts are visible"
-            )
+            var matched = false
+            for text in texts {
+                if try textElement(text, in: app, timeout: 0, required: false).exists {
+                    matched = true
+                    break
+                }
+            }
+            try require(matched, "none of the expected texts are visible")
         case "assert_texts_absent":
             guard let texts = step.texts, !texts.isEmpty else {
                 throw ScenarioError.invalidStep("assert_texts_absent requires texts")
             }
             for text in texts {
-                let element = textElement(text, in: app, timeout: 0, required: false)
+                let element = try textElement(text, in: app, timeout: 0, required: false)
                 try require(!element.waitForExistence(timeout: timeout), "unexpected text found: \(text)")
             }
         case "assert_visual_change":
