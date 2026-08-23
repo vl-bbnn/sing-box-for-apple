@@ -25,6 +25,13 @@ class IPhoneWLTStabilityContractTests(unittest.TestCase):
         self.assertIn("WLT_IOS_WIFI_TRUST_PROOF", helper)
         self.assertIn("age <= 900", helper)
 
+    def test_device_install_selects_only_connected_paired_iphone(self):
+        helper = DEVICE_HELPER.read_text()
+        selector = helper.split("device_id()", 1)[1].split("device_status()", 1)[0]
+        self.assertIn('connection.get("pairingState") == "paired"', selector)
+        self.assertIn('connection.get("tunnelState") == "connected"', selector)
+        self.assertIn("connected paired iOS device", selector)
+
     def test_shortcut_helper_warms_before_delivering_payload(self):
         with tempfile.TemporaryDirectory() as temporary:
             root = Path(temporary)

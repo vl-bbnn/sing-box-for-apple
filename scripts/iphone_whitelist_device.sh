@@ -86,13 +86,22 @@ devices = json.load(open(path)).get("result", {}).get("devices", [])
 matches = []
 for device in devices:
     hardware = device.get("hardwareProperties", {})
+    connection = device.get("connectionProperties", {})
     platform = str(hardware.get("platform", ""))
     marketing_name = str(hardware.get("marketingName", ""))
     device_type = str(hardware.get("deviceType", ""))
-    if platform == "iOS" or "iPhone" in marketing_name or "iPhone" in device_type:
+    is_iphone = platform == "iOS" or "iPhone" in marketing_name or "iPhone" in device_type
+    if (
+        is_iphone
+        and connection.get("pairingState") == "paired"
+        and connection.get("tunnelState") == "connected"
+    ):
         matches.append(device)
 if len(matches) != 1:
-    raise SystemExit(f"expected exactly one iOS device, found {len(matches)}; set DEVICE_ID explicitly")
+    raise SystemExit(
+        f"expected exactly one connected paired iOS device, found {len(matches)}; "
+        "set DEVICE_ID explicitly"
+    )
 print(matches[0].get("identifier", ""))
 PY
 }
