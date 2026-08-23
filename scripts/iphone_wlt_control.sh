@@ -9,6 +9,7 @@ artifact_root="${WLT_TEST_ARTIFACT_ROOT:-$repo_root/.local/wlt-test-artifacts}"
 artifact_dir="${WLT_CONTROL_ARTIFACT_DIR:-$artifact_root/wlt-device-control-$timestamp}"
 timeout_seconds="${WLT_CONTROL_TIMEOUT_SECONDS:-40}"
 launch_timeout_seconds="${WLT_CONTROL_LAUNCH_TIMEOUT_SECONDS:-30}"
+copy_timeout_seconds="${WLT_CONTROL_COPY_TIMEOUT_SECONDS:-30}"
 candidate_file="${WLT_CONTROL_CANDIDATE_FILE:-}"
 workload_file="${WLT_CONTROL_WORKLOAD_FILE:-}"
 soak_seconds="${WLT_CONTROL_SOAK_SECONDS:-1800}"
@@ -68,6 +69,7 @@ run() {
     [[ "$WLT_APP_BUNDLE_ID" =~ ^[A-Za-z0-9.-]+$ ]] || die "WLT_APP_BUNDLE_ID has an invalid format"
     validate_integer "$timeout_seconds" "WLT_CONTROL_TIMEOUT_SECONDS"
     validate_integer "$launch_timeout_seconds" "WLT_CONTROL_LAUNCH_TIMEOUT_SECONDS"
+    validate_integer "$copy_timeout_seconds" "WLT_CONTROL_COPY_TIMEOUT_SECONDS"
     if [[ "$action" == "soak" ]]; then
         validate_integer "$soak_seconds" "WLT_CONTROL_SOAK_SECONDS"
         validate_integer "$soak_interval_seconds" "WLT_CONTROL_SOAK_INTERVAL_SECONDS"
@@ -180,7 +182,7 @@ PY
             --domain-identifier "$WLT_APP_BUNDLE_ID" \
             --source "$candidate_file" \
             --destination "$remote_candidate" \
-            --timeout 10 \
+            --timeout "$copy_timeout_seconds" \
             --json-output "$artifact_dir/candidate-copy.json" \
             >"$artifact_dir/candidate-copy.log" 2>&1 \
             || die "candidate copy failed; see $artifact_dir/candidate-copy.log"
@@ -194,7 +196,7 @@ PY
             --domain-identifier "$WLT_APP_BUNDLE_ID" \
             --source "$workload_file" \
             --destination "$remote_workload" \
-            --timeout 10 \
+            --timeout "$copy_timeout_seconds" \
             --json-output "$artifact_dir/workload-copy.json" \
             >"$artifact_dir/workload-copy.log" 2>&1 \
             || die "workload copy failed; see $artifact_dir/workload-copy.log"

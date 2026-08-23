@@ -32,6 +32,11 @@ class IPhoneWLTStabilityContractTests(unittest.TestCase):
         self.assertIn('connection.get("tunnelState") == "connected"', selector)
         self.assertIn("connected paired iOS device", selector)
 
+    def test_device_control_copy_timeout_is_configurable_for_lte(self):
+        control = (SCRIPTS / "iphone_wlt_control.sh").read_text()
+        self.assertIn('WLT_CONTROL_COPY_TIMEOUT_SECONDS:-30', control)
+        self.assertEqual(control.count('--timeout "$copy_timeout_seconds"'), 2)
+
     def test_shortcut_helper_warms_before_delivering_payload(self):
         with tempfile.TemporaryDirectory() as temporary:
             root = Path(temporary)
