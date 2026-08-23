@@ -172,6 +172,23 @@ class IPhoneWLTStabilityContractTests(unittest.TestCase):
         self.assertIn("shouldDeferAutomaticUpdate(profile)", update_task)
         self.assertIn("extensionProfile.status != .connected", update_task)
 
+    def test_deprecated_note_probe_does_not_surface_command_socket_shutdown(self):
+        global_checks = (
+            SCRIPTS.parent
+            / "ApplicationLibrary"
+            / "Views"
+            / "Abstract"
+            / "GlobalChecksModifier.swift"
+        ).read_text()
+        deprecated_check = global_checks.split(
+            "private nonisolated func checkDeprecatedNotes() async", 1
+        )[1].split("private func showNextDeprecatedNote", 1)[0]
+        self.assertIn(
+            "try? LibboxNewStandaloneCommandClient()!.getDeprecatedNotes()",
+            deprecated_check,
+        )
+        self.assertNotIn('AlertState(action: "check deprecated notes"', deprecated_check)
+
     def make_fake_control(self, root: Path) -> Path:
         script = root / "fake-control.py"
         script.write_text(textwrap.dedent(
