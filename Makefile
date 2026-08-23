@@ -19,6 +19,10 @@ XCODE_AUTH_FLAGS :=
 XCODE_EXTRA_FLAGS :=
 IOS_ARCHIVE_FLAGS := APP_SHORTCUTS_ENABLE_FLEXIBLE_MATCHING=NO
 APP_STORE_ARCHIVE_SIGNING_FLAGS := DEVELOPMENT_TEAM="$(DEVELOPMENT_TEAM)" CODE_SIGN_STYLE=Automatic
+IOS_APP_STORE_SIGNING_FLAGS := $(APP_STORE_ARCHIVE_SIGNING_FLAGS) CODE_SIGN_IDENTITY="Apple Distribution"
+ifneq ($(strip $(CI_BUILD_NUMBER)),)
+IOS_ARCHIVE_FLAGS += CURRENT_PROJECT_VERSION="$(CI_BUILD_NUMBER)"
+endif
 XCODE_ERROR_FILTER := grep -nE "error:|warning:|AppIntentsSSUTraining|The following build commands failed" || true
 
 ifneq ($(strip $(ASC_KEY_PATH)$(ASC_KEY_ID)$(ASC_KEY_ISSUER_ID)),)
@@ -84,7 +88,7 @@ release_ios: archive_ios upload_ios
 archive_ios:
 	rm -rf build/SFI.xcarchive build/archive_ios.log
 	mkdir -p build
-	set -o pipefail; xcodebuild archive -scheme SFI -configuration Release -destination 'generic/platform=iOS' -archivePath build/SFI.xcarchive -allowProvisioningUpdates $(XCODE_AUTH_FLAGS) $(XCODE_EXTRA_FLAGS) $(IOS_ARCHIVE_FLAGS) $(APP_STORE_ARCHIVE_SIGNING_FLAGS) 2>&1 | tee build/archive_ios.log | xcbeautify | grep -A 10 -e "Archive Succeeded" -e "ARCHIVE FAILED" -e "❌" || { status=$$?; echo "---- raw xcodebuild diagnostics (archive_ios) ----"; bash -lc '$(XCODE_ERROR_FILTER)' < build/archive_ios.log; echo "---- raw xcodebuild tail (archive_ios) ----"; tail -n 200 build/archive_ios.log; exit $$status; }
+	set -o pipefail; xcodebuild archive -scheme SFI -configuration Release -destination 'generic/platform=iOS' -archivePath build/SFI.xcarchive -allowProvisioningUpdates $(XCODE_AUTH_FLAGS) $(XCODE_EXTRA_FLAGS) $(IOS_ARCHIVE_FLAGS) $(IOS_APP_STORE_SIGNING_FLAGS) 2>&1 | tee build/archive_ios.log | xcbeautify | grep -A 10 -e "Archive Succeeded" -e "ARCHIVE FAILED" -e "❌" || { status=$$?; echo "---- raw xcodebuild diagnostics (archive_ios) ----"; bash -lc '$(XCODE_ERROR_FILTER)' < build/archive_ios.log; echo "---- raw xcodebuild tail (archive_ios) ----"; tail -n 200 build/archive_ios.log; exit $$status; }
 
 upload_ios:
 	$(MAKE) $(APP_STORE_UPLOAD_PLIST)

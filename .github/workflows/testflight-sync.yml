@@ -160,6 +160,7 @@ jobs:
     env:
       DEVELOPER_DIR: /Applications/Xcode_26.3.app/Contents/Developer
       XCODEBUILD_EXTRA_FLAGS: -skipPackagePluginValidation
+      CI_BUILD_NUMBER: ${{ github.run_number }}
       OVERLAY_BASE_PACKAGE_IDENTIFIER: ${{ vars.OVERLAY_BASE_PACKAGE_IDENTIFIER }}
       OVERLAY_DEVELOPMENT_TEAM: ${{ vars.OVERLAY_DEVELOPMENT_TEAM }}
       OVERLAY_MACOS_SYSTEM_PROFILE_SPECIFIER: ${{ vars.OVERLAY_MACOS_SYSTEM_PROFILE_SPECIFIER }}
