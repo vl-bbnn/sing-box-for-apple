@@ -173,6 +173,9 @@ public class ExtensionProfile: ObservableObject {
     }
     guard let manager else { return }
     try await fetchProfile()
+    #if SFI_DEV
+      PacketTunnelDiagnostics.appendStartupMilestone("profile_loaded")
+    #endif
     manager.isEnabled = true
     let alwaysOn = await SharedPreferences.alwaysOn.get()
     let onDemandEnabled = await SharedPreferences.onDemandEnabled.get()
@@ -208,11 +211,17 @@ public class ExtensionProfile: ObservableObject {
     let options = try await prepareStartOptions(
       configContentTransform: configContentTransform
     )
+    #if SFI_DEV
+      PacketTunnelDiagnostics.appendStartupMilestone("start_options_ready")
+    #endif
     #if os(macOS)
       let whitelistTransportStarted = try await WhitelistTransportManager.shared.startIfNeeded()
     #endif
     do {
       try manager.connection.startVPNTunnel(options: options)
+      #if SFI_DEV
+        PacketTunnelDiagnostics.appendStartupMilestone("extension_start_requested")
+      #endif
     } catch {
       #if os(macOS)
         if whitelistTransportStarted {
@@ -277,12 +286,6 @@ public class ExtensionProfile: ObservableObject {
       configContent = try configContentTransform(configContent)
     }
     options["configContent"] = NSString(string: configContent)
-    if profile.type == .remote, let lastUpdated = profile.lastUpdated {
-      let trustedAt = Int64(lastUpdated.timeIntervalSince1970)
-      if trustedAt > 0 {
-        options["wltConfigTrustedAt"] = NSNumber(value: trustedAt)
-      }
-    }
 
     #if !os(macOS)
       options["ignoreMemoryLimit"] = await NSNumber(

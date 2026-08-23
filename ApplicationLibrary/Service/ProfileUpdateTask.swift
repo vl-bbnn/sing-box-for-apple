@@ -31,9 +31,12 @@ public enum ProfileUpdateTask {
 
     static func calculateEarliestBeginDate(_ profiles: [Profile]) -> Date {
         let nowTime = Date.now
-        var earliestBeginDate = profiles.map { it in
-            it.lastUpdated!.addingTimeInterval(it.autoUpdateIntervalOrDefault)
-        }.min()!
+        var earliestBeginDate = profiles.map { profile in
+            guard let lastUpdated = profile.lastUpdated else {
+                return nowTime
+            }
+            return lastUpdated.addingTimeInterval(profile.autoUpdateIntervalOrDefault)
+        }.min() ?? nowTime
         if earliestBeginDate <= nowTime {
             earliestBeginDate = nowTime
         }
@@ -53,7 +56,13 @@ public enum ProfileUpdateTask {
         var success = true
         for profile in profiles {
             let profileName = profile.name
-            if profile.lastUpdated! > Date(timeIntervalSinceNow: -profile.autoUpdateIntervalOrDefault) {
+            if let lastUpdated = profile.lastUpdated,
+               lastUpdated > Date(timeIntervalSinceNow: -profile.autoUpdateIntervalOrDefault)
+            {
+                continue
+            }
+            if await shouldDeferAutomaticUpdate(profile) {
+                NSLog("Deferred automatic selected/WLT profile update until VPN is connected")
                 continue
             }
             do {
@@ -65,6 +74,18 @@ public enum ProfileUpdateTask {
             }
         }
         return success
+    }
+
+    private nonisolated static func shouldDeferAutomaticUpdate(_ profile: Profile) async -> Bool {
+        let selectedProfileID = await SharedPreferences.selectedProfileID.get()
+        let isSelected = profile.id == selectedProfileID
+        let content = try? await profile.readAsync()
+        let usesWLT = content.map(WhitelistTransportConfig.usesCoreWhitelistTransport) ?? false
+        if !isSelected && !usesWLT { return false }
+        guard let extensionProfile = try? await ExtensionProfile.load() else {
+            return true
+        }
+        return await extensionProfile.status != .connected
     }
 }
 

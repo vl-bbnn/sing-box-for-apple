@@ -128,6 +128,7 @@ open class ExtensionProvider: NEPacketTunnelProvider {
 
   override open func startTunnel(options startOptions: [String: NSObject]?) async throws {
     beginDiagnosticsSession()
+    PacketTunnelDiagnostics.appendStartupMilestone("extension_started")
     recordLifecycleEvent("(packet-tunnel): startTunnel entered")
     do {
       try await startTunnelImpl(options: startOptions)
@@ -178,6 +179,7 @@ open class ExtensionProvider: NEPacketTunnelProvider {
 
     var stageStartedAt = Date()
     let effectiveOptions = try resolveStartOptions(startOptions)
+    PacketTunnelDiagnostics.appendStartupMilestone("start_options_received")
     recordStartupStage(
       "resolve-options", startedAt: stageStartedAt, totalStartedAt: startupStartedAt)
     if effectiveOptions["configContent"] == nil {
@@ -236,6 +238,7 @@ open class ExtensionProvider: NEPacketTunnelProvider {
       throw ExtensionStartupError(
         "(packet-tunnel) error: setup service: \(setupError.localizedDescription)")
     }
+    PacketTunnelDiagnostics.appendStartupMilestone("libbox_ready")
     recordStartupStage("libbox-setup", startedAt: stageStartedAt, totalStartedAt: startupStartedAt)
 
     let stderrPath = URL(fileURLWithPath: tempPath, isDirectory: true).appendingPathComponent(
@@ -299,10 +302,12 @@ open class ExtensionProvider: NEPacketTunnelProvider {
       try throwIfStopTunnelRequested(since: startStopGeneration)
       recordNetworkPathSnapshot(stage: "before-start-service")
       writeLifecycleMessage("(packet-tunnel): starting sing-box service")
+      PacketTunnelDiagnostics.appendStartupMilestone("core_starting")
       try await startService()
       try throwIfStopTunnelRequested(since: startStopGeneration)
       writeLifecycleMessage(
         "(packet-tunnel): sing-box service started elapsed=\(formatDuration(Date().timeIntervalSince(stageStartedAt))) memory=\(PacketTunnelDiagnostics.residentMemoryDescription())")
+      PacketTunnelDiagnostics.appendStartupMilestone("core_started")
       recordStartupStage(
         "complete", startedAt: startupStartedAt, totalStartedAt: startupStartedAt)
     } catch {
@@ -326,6 +331,7 @@ open class ExtensionProvider: NEPacketTunnelProvider {
   }
 
   func writeMessage(_ message: String) {
+    PacketTunnelDiagnostics.observeStartupLog(message)
     if let commandServer {
       commandServer.writeMessage(2, message: message)
     }
@@ -819,11 +825,12 @@ open class ExtensionProvider: NEPacketTunnelProvider {
         let snapshotFile = FilePath.cacheDirectory
           .appendingPathComponent("WLT", isDirectory: true)
           .appendingPathComponent("auth-snapshot.json", isDirectory: false)
+        PacketTunnelDiagnostics.appendStartupMilestone(
+          FileManager.default.fileExists(atPath: snapshotFile.path)
+            ? "wlt_snapshot_file_present" : "wlt_snapshot_file_missing")
         let injectedConfig = WhitelistTransportConfig.injectingCoreAuthSnapshotFile(
           into: configContent,
-          snapshotFile: snapshotFile,
-          configTrustedAtUnixSeconds:
-            (tunnelOptions?["wltConfigTrustedAt"] as? NSNumber)?.int64Value)
+          snapshotFile: snapshotFile)
         if injectedConfig != configContent {
           writeLifecycleMessage("(packet-tunnel): core whitelist transport auth snapshot cache configured")
           configContent = injectedConfig

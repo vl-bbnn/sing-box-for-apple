@@ -1,5 +1,6 @@
 #if SFI_DEV
 import Foundation
+import Libbox
 import Library
 import CoreTelephony
 import CryptoKit
@@ -9,6 +10,9 @@ import UIKit
 
 actor WLTDeviceControl {
     static let shared = WLTDeviceControl()
+    private static let firstStartTimeout: TimeInterval = 180
+    private static let firstTrafficProbeTimeout: TimeInterval = 60
+    private static let firstTrafficRequestTimeout: TimeInterval = 20
 
     struct Request: Equatable {
         let id: UUID
@@ -60,11 +64,65 @@ actor WLTDeviceControl {
     enum Action: String, Codable {
         case ping
         case probe
+        case refreshProfile = "refresh-profile"
         case start
         case startProbe = "start-probe"
         case status
         case stop
         case soak
+        case workload
+    }
+
+    private struct WorkloadPlan: Decodable {
+        let schema: Int
+        let route: String
+        let selectRoute: Bool?
+        let probes: [WorkloadProbe]
+
+        enum CodingKeys: String, CodingKey {
+            case schema, route, probes
+            case selectRoute = "select_route"
+        }
+    }
+
+    private struct WorkloadProbe: Decodable {
+        let name: String
+        let url: String
+        let minimumBytes: Int
+        let timeoutSeconds: Int
+        let acceptedStatusCodes: [Int]
+
+        enum CodingKeys: String, CodingKey {
+            case name, url
+            case minimumBytes = "minimum_bytes"
+            case timeoutSeconds = "timeout_seconds"
+            case acceptedStatusCodes = "accepted_status_codes"
+        }
+    }
+
+    private struct WorkloadProbeResult: Codable {
+        let name: String
+        let success: Bool
+        let classification: String
+        let statusCode: Int
+        let elapsedMS: Int64
+        let bytesRead: Int
+        let errorDomain: String?
+        let errorCode: Int?
+
+        enum CodingKeys: String, CodingKey {
+            case name, success, classification
+            case statusCode = "status_code"
+            case elapsedMS = "elapsed_ms"
+            case bytesRead = "bytes_read"
+            case errorDomain = "error_domain"
+            case errorCode = "error_code"
+        }
+    }
+
+    private struct WorkloadOutcome {
+        let route: String
+        let probes: [WorkloadProbeResult]
     }
 
     private struct SoakProbeSample: Codable {
@@ -110,7 +168,10 @@ actor WLTDeviceControl {
         let soakProbeSamples: [SoakProbeSample]?
         let networkLossObserved: Bool?
         let networkRecovered: Bool?
+        let startupMilestones: [String]?
         let runtimeParameters: WhitelistTransportConfig.RuntimeParameters?
+        let workloadRoute: String?
+        let workloadProbes: [WorkloadProbeResult]?
         let networkInitial: NetworkSnapshot?
         let networkFinal: NetworkSnapshot?
         let errorDomain: String?
@@ -134,7 +195,10 @@ actor WLTDeviceControl {
             case soakProbeSamples = "soak_probe_samples"
             case networkLossObserved = "network_loss_observed"
             case networkRecovered = "network_recovered"
+            case startupMilestones = "startup_milestones"
             case runtimeParameters = "runtime_parameters"
+            case workloadRoute = "workload_route"
+            case workloadProbes = "workload_probes"
             case networkInitial = "network_initial"
             case networkFinal = "network_final"
             case errorDomain = "error_domain"
@@ -166,6 +230,23 @@ actor WLTDeviceControl {
         let probeElapsedMS: Int64?
         let soak: SoakOutcome?
         let runtimeParameters: WhitelistTransportConfig.RuntimeParameters?
+        let workload: WorkloadOutcome?
+
+        init(
+            status: NEVPNStatus?,
+            vpnStartupMS: Int64?,
+            probeElapsedMS: Int64?,
+            soak: SoakOutcome?,
+            runtimeParameters: WhitelistTransportConfig.RuntimeParameters?,
+            workload: WorkloadOutcome? = nil
+        ) {
+            self.status = status
+            self.vpnStartupMS = vpnStartupMS
+            self.probeElapsedMS = probeElapsedMS
+            self.soak = soak
+            self.runtimeParameters = runtimeParameters
+            self.workload = workload
+        }
     }
 
     private actor ConnectivityObservation {
@@ -195,6 +276,11 @@ actor WLTDeviceControl {
         case probeFailed = 5
         case probeRequiresConnectedVPN = 6
         case runtimeCandidateRequiresStoppedVPN = 7
+        case selectedProfileUnavailable = 8
+        case selectedProfileNotRemote = 9
+        case startupFailed = 10
+        case invalidWorkload = 11
+        case workloadRouteSelectionFailed = 12
     }
 
     private var isRunning = false
@@ -202,8 +288,10 @@ actor WLTDeviceControl {
     func execute(_ request: Request) async {
         let receivedAt = unixMilliseconds()
         let candidateURL = runtimeCandidateURL(request.id)
+        let workloadURL = workloadPlanURL(request.id)
         guard !isRunning else {
             try? FileManager.default.removeItem(at: candidateURL)
+            try? FileManager.default.removeItem(at: workloadURL)
             writeResult(
                 request: request,
                 receivedAt: receivedAt,
@@ -219,7 +307,7 @@ actor WLTDeviceControl {
         isRunning = true
         defer { isRunning = false }
         let keepsDeviceAwake = switch request.action {
-        case .start, .startProbe, .soak:
+        case .start, .startProbe, .soak, .workload:
             true
         default:
             false
@@ -241,23 +329,31 @@ actor WLTDeviceControl {
             }
         }
         pruneRuntimeCandidates(excluding: candidateURL)
+        pruneWorkloadPlans(excluding: workloadURL)
         defer { try? FileManager.default.removeItem(at: candidateURL) }
+        defer { try? FileManager.default.removeItem(at: workloadURL) }
 
         do {
             let runtimeParameters = try loadRuntimeCandidate(
                 for: request.action,
                 at: candidateURL
             )
+            let workloadPlan = try loadWorkloadPlan(
+                for: request.action,
+                at: workloadURL
+            )
             let networkInitial = await captureNetworkSnapshot()
             let outcome = try await perform(
                 request,
-                runtimeParameters: runtimeParameters
+                runtimeParameters: runtimeParameters,
+                workloadPlan: workloadPlan
             )
             let networkFinal = await captureNetworkSnapshot()
+            let workloadSucceeded = outcome.workload?.probes.allSatisfy(\.success) ?? true
             writeResult(
                 request: request,
                 receivedAt: receivedAt,
-                state: "succeeded",
+                state: workloadSucceeded ? "succeeded" : "failed",
                 vpnStatus: outcome.status.map(statusDescription) ?? "not_checked",
                 outcome: outcome,
                 networkInitial: networkInitial,
@@ -282,10 +378,28 @@ actor WLTDeviceControl {
 
     private func perform(
         _ request: Request,
-        runtimeParameters: WhitelistTransportConfig.RuntimeParameters?
+        runtimeParameters: WhitelistTransportConfig.RuntimeParameters?,
+        workloadPlan: WorkloadPlan?
     ) async throws -> Outcome {
         let action = request.action
         if action == .ping {
+            return Outcome(
+                status: nil,
+                vpnStartupMS: nil,
+                probeElapsedMS: nil,
+                soak: nil,
+                runtimeParameters: nil
+            )
+        }
+        if action == .refreshProfile {
+            let profileID = await SharedPreferences.selectedProfileID.get()
+            guard let selectedProfile = try await ProfileManager.get(profileID) else {
+                throw ControlError.selectedProfileUnavailable
+            }
+            guard selectedProfile.type == .remote else {
+                throw ControlError.selectedProfileNotRemote
+            }
+            try await selectedProfile.updateRemoteProfile()
             return Outcome(
                 status: nil,
                 vpnStartupMS: nil,
@@ -298,6 +412,10 @@ actor WLTDeviceControl {
             throw ControlError.networkExtensionNotInstalled
         }
         await profile.register()
+        if action == .start || action == .startProbe {
+            PacketTunnelDiagnostics.resetStartupMilestones()
+            PacketTunnelDiagnostics.appendStartupMilestone("profile_loaded")
+        }
 
         switch action {
         case .ping:
@@ -308,6 +426,8 @@ actor WLTDeviceControl {
                 soak: nil,
                 runtimeParameters: nil
             )
+        case .refreshProfile:
+            preconditionFailure("refresh-profile is handled before Network Extension loading")
         case .probe:
             guard await profile.status == .connected else {
                 throw ControlError.probeRequiresConnectedVPN
@@ -349,8 +469,40 @@ actor WLTDeviceControl {
                 runtimeParameters: runtimeParameters
             )
             let startupMS = max(0, unixMilliseconds() - startedAt)
+            let trafficLogClient = CommandClient(.log, logMaxLines: 1_000)
+            trafficLogClient.connect()
+            let trafficLogObserver = Task {
+                var observedCount = 0
+                while !Task.isCancelled {
+                    let messages = await MainActor.run {
+                        trafficLogClient.logList.map(\.message)
+                    }
+                    if observedCount < messages.count {
+                        for message in messages.dropFirst(observedCount) {
+                            PacketTunnelDiagnostics.observeStartupLog(message)
+                        }
+                        observedCount = messages.count
+                    }
+                    try? await Task.sleep(nanoseconds: 100_000_000)
+                }
+            }
+            defer {
+                trafficLogObserver.cancel()
+                for entry in trafficLogClient.logList {
+                    PacketTunnelDiagnostics.observeStartupLog(entry.message)
+                }
+                trafficLogClient.disconnect()
+            }
+            try? await Task.sleep(nanoseconds: 200_000_000)
             let probeStartedAt = unixMilliseconds()
-            try await probeTraffic()
+            try await probeTraffic(
+                timeout: Self.firstTrafficProbeTimeout,
+                requestTimeout: Self.firstTrafficRequestTimeout
+            )
+            try? await Task.sleep(nanoseconds: 200_000_000)
+            for entry in trafficLogClient.logList {
+                PacketTunnelDiagnostics.observeStartupLog(entry.message)
+            }
             return Outcome(
                 status: await profile.status,
                 vpnStartupMS: startupMS,
@@ -387,6 +539,21 @@ actor WLTDeviceControl {
                 soak: soak,
                 runtimeParameters: nil
             )
+        case .workload:
+            guard await profile.status == .connected else {
+                throw ControlError.probeRequiresConnectedVPN
+            }
+            guard let workloadPlan else {
+                throw ControlError.invalidWorkload
+            }
+            return Outcome(
+                status: await profile.status,
+                vpnStartupMS: nil,
+                probeElapsedMS: nil,
+                soak: nil,
+                runtimeParameters: nil,
+                workload: try await runWorkload(workloadPlan)
+            )
         }
     }
 
@@ -412,7 +579,7 @@ actor WLTDeviceControl {
             let network = await captureNetworkSnapshot()
             var probeError: Error?
             do {
-                try await probeTraffic(timeout: 8)
+                try await probeTraffic(timeout: 12)
             } catch {
                 probeError = error
             }
@@ -449,6 +616,96 @@ actor WLTDeviceControl {
         )
     }
 
+    private func runWorkload(_ plan: WorkloadPlan) async throws -> WorkloadOutcome {
+        if plan.selectRoute != false {
+            try await selectWorkloadRoute(plan.route)
+            // Selection is seeded on unrestricted Wi-Fi. Wait for the new WLT
+            // path there before persisting it for a later LTE-only workload.
+            try await probeTraffic(timeout: 60, requestTimeout: 20)
+        }
+        var results: [WorkloadProbeResult] = []
+        for probe in plan.probes {
+            let startedAt = unixMilliseconds()
+            var statusCode = -1
+            var bytesRead = 0
+            var classification = "request_failed"
+            var probeError: Error?
+            do {
+                guard
+                    let endpoint = URL(string: probe.url),
+                    endpoint.scheme?.lowercased() == "https",
+                    endpoint.host != nil,
+                    endpoint.user == nil,
+                    endpoint.password == nil
+                else {
+                    throw ControlError.invalidWorkload
+                }
+                let configuration = URLSessionConfiguration.ephemeral
+                configuration.requestCachePolicy = .reloadIgnoringLocalAndRemoteCacheData
+                configuration.timeoutIntervalForRequest = TimeInterval(probe.timeoutSeconds)
+                configuration.timeoutIntervalForResource = TimeInterval(probe.timeoutSeconds)
+                configuration.urlCache = nil
+                let session = URLSession(configuration: configuration)
+                defer { session.invalidateAndCancel() }
+                var request = URLRequest(url: endpoint)
+                request.cachePolicy = .reloadIgnoringLocalAndRemoteCacheData
+                request.timeoutInterval = TimeInterval(probe.timeoutSeconds)
+                request.setValue("no-cache", forHTTPHeaderField: "Cache-Control")
+                let (data, response) = try await session.data(for: request)
+                statusCode = (response as? HTTPURLResponse)?.statusCode ?? -1
+                bytesRead = data.count
+                let statusAccepted = probe.acceptedStatusCodes.isEmpty
+                    ? (200 ..< 400).contains(statusCode)
+                    : probe.acceptedStatusCodes.contains(statusCode)
+                if !statusAccepted {
+                    classification = "status_failed"
+                } else if bytesRead < probe.minimumBytes {
+                    classification = "short_body"
+                } else {
+                    classification = "ok"
+                }
+            } catch {
+                probeError = error
+            }
+            let nsError = probeError as NSError?
+            results.append(WorkloadProbeResult(
+                name: probe.name,
+                success: probeError == nil && classification == "ok",
+                classification: classification,
+                statusCode: statusCode,
+                elapsedMS: max(0, unixMilliseconds() - startedAt),
+                bytesRead: bytesRead,
+                errorDomain: nsError?.domain,
+                errorCode: nsError?.code
+            ))
+        }
+        return WorkloadOutcome(route: plan.route, probes: results)
+    }
+
+    private func selectWorkloadRoute(_ route: String) async throws {
+        guard route == "eu" else {
+            throw ControlError.invalidWorkload
+        }
+        let selections = [
+            ("whitelist-exit", "eu"),
+            ("eu_or_wlt-eu", "vless-wlt-eu"),
+        ]
+        var selected = false
+        for (group, outbound) in selections {
+            do {
+                let client = LibboxNewStandaloneCommandClient()!
+                try await client.selectOutbound(group, outboundTag: outbound)
+                selected = true
+            } catch {
+                continue
+            }
+        }
+        guard selected else {
+            throw ControlError.workloadRouteSelectionFailed
+        }
+        try? await Task.sleep(nanoseconds: 300_000_000)
+    }
+
     private func loadCurrentStatus() async -> NEVPNStatus? {
         guard let profile = try? await ExtensionProfile.load() else {
             return nil
@@ -474,7 +731,7 @@ actor WLTDeviceControl {
             return try await waitForStatus(
                 profile,
                 desired: .connected,
-                timeout: 90
+                timeout: Self.firstStartTimeout
             )
         case .disconnecting:
             _ = try await waitForStatus(profile, desired: .disconnected)
@@ -484,10 +741,35 @@ actor WLTDeviceControl {
             throw ControlError.unexpectedStatus
         }
         try await profile.start(wltRuntimeParameters: runtimeParameters)
+        let startupLogClient = CommandClient(.log, logMaxLines: 3_000)
+        startupLogClient.connect()
+        let startupLogObserver = Task {
+            var observedCount = 0
+            while !Task.isCancelled {
+                let messages = await MainActor.run {
+                    startupLogClient.logList.map(\.message)
+                }
+                if observedCount < messages.count {
+                    for message in messages.dropFirst(observedCount) {
+                        PacketTunnelDiagnostics.observeStartupLog(message)
+                    }
+                    observedCount = messages.count
+                }
+                try? await Task.sleep(nanoseconds: 100_000_000)
+            }
+        }
+        defer {
+            startupLogObserver.cancel()
+            for entry in startupLogClient.logList {
+                PacketTunnelDiagnostics.observeStartupLog(entry.message)
+            }
+            startupLogClient.disconnect()
+        }
         return try await waitForStatus(
             profile,
             desired: .connected,
-            timeout: 90
+            timeout: Self.firstStartTimeout,
+            failOnWLTStartupFailure: true
         )
     }
 
@@ -509,7 +791,8 @@ actor WLTDeviceControl {
     private func waitForStatus(
         _ profile: ExtensionProfile,
         desired: NEVPNStatus,
-        timeout: TimeInterval = 30
+        timeout: TimeInterval = 30,
+        failOnWLTStartupFailure: Bool = false
     ) async throws -> NEVPNStatus {
         let deadline = Date().addingTimeInterval(timeout)
         while Date() < deadline {
@@ -520,17 +803,27 @@ actor WLTDeviceControl {
             if status == .invalid {
                 throw ControlError.unexpectedStatus
             }
+            if failOnWLTStartupFailure,
+                PacketTunnelDiagnostics.startupMilestones().contains(where: {
+                    $0.hasPrefix("carrier_start_failed_")
+                })
+            {
+                throw ControlError.startupFailed
+            }
             try await Task.sleep(nanoseconds: 100_000_000)
         }
         throw ControlError.timeout
     }
 
-    private func probeTraffic(timeout: TimeInterval = 15) async throws {
+    private func probeTraffic(
+        timeout: TimeInterval = 15,
+        requestTimeout: TimeInterval = 10
+    ) async throws {
         let endpoint = URL(string: "https://cp.cloudflare.com/generate_204")!
         let deadline = Date().addingTimeInterval(timeout)
         let configuration = URLSessionConfiguration.ephemeral
         configuration.requestCachePolicy = .reloadIgnoringLocalAndRemoteCacheData
-        configuration.timeoutIntervalForRequest = 3
+        configuration.timeoutIntervalForRequest = requestTimeout
         configuration.urlCache = nil
         let session = URLSession(configuration: configuration)
         defer { session.invalidateAndCancel() }
@@ -538,7 +831,7 @@ actor WLTDeviceControl {
         while Date() < deadline {
             var request = URLRequest(url: endpoint)
             request.cachePolicy = .reloadIgnoringLocalAndRemoteCacheData
-            request.timeoutInterval = 3
+            request.timeoutInterval = requestTimeout
             request.setValue("no-cache", forHTTPHeaderField: "Cache-Control")
             do {
                 let (_, response) = try await session.data(for: request)
@@ -569,7 +862,7 @@ actor WLTDeviceControl {
         let finishedAt = unixMilliseconds()
         let nsError = error as NSError?
         let result = Result(
-            schema: 3,
+            schema: 5,
             requestID: request.id.uuidString.lowercased(),
             action: request.action,
             state: state,
@@ -586,7 +879,11 @@ actor WLTDeviceControl {
             soakProbeSamples: outcome?.soak?.samples,
             networkLossObserved: outcome?.soak?.networkLossObserved,
             networkRecovered: outcome?.soak?.networkRecovered,
+            startupMilestones: request.action == .start || request.action == .startProbe
+                ? PacketTunnelDiagnostics.startupMilestones() : nil,
             runtimeParameters: outcome?.runtimeParameters,
+            workloadRoute: outcome?.workload?.route,
+            workloadProbes: outcome?.workload?.probes,
             networkInitial: networkInitial,
             networkFinal: networkFinal,
             errorDomain: nsError?.domain,
@@ -634,6 +931,49 @@ actor WLTDeviceControl {
         )
     }
 
+    private func workloadPlanURL(_ requestID: UUID) -> URL {
+        let caches = FileManager.default.urls(
+            for: .cachesDirectory,
+            in: .userDomainMask
+        ).first!
+        return caches.appendingPathComponent(
+            "wlt-test-workload-\(requestID.uuidString.lowercased()).json",
+            isDirectory: false
+        )
+    }
+
+    private func loadWorkloadPlan(for action: Action, at url: URL) throws -> WorkloadPlan? {
+        guard action == .workload else {
+            return nil
+        }
+        guard FileManager.default.fileExists(atPath: url.path) else {
+            throw ControlError.invalidWorkload
+        }
+        let plan = try JSONDecoder().decode(WorkloadPlan.self, from: Data(contentsOf: url))
+        guard plan.schema == 1, plan.route == "eu", (1 ... 32).contains(plan.probes.count) else {
+            throw ControlError.invalidWorkload
+        }
+        var names = Set<String>()
+        for probe in plan.probes {
+            guard
+                probe.name.range(of: "^[A-Za-z0-9][A-Za-z0-9._-]{0,63}$", options: .regularExpression) != nil,
+                names.insert(probe.name).inserted,
+                (0 ... 4_194_304).contains(probe.minimumBytes),
+                (1 ... 180).contains(probe.timeoutSeconds),
+                probe.acceptedStatusCodes.allSatisfy({ (100 ... 599).contains($0) }),
+                probe.url.count <= 2_048,
+                let endpoint = URL(string: probe.url),
+                endpoint.scheme?.lowercased() == "https",
+                endpoint.host != nil,
+                endpoint.user == nil,
+                endpoint.password == nil
+            else {
+                throw ControlError.invalidWorkload
+            }
+        }
+        return plan
+    }
+
     private func loadRuntimeCandidate(
         for action: Action,
         at url: URL
@@ -661,6 +1001,24 @@ actor WLTDeviceControl {
         for file in files where
             file.lastPathComponent != current.lastPathComponent
             && file.lastPathComponent.hasPrefix("wlt-test-candidate-")
+            && file.pathExtension == "json"
+        {
+            try? FileManager.default.removeItem(at: file)
+        }
+    }
+
+    private func pruneWorkloadPlans(excluding current: URL) {
+        let directory = current.deletingLastPathComponent()
+        guard let files = try? FileManager.default.contentsOfDirectory(
+            at: directory,
+            includingPropertiesForKeys: nil,
+            options: [.skipsHiddenFiles]
+        ) else {
+            return
+        }
+        for file in files where
+            file.lastPathComponent != current.lastPathComponent
+            && file.lastPathComponent.hasPrefix("wlt-test-workload-")
             && file.pathExtension == "json"
         {
             try? FileManager.default.removeItem(at: file)

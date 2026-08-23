@@ -1,4 +1,5 @@
 import XCTest
+import UIKit
 
 @MainActor
 final class DeviceScenarioTests: XCTestCase {
@@ -119,6 +120,21 @@ final class DeviceScenarioTests: XCTestCase {
             guard let text = step.text else { throw ScenarioError.invalidStep("tap_text_if_present requires text") }
             let element = try textElement(text, in: app, timeout: min(timeout, 1), required: false)
             if element.exists { element.tap() }
+        case "tap_text_any_if_present":
+            guard let texts = step.texts, !texts.isEmpty else {
+                throw ScenarioError.invalidStep("tap_text_any_if_present requires texts")
+            }
+            let deadline = Date().addingTimeInterval(timeout)
+            while Date() < deadline {
+                if let element = texts.lazy
+                    .map({ textElement($0, in: app, timeout: 0, required: false) })
+                    .first(where: \.exists)
+                {
+                    element.tap()
+                    break
+                }
+                Thread.sleep(forTimeInterval: 0.2)
+            }
         case "dismiss_pip":
             let pip = app.windows.matching(identifier: "PIP-SBInteractionPassThroughView").firstMatch
             if pip.exists {
@@ -162,6 +178,37 @@ final class DeviceScenarioTests: XCTestCase {
             guard let text = step.text else { throw ScenarioError.invalidStep("assert_text_absent requires text") }
             let element = app.staticTexts[text].firstMatch
             try require(!element.waitForExistence(timeout: timeout), "unexpected text found: \(text)")
+        case "assert_text_any":
+            guard let texts = step.texts, !texts.isEmpty else {
+                throw ScenarioError.invalidStep("assert_text_any requires texts")
+            }
+            try require(
+                texts.contains(where: { textElement($0, in: app, timeout: 0, required: false).exists }),
+                "none of the expected texts are visible"
+            )
+        case "assert_texts_absent":
+            guard let texts = step.texts, !texts.isEmpty else {
+                throw ScenarioError.invalidStep("assert_texts_absent requires texts")
+            }
+            for text in texts {
+                let element = textElement(text, in: app, timeout: 0, required: false)
+                try require(!element.waitForExistence(timeout: timeout), "unexpected text found: \(text)")
+            }
+        case "assert_visual_change":
+            let before = XCUIScreen.main.screenshot()
+            Thread.sleep(forTimeInterval: step.seconds ?? 5)
+            let after = XCUIScreen.main.screenshot()
+            let ratio = changedPixelRatio(before.image, after.image)
+            let minimum = step.minimumChangedRatio ?? 0.015
+            let beforeAttachment = XCTAttachment(screenshot: before)
+            beforeAttachment.name = "\(step.name ?? "visual-change")-before"
+            beforeAttachment.lifetime = .keepAlways
+            add(beforeAttachment)
+            let afterAttachment = XCTAttachment(screenshot: after)
+            afterAttachment.name = "\(step.name ?? "visual-change")-after"
+            afterAttachment.lifetime = .keepAlways
+            add(afterAttachment)
+            try require(ratio >= minimum, "visual content remained static: changed_ratio=\(ratio)")
         case "screenshot":
             attachScreenshot(named: step.name ?? "scenario")
         case "dump_ui":
@@ -226,6 +273,62 @@ final class DeviceScenarioTests: XCTestCase {
         guard condition() else { throw ScenarioError.failed(message) }
     }
 
+    private func changedPixelRatio(_ before: UIImage, _ after: UIImage, stride: Int = 8) -> Double {
+        guard
+            let beforeImage = before.cgImage,
+            let afterImage = after.cgImage,
+            beforeImage.width == afterImage.width,
+            beforeImage.height == afterImage.height
+        else {
+            return 1
+        }
+        let width = beforeImage.width
+        let height = beforeImage.height
+        let bytesPerRow = width * 4
+        var beforePixels = [UInt8](repeating: 0, count: bytesPerRow * height)
+        var afterPixels = [UInt8](repeating: 0, count: bytesPerRow * height)
+        let colorSpace = CGColorSpaceCreateDeviceRGB()
+        guard
+            let beforeContext = CGContext(
+                data: &beforePixels,
+                width: width,
+                height: height,
+                bitsPerComponent: 8,
+                bytesPerRow: bytesPerRow,
+                space: colorSpace,
+                bitmapInfo: CGImageAlphaInfo.premultipliedLast.rawValue
+            ),
+            let afterContext = CGContext(
+                data: &afterPixels,
+                width: width,
+                height: height,
+                bitsPerComponent: 8,
+                bytesPerRow: bytesPerRow,
+                space: colorSpace,
+                bitmapInfo: CGImageAlphaInfo.premultipliedLast.rawValue
+            )
+        else {
+            return 0
+        }
+        beforeContext.draw(beforeImage, in: CGRect(x: 0, y: 0, width: width, height: height))
+        afterContext.draw(afterImage, in: CGRect(x: 0, y: 0, width: width, height: height))
+        var sampled = 0
+        var changed = 0
+        for y in Swift.stride(from: 0, to: height, by: max(1, stride)) {
+            for x in Swift.stride(from: 0, to: width, by: max(1, stride)) {
+                sampled += 1
+                let offset = y * bytesPerRow + x * 4
+                let delta = abs(Int(beforePixels[offset]) - Int(afterPixels[offset]))
+                    + abs(Int(beforePixels[offset + 1]) - Int(afterPixels[offset + 1]))
+                    + abs(Int(beforePixels[offset + 2]) - Int(afterPixels[offset + 2]))
+                if delta >= 48 {
+                    changed += 1
+                }
+            }
+        }
+        return sampled == 0 ? 0 : Double(changed) / Double(sampled)
+    }
+
     private func attachScreenshot(named name: String) {
         let attachment = XCTAttachment(screenshot: XCUIScreen.main.screenshot())
         attachment.name = name
@@ -246,6 +349,7 @@ private struct DeviceScenario: Decodable {
         let identifier: String?
         let label: String?
         let text: String?
+        let texts: [String]?
         let x: CGFloat?
         let y: CGFloat?
         let endX: CGFloat?
@@ -255,13 +359,15 @@ private struct DeviceScenario: Decodable {
         let duration: TimeInterval?
         let holdDuration: TimeInterval?
         let endHoldDuration: TimeInterval?
+        let minimumChangedRatio: Double?
 
         enum CodingKeys: String, CodingKey {
-            case action, app, name, identifier, label, text, x, y, seconds, timeout, duration
+            case action, app, name, identifier, label, text, texts, x, y, seconds, timeout, duration
             case endX = "end_x"
             case endY = "end_y"
             case holdDuration = "hold_duration"
             case endHoldDuration = "end_hold_duration"
+            case minimumChangedRatio = "minimum_changed_ratio"
         }
 
         var summary: String {

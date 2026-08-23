@@ -20,6 +20,7 @@ loss_shortcut="${WLT_STABILITY_LOSS_SHORTCUT:-wltrescan}"
 wifi_shortcut="${WLT_STABILITY_WIFI_SHORTCUT:-WLT WiFi}"
 transport_timeout_seconds="${WLT_STABILITY_TRANSPORT_TIMEOUT_SECONDS:-90}"
 candidate_file="${WLT_STABILITY_CANDIDATE_FILE:-}"
+workload_file="${WLT_STABILITY_WORKLOAD_FILE:-}"
 timestamp="$(date '+%Y-%m-%d-%H%M%S')"
 artifact_dir="${WLT_STABILITY_ARTIFACT_DIR:-$repo_root/.local/wlt-stability-$timestamp}"
 vpn_started=0
@@ -88,6 +89,161 @@ wait_for_cellular() {
   return 1
 }
 
+retryable_start_failure() {
+  /usr/bin/python3 -c '
+import json, sys
+try:
+    value = json.load(sys.stdin)
+except (json.JSONDecodeError, OSError):
+    raise SystemExit(1)
+milestones = value.get("startup_milestones") or []
+retryable = (
+    value.get("state") == "failed"
+    and value.get("vpn_status") == "disconnected"
+    and value.get("error_code") == 10
+    and "carrier_start_failed_connect" in milestones
+)
+raise SystemExit(0 if retryable else 1)
+'
+}
+
+classify_injected_recovery() {
+  local soak_file="$1"
+  /usr/bin/python3 - "$soak_file" "$loss_after_seconds" "$probe_interval_seconds" <<'PY'
+import json
+from pathlib import Path
+import sys
+
+path = Path(sys.argv[1])
+loss_after_ms = int(sys.argv[2]) * 1000
+interval_ms = int(sys.argv[3]) * 1000
+value = json.loads(path.read_text())
+samples = value.get("soak_probe_samples") or []
+pre_loss_success = any(
+    sample.get("success") is True
+    and (sample.get("offset_ms") or 0) < loss_after_ms
+    for sample in samples
+)
+post_window = [
+    sample for sample in samples
+    if (sample.get("offset_ms") or 0) >= loss_after_ms - interval_ms // 2
+]
+failure_index = next(
+    (index for index, sample in enumerate(post_window)
+     if sample.get("success") is False),
+    None,
+)
+recovered = bool(
+    failure_index is not None
+    and any(sample.get("success") is True for sample in post_window[failure_index + 1:])
+)
+if pre_loss_success and failure_index is not None:
+    value["network_loss_observed"] = True
+    value["network_loss_source"] = "probe_transition_after_host_injection"
+if pre_loss_success and recovered:
+    value["network_recovered"] = True
+    value["network_recovery_source"] = "probe_success_after_observed_loss"
+temporary = path.with_suffix(path.suffix + ".tmp")
+temporary.write_text(json.dumps(value, sort_keys=True, separators=(",", ":")) + "\n")
+temporary.replace(path)
+PY
+}
+
+run_host_driven_soak() {
+  local started_at="$SECONDS" deadline next_probe sample=0 probe_status=0
+  local probe_file delay attempt
+  deadline=$((started_at + duration_seconds))
+  next_probe="$started_at"
+  while true; do
+    sample=$((sample + 1))
+    probe_file="$artifact_dir/soak-probe-$(printf '%03d' "$sample").json"
+    for attempt in 1 2; do
+      probe_status=0
+      run_control probe \
+        "soak-probe-$(printf '%03d' "$sample")-attempt-$attempt" \
+        >"$probe_file" 2>"$probe_file.log" || probe_status=$?
+      # Retry only a missing control result. A sanitized failed probe is real
+      # transport evidence and must remain a failed sample.
+      [[ "$probe_status" == "0" || -s "$probe_file" ]] && break
+      sleep 2
+    done
+    printf '%s\t%s\t%s\t%s\n' \
+      "$sample" "$probe_status" "$((SECONDS - started_at))" "$attempt" \
+      >>"$artifact_dir/soak-probe-status.tsv"
+    if [[ "$probe_status" != "0" && ! -s "$probe_file" ]]; then
+      log "CoreDevice produced no result for soak sample $sample after $attempt attempts"
+      return 2
+    fi
+    (( SECONDS >= deadline )) && break
+    next_probe=$((next_probe + probe_interval_seconds))
+    (( next_probe > deadline )) && next_probe="$deadline"
+    delay=$((next_probe - SECONDS))
+    (( delay > 0 )) && sleep "$delay"
+  done
+
+  /usr/bin/python3 - \
+    "$artifact_dir" "$((SECONDS - started_at))" >"$artifact_dir/soak.json" <<'PY'
+import json
+from pathlib import Path
+import sys
+
+root = Path(sys.argv[1])
+elapsed_ms = int(sys.argv[2]) * 1000
+offsets = {}
+try:
+    for line in (root / "soak-probe-status.tsv").read_text().splitlines():
+        index, _, offset, _ = line.split("\t")
+        offsets[int(index)] = int(offset) * 1000
+except (OSError, ValueError):
+    pass
+samples = []
+paths = sorted(root.glob("soak-probe-*.json"))
+for index, path in enumerate(paths, 1):
+    try:
+        value = json.loads(path.read_text())
+    except (OSError, json.JSONDecodeError):
+        value = {}
+    success = (
+        value.get("state") == "succeeded"
+        and value.get("vpn_status") == "connected"
+    )
+    samples.append({
+        "offset_ms": offsets.get(index, 0),
+        "success": success,
+        "elapsed_ms": value.get("probe_elapsed_ms") or value.get("elapsed_ms") or 0,
+        "network": value.get("network_final"),
+        "error_domain": value.get("error_domain"),
+        "error_code": value.get("error_code"),
+    })
+failures = sum(not sample["success"] for sample in samples)
+last = {}
+if paths:
+    try:
+        last = json.loads(paths[-1].read_text())
+    except (OSError, json.JSONDecodeError):
+        pass
+payload = {
+    "schema": 4,
+    "action": "soak",
+    "state": "succeeded" if samples and failures == 0 else "failed",
+    "vpn_status": last.get("vpn_status", "unknown"),
+    "elapsed_ms": elapsed_ms,
+    "soak_elapsed_ms": elapsed_ms,
+    "soak_samples": len(samples),
+    "soak_successes": len(samples) - failures,
+    "soak_failures": failures,
+    "soak_probe_samples": samples,
+    "network_loss_observed": False,
+    "network_recovered": False,
+    "network_initial": samples[0].get("network") if samples else None,
+    "network_final": last.get("network_final"),
+    "error_domain": None,
+    "error_code": None,
+}
+print(json.dumps(payload, sort_keys=True, separators=(",", ":")))
+PY
+}
+
 restore_baseline() {
   local status=$?
   trap - EXIT INT TERM HUP
@@ -136,6 +292,9 @@ fi
 if [[ -n "$candidate_file" ]]; then
   [[ -f "$candidate_file" ]] || die "candidate file does not exist"
 fi
+if [[ -n "$workload_file" ]]; then
+  [[ -f "$workload_file" ]] || die "workload file does not exist"
+fi
 
 mkdir -p "$artifact_dir"
 trap restore_baseline EXIT INT TERM HUP
@@ -154,30 +313,59 @@ fi
 
 log "starting WLT and proving traffic"
 vpn_started=1
-if [[ -n "$candidate_file" ]]; then
-  run_control start-probe start-probe \
-    env \
-      WLT_CONTROL_CANDIDATE_FILE="$candidate_file" \
-      WLT_CONTROL_TIMEOUT_SECONDS=120 \
-    >"$artifact_dir/start-probe.json"
-else
-  run_control start-probe start-probe \
-    env WLT_CONTROL_TIMEOUT_SECONDS=120 \
-    >"$artifact_dir/start-probe.json"
-fi
+start_succeeded=0
+for start_attempt in 1 2; do
+  start_attempt_file="$artifact_dir/start-probe-attempt-$start_attempt.json"
+  start_status=0
+  if [[ -n "$candidate_file" ]]; then
+    run_control start-probe "start-probe-attempt-$start_attempt" \
+      env \
+        WLT_CONTROL_CANDIDATE_FILE="$candidate_file" \
+        WLT_CONTROL_TIMEOUT_SECONDS=120 \
+      >"$start_attempt_file" || start_status=$?
+  else
+    run_control start-probe "start-probe-attempt-$start_attempt" \
+      env WLT_CONTROL_TIMEOUT_SECONDS=120 \
+      >"$start_attempt_file" || start_status=$?
+  fi
+  cp "$start_attempt_file" "$artifact_dir/start-probe.json"
+  if (( start_status == 0 )); then
+    start_succeeded=1
+    break
+  fi
+  if (( start_attempt == 1 )) && retryable_start_failure <"$start_attempt_file"; then
+    log "carrier connect did not settle; retrying startup once after bounded cooldown"
+    run_control stop startup-retry-stop >/dev/null 2>&1 || true
+    sleep 15
+    continue
+  fi
+  exit "$start_status"
+done
+(( start_succeeded == 1 )) || die "start-probe did not succeed"
 strict_cellular_status <"$artifact_dir/start-probe.json" \
   || die "start-probe did not prove strict cellular transport"
 
-log "starting app-observed soak for ${duration_seconds}s"
-run_control soak soak \
-  env \
-    WLT_CONTROL_SOAK_SECONDS="$duration_seconds" \
-    WLT_CONTROL_SOAK_INTERVAL_SECONDS="$probe_interval_seconds" \
-    WLT_CONTROL_TIMEOUT_SECONDS="$((duration_seconds + 90))" \
-  >"$artifact_dir/soak.json" 2>"$artifact_dir/soak.log" &
-soak_pid=$!
+if [[ -n "$workload_file" ]]; then
+  log "selecting the EU WLT route and running the configured transport workload"
+  run_control workload workload \
+    env \
+      WLT_CONTROL_WORKLOAD_FILE="$workload_file" \
+      WLT_CONTROL_TIMEOUT_SECONDS=240 \
+    >"$artifact_dir/workload.json"
+fi
 
-if [[ "$inject_loss" == "1" ]]; then
+if [[ "$inject_loss" == "0" ]]; then
+  log "starting host-observed soak for ${duration_seconds}s"
+  run_host_driven_soak
+else
+  log "starting app-observed loss/recovery window for ${duration_seconds}s"
+  run_control soak soak \
+    env \
+      WLT_CONTROL_SOAK_SECONDS="$duration_seconds" \
+      WLT_CONTROL_SOAK_INTERVAL_SECONDS="$probe_interval_seconds" \
+      WLT_CONTROL_TIMEOUT_SECONDS="$((duration_seconds + 90))" \
+    >"$artifact_dir/soak.json" 2>"$artifact_dir/soak.log" &
+  soak_pid=$!
   loss_deadline=$((SECONDS + loss_after_seconds))
   while (( SECONDS < loss_deadline )); do
     sleep 1
@@ -186,14 +374,16 @@ if [[ "$inject_loss" == "1" ]]; then
   done
   log "injecting a bounded radio loss/recovery cycle"
   run_shortcut "$loss_shortcut" connection-loss
+  soak_status=0
+  wait "$soak_pid" || soak_status=$?
+  (( soak_status == 0 )) || die "soak control action failed; see $artifact_dir/soak.log"
+  classify_injected_recovery "$artifact_dir/soak.json"
 fi
 
-soak_status=0
-wait "$soak_pid" || soak_status=$?
-(( soak_status == 0 )) || die "soak control action failed; see $artifact_dir/soak.log"
-
 log "proving traffic after soak/recovery"
-run_control probe final-probe >"$artifact_dir/final-probe.json"
+final_probe_status=0
+run_control probe final-probe >"$artifact_dir/final-probe.json" \
+  || final_probe_status=$?
 
 log "stopping WLT and checking idempotent cleanup"
 run_control stop final-stop >"$artifact_dir/final-stop.json"

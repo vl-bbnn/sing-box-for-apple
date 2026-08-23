@@ -27,6 +27,31 @@ die() {
 	exit 1
 }
 
+require_wifi_no_vpn_confirmation() {
+	[[ "${WLT_DEVICE_WIFI_NO_VPN_CONFIRMED:-0}" == "1" ]] \
+		|| die "install and launch require unlocked iPhone on unrestricted Wi-Fi with every VPN stopped; verify the phone, then set WLT_DEVICE_WIFI_NO_VPN_CONFIRMED=1"
+	local proof="${WLT_IOS_WIFI_TRUST_PROOF:-}"
+	[[ -z "$proof" ]] && return
+	[[ -f "$proof" ]] || die "WLT_IOS_WIFI_TRUST_PROOF does not exist"
+	python3 - "$proof" <<'PY' \
+		|| die "WLT_IOS_WIFI_TRUST_PROOF does not prove recent Wi-Fi with VPN stopped"
+from datetime import datetime, timezone
+import json
+import sys
+
+value = json.load(open(sys.argv[1], encoding="utf-8"))
+proved_at = datetime.fromisoformat(str(value.get("proved_at", "")).replace("Z", "+00:00"))
+age = (datetime.now(timezone.utc) - proved_at.astimezone(timezone.utc)).total_seconds()
+valid = (
+    value.get("classification") == "success"
+    and value.get("wifi") is True
+    and value.get("vpn_status") == "disconnected"
+    and 0 <= age <= 900
+)
+raise SystemExit(0 if valid else 1)
+PY
+}
+
 app_path() {
 	local path="$derived_data_path/Build/Products/${configuration}-iphoneos/$app_name"
 	if [[ -d "$path" ]]; then
@@ -168,6 +193,15 @@ build_app() {
 	log "building SFI for generic iOS device"
 	[[ "$scheme" == "SFI Dev" ]] || die "WLT device helper requires SFI Dev scheme, got: $scheme"
 	[[ "$configuration" == "Dev" ]] || die "WLT device helper requires Dev configuration, got: $configuration"
+	local client_import_scheme
+	if [[ -n "${VPN_CLIENT_IMPORT_SCHEME:-}" ]]; then
+		client_import_scheme="$VPN_CLIENT_IMPORT_SCHEME"
+	else
+		client_import_scheme="$("$repo_root/scripts/overlay_setting.sh" VPN_CLIENT_IMPORT_SCHEME 2>/dev/null \
+			|| "$repo_root/scripts/overlay_setting.sh" OVERLAY_DEV_URL_SCHEME)"
+	fi
+	[[ "$client_import_scheme" =~ ^[A-Za-z][A-Za-z0-9+.-]*$ ]] \
+		|| die "VPN_CLIENT_IMPORT_SCHEME is not a valid URI scheme"
 	xcodebuild \
 		-project "$repo_root/sing-box.xcodeproj" \
 		-scheme "$scheme" \
@@ -175,6 +209,7 @@ build_app() {
 		-destination 'generic/platform=iOS' \
 		-derivedDataPath "$derived_data_path" \
 		-skipPackagePluginValidation \
+		"VPN_CLIENT_IMPORT_SCHEME=$client_import_scheme" \
 		build >"$build_dir/xcodebuild-sfi-device.log" 2>&1
 	local app
 	app="$(app_path)"
@@ -206,6 +241,7 @@ prepare_devicectl_outputs() {
 
 install_app() {
 	local app device json_path log_path
+	require_wifi_no_vpn_confirmation
 	app="$(app_path)"
 	[[ -n "$app" && -d "$app" ]] || die "built app not found; run build-app first"
 	device="$(device_id)"
@@ -232,6 +268,7 @@ install_app() {
 
 launch_app() {
 	local app device identifier json_path log_path
+	require_wifi_no_vpn_confirmation
 	app="$(app_path)"
 	[[ -n "$app" && -d "$app" ]] || die "built app not found; run build-app first"
 	device="$(device_id)"
@@ -283,6 +320,11 @@ Environment:
   SING_BOX_LX=1            Use Makefile.lx tags from SING_BOX_REPO plus with_wlt.
   SING_BOX_LX_TAGS         Override LX tags when SING_BOX_LX=1.
   WLT_CARRIER_MODULE       WLT private module path; defaults to github.com/vl-bbnn/wlt-carrier.
+  WLT_DEVICE_WIFI_NO_VPN_CONFIRMED=1
+                            Required acknowledgement for install/launch after
+                            verifying unrestricted Wi-Fi and stopped VPN.
+  WLT_IOS_WIFI_TRUST_PROOF Optional recent proof.json from the Dev Wi-Fi
+                            preflight; validated when supplied.
 USAGE
 }
 

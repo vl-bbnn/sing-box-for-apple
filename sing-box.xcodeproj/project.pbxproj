@@ -3138,7 +3138,6 @@
 				SWIFT_OPTIMIZATION_LEVEL = "-Onone";
 				VERSIONING_SYSTEM = "apple-generic";
 				VERSION_INFO_PREFIX = "";
-				VPN_CLIENT_IMPORT_SCHEME = dev-vpn;
 			};
 			name = Dev;
 		};
@@ -3216,7 +3215,6 @@
 				SWIFT_EMIT_LOC_STRINGS = NO;
 				VERSIONING_SYSTEM = "apple-generic";
 				VERSION_INFO_PREFIX = "";
-				VPN_CLIENT_IMPORT_SCHEME = 2b2n-vpn;
 			};
 			name = Release;
 		};
