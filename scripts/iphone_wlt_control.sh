@@ -12,6 +12,8 @@ launch_timeout_seconds="${WLT_CONTROL_LAUNCH_TIMEOUT_SECONDS:-30}"
 copy_timeout_seconds="${WLT_CONTROL_COPY_TIMEOUT_SECONDS:-30}"
 candidate_file="${WLT_CONTROL_CANDIDATE_FILE:-}"
 workload_file="${WLT_CONTROL_WORKLOAD_FILE:-}"
+profile_file="${WLT_CONTROL_PROFILE_FILE:-}"
+profile_export_file="${WLT_CONTROL_PROFILE_EXPORT_FILE:-}"
 soak_seconds="${WLT_CONTROL_SOAK_SECONDS:-1800}"
 soak_interval_seconds="${WLT_CONTROL_SOAK_INTERVAL_SECONDS:-30}"
 
@@ -62,8 +64,8 @@ validate_integer() {
 run() {
     local action="${1:-}"
     case "$action" in
-        ping|probe|refresh-profile|start|start-probe|status|stop|soak|workload) ;;
-        *) die "usage: $0 <ping|probe|refresh-profile|start|start-probe|status|stop|soak|workload>" ;;
+        bootstrap-profile|export-profile|ping|probe|refresh-profile|start|start-probe|status|stop|soak|workload) ;;
+        *) die "usage: $0 <bootstrap-profile|export-profile|ping|probe|refresh-profile|start|start-probe|status|stop|soak|workload>" ;;
     esac
     [[ -n "${WLT_APP_BUNDLE_ID:-}" ]] || die "set WLT_APP_BUNDLE_ID to the installed SFI Dev bundle identifier"
     [[ "$WLT_APP_BUNDLE_ID" =~ ^[A-Za-z0-9.-]+$ ]] || die "WLT_APP_BUNDLE_ID has an invalid format"
@@ -161,15 +163,53 @@ PY
     elif [[ "$action" == "workload" ]]; then
         die "WLT_CONTROL_WORKLOAD_FILE is required for workload"
     fi
+    if [[ -n "$profile_file" ]]; then
+        [[ "$action" == "bootstrap-profile" ]] \
+            || die "WLT_CONTROL_PROFILE_FILE is valid only for bootstrap-profile"
+        [[ -f "$profile_file" ]] || die "missing profile plan file"
+        /usr/bin/python3 - "$profile_file" <<'PY'
+import json
+import sys
+from urllib.parse import urlsplit
+
+value = json.load(open(sys.argv[1]))
+if not isinstance(value, dict) or set(value) != {"schema", "name", "url"}:
+    raise SystemExit("profile plan schema mismatch")
+parsed = urlsplit(value["url"])
+valid = (
+    value["schema"] == 1
+    and isinstance(value["name"], str)
+    and 1 <= len(value["name"]) <= 128
+    and isinstance(value["url"], str)
+    and len(value["url"]) <= 2048
+    and parsed.scheme == "https"
+    and parsed.hostname
+    and parsed.username is None
+    and parsed.password is None
+)
+if not valid:
+    raise SystemExit("invalid profile plan")
+PY
+    elif [[ "$action" == "bootstrap-profile" ]]; then
+        die "WLT_CONTROL_PROFILE_FILE is required for bootstrap-profile"
+    fi
+    if [[ "$action" == "export-profile" ]]; then
+        [[ -n "$profile_export_file" ]] \
+            || die "WLT_CONTROL_PROFILE_EXPORT_FILE is required for export-profile"
+    elif [[ -n "$profile_export_file" ]]; then
+        die "WLT_CONTROL_PROFILE_EXPORT_FILE is valid only for export-profile"
+    fi
 
     mkdir -p "$artifact_dir"
-    local device request_id result_name remote_result remote_candidate remote_workload local_result deadline copy_log payload_url
+    local device request_id result_name remote_result remote_candidate remote_workload remote_profile remote_profile_export local_result deadline copy_log payload_url
     device="$(device_id)"
     request_id="$(uuidgen | tr '[:upper:]' '[:lower:]')"
     result_name="$request_id.json"
     remote_result="Library/Caches/wlt-test-control/$result_name"
     remote_candidate="Library/Caches/wlt-test-candidate-$result_name"
     remote_workload="Library/Caches/wlt-test-workload-$result_name"
+    remote_profile="Library/Caches/wlt-test-profile-$result_name"
+    remote_profile_export="Library/Caches/wlt-test-profile-export-$result_name"
     local_result="$artifact_dir/$result_name"
     copy_log="$artifact_dir/devicectl-copy.log"
     deadline=$((SECONDS + timeout_seconds))
@@ -200,6 +240,20 @@ PY
             --json-output "$artifact_dir/workload-copy.json" \
             >"$artifact_dir/workload-copy.log" 2>&1 \
             || die "workload copy failed; see $artifact_dir/workload-copy.log"
+    fi
+
+    if [[ -n "$profile_file" ]]; then
+        log "copying validated profile bootstrap plan to the Dev app container"
+        xcrun devicectl device copy to \
+            --device "$device" \
+            --domain-type appDataContainer \
+            --domain-identifier "$WLT_APP_BUNDLE_ID" \
+            --source "$profile_file" \
+            --destination "$remote_profile" \
+            --timeout "$copy_timeout_seconds" \
+            --json-output "$artifact_dir/profile-copy.json" \
+            >"$artifact_dir/profile-copy.log" 2>&1 \
+            || die "profile plan copy failed; see $artifact_dir/profile-copy.log"
     fi
 
     payload_url="sing-box://wlt-test-control/$action?request=$request_id"
@@ -242,6 +296,19 @@ PY
         sleep 0.2
     done
     [[ -f "$local_result" ]] || die "timed out waiting for the sanitized result; see $artifact_dir"
+
+    if [[ "$action" == "export-profile" ]]; then
+        xcrun devicectl device copy from \
+            --device "$device" \
+            --domain-type appDataContainer \
+            --domain-identifier "$WLT_APP_BUNDLE_ID" \
+            --source "$remote_profile_export" \
+            --destination "$profile_export_file" \
+            --timeout "$copy_timeout_seconds" \
+            >"$artifact_dir/profile-export-copy.log" 2>&1 \
+            || die "profile export copy failed; see $artifact_dir/profile-export-copy.log"
+        chmod 600 "$profile_export_file"
+    fi
 
     /usr/bin/python3 - "$local_result" "$request_id" "$action" "$candidate_file" <<'PY'
 import json
