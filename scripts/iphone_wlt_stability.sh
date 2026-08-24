@@ -417,6 +417,7 @@ stop = load("final-stop.json")
 second_stop = load("idempotent-stop.json")
 status = load("final-status.json")
 failures = []
+infrastructure_failures = []
 
 if start.get("state") != "succeeded" or start.get("vpn_status") != "connected":
     failures.append("start_probe_failed")
@@ -432,8 +433,15 @@ if (soak.get("soak_samples") or 0) < minimum_samples:
     failures.append("insufficient_soak_samples")
 if inject_loss:
     if soak.get("network_loss_observed") is not True:
-        failures.append("connection_loss_not_observed")
-    if soak.get("network_recovered") is not True:
+        if (
+            soak.get("state") == "succeeded"
+            and soak.get("vpn_status") == "connected"
+            and (soak.get("soak_failures") or 0) == 0
+        ):
+            infrastructure_failures.append("connection_loss_injection_ineffective")
+        else:
+            failures.append("connection_loss_not_observed")
+    elif soak.get("network_recovered") is not True:
         failures.append("connection_recovery_not_observed")
 elif (soak.get("soak_failures") or 0) != 0:
     failures.append("unexpected_soak_probe_failure")
@@ -443,9 +451,13 @@ for label, value in (("final_stop", stop), ("idempotent_stop", second_stop), ("f
     if value.get("state") != "succeeded" or value.get("vpn_status") != "disconnected":
         failures.append(f"{label}_failed")
 
+classification = (
+    "failed" if failures
+    else ("infrastructure" if infrastructure_failures else "success")
+)
 payload = {
     "schema": 1,
-    "classification": "success" if not failures else "failed",
+    "classification": classification,
     "duration_seconds": duration,
     "probe_interval_seconds": interval,
     "connection_loss_injected": inject_loss,
@@ -456,13 +468,14 @@ payload = {
     "network_loss_observed": soak.get("network_loss_observed"),
     "network_recovered": soak.get("network_recovered"),
     "cleanup_succeeded": not any("stop" in value or "status" in value for value in failures),
+    "infrastructure_failures": infrastructure_failures,
     "failures": failures,
 }
 temporary = root / "result.json.tmp"
 temporary.write_text(json.dumps(payload, indent=2, sort_keys=True) + "\n")
 temporary.replace(root / "result.json")
 print(json.dumps(payload, sort_keys=True, separators=(",", ":")))
-raise SystemExit(0 if not failures else 1)
+raise SystemExit(0 if classification == "success" else (2 if classification == "infrastructure" else 1))
 PY
 
 trap - EXIT INT TERM HUP

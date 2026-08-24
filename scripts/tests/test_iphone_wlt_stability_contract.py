@@ -35,7 +35,26 @@ class IPhoneWLTStabilityContractTests(unittest.TestCase):
     def test_device_control_copy_timeout_is_configurable_for_lte(self):
         control = (SCRIPTS / "iphone_wlt_control.sh").read_text()
         self.assertIn('WLT_CONTROL_COPY_TIMEOUT_SECONDS:-30', control)
-        self.assertEqual(control.count('--timeout "$copy_timeout_seconds"'), 2)
+        self.assertGreaterEqual(control.count('--timeout "$copy_timeout_seconds"'), 4)
+
+    def test_clean_profile_bootstrap_is_dev_controlled_and_wifi_only(self):
+        control = (SCRIPTS / "iphone_wlt_control.sh").read_text()
+        device_control = (SCRIPTS.parent / "SFI" / "WLTDeviceControl.swift").read_text()
+        self.assertIn("bootstrap-profile", control)
+        self.assertIn("export-profile", control)
+        self.assertIn("WLT_CONTROL_PROFILE_FILE", control)
+        self.assertIn("WLT_CONTROL_PROFILE_EXPORT_FILE", control)
+        self.assertIn('case bootstrapProfile = "bootstrap-profile"', device_control)
+        self.assertIn('case exportProfile = "export-profile"', device_control)
+        bootstrap = device_control.split(
+            "private func bootstrapProfile", 1
+        )[1].split("private func pruneWorkloadPlans", 1)[0]
+        self.assertIn("network.wifi", bootstrap)
+        self.assertIn("!network.cellular", bootstrap)
+        self.assertIn("ExtensionProfile.install()", bootstrap)
+        self.assertIn("LibboxCheckConfig", bootstrap)
+        self.assertIn("autoUpdate: false", bootstrap)
+        self.assertNotIn("profile.url", control)
 
     def test_shortcut_helper_warms_before_delivering_payload(self):
         with tempfile.TemporaryDirectory() as temporary:
@@ -254,17 +273,28 @@ class IPhoneWLTStabilityContractTests(unittest.TestCase):
             }
             if action == "soak":
                 time.sleep(2)
-                result.update({
-                    "vpn_status": "connected",
-                    "soak_elapsed_ms": 5000,
-                    "soak_samples": 3,
-                    "soak_successes": 2,
-                    "soak_failures": 1,
-                    "soak_probe_samples": [
+                ineffective = os.environ.get("FAKE_INJECTION_INEFFECTIVE") == "1"
+                samples = (
+                    [
+                        {"offset_ms": 0, "success": True},
+                        {"offset_ms": 1_000, "success": True},
+                        {"offset_ms": 2_000, "success": True},
+                    ]
+                    if ineffective
+                    else [
                         {"offset_ms": 0, "success": True},
                         {"offset_ms": 1_000, "success": False},
                         {"offset_ms": 2_000, "success": True},
-                    ],
+                    ]
+                )
+                failures = sum(sample["success"] is not True for sample in samples)
+                result.update({
+                    "vpn_status": "connected",
+                    "soak_elapsed_ms": 5000,
+                    "soak_samples": len(samples),
+                    "soak_successes": len(samples) - failures,
+                    "soak_failures": failures,
+                    "soak_probe_samples": samples,
                     "network_loss_observed": False,
                     "network_recovered": False,
                 })
@@ -381,6 +411,33 @@ class IPhoneWLTStabilityContractTests(unittest.TestCase):
             self.assertEqual(payload["soak_failures"], 0)
             calls = (root / "control-calls.txt").read_text().splitlines()
             self.assertGreaterEqual(calls.count("probe"), 5)
+            self.assertTrue(payload["cleanup_succeeded"])
+
+    def test_ineffective_loss_injection_is_infrastructure(self):
+        with tempfile.TemporaryDirectory() as temporary:
+            root = Path(temporary)
+            environment = self.base_environment(root)
+            environment.update({
+                "WLT_STABILITY_ALLOW_SHORT": "1",
+                "FAKE_INJECTION_INEFFECTIVE": "1",
+            })
+
+            result = subprocess.run(
+                [str(RUNNER)],
+                env=environment,
+                capture_output=True,
+                text=True,
+                timeout=20,
+            )
+
+            self.assertEqual(result.returncode, 2, result.stderr)
+            payload = json.loads((root / "artifacts" / "result.json").read_text())
+            self.assertEqual(payload["classification"], "infrastructure")
+            self.assertEqual(payload["failures"], [])
+            self.assertEqual(
+                payload["infrastructure_failures"],
+                ["connection_loss_injection_ineffective"],
+            )
             self.assertTrue(payload["cleanup_succeeded"])
 
     def test_rejects_short_acceptance_run_without_explicit_smoke_override(self):
