@@ -67,6 +67,8 @@ actor WLTDeviceControl {
         case ping
         case probe
         case refreshProfile = "refresh-profile"
+        case identityRingStatus = "identity-ring-status"
+        case armIdentityRingFault = "arm-identity-ring-fault"
         case start
         case startProbe = "start-probe"
         case status
@@ -180,6 +182,7 @@ actor WLTDeviceControl {
         let runtimeParameters: WhitelistTransportConfig.RuntimeParameters?
         let workloadRoute: String?
         let workloadProbes: [WorkloadProbeResult]?
+        let identityRing: IdentityRingStatus?
         let networkInitial: NetworkSnapshot?
         let networkFinal: NetworkSnapshot?
         let errorDomain: String?
@@ -207,10 +210,29 @@ actor WLTDeviceControl {
             case runtimeParameters = "runtime_parameters"
             case workloadRoute = "workload_route"
             case workloadProbes = "workload_probes"
+            case identityRing = "identity_ring"
             case networkInitial = "network_initial"
             case networkFinal = "network_final"
             case errorDomain = "error_domain"
             case errorCode = "error_code"
+        }
+    }
+
+    private struct IdentityRingStatus: Codable {
+        let version: Int
+        let activePresent: Bool
+        let previousPresent: Bool
+        let reservePresent: Bool
+        let quarantinePresent: Bool
+        let faultArmed: Bool
+
+        enum CodingKeys: String, CodingKey {
+            case version
+            case activePresent = "active_present"
+            case previousPresent = "previous_present"
+            case reservePresent = "reserve_present"
+            case quarantinePresent = "quarantine_present"
+            case faultArmed = "fault_armed"
         }
     }
 
@@ -239,6 +261,7 @@ actor WLTDeviceControl {
         let soak: SoakOutcome?
         let runtimeParameters: WhitelistTransportConfig.RuntimeParameters?
         let workload: WorkloadOutcome?
+        let identityRing: IdentityRingStatus?
 
         init(
             status: NEVPNStatus?,
@@ -246,7 +269,8 @@ actor WLTDeviceControl {
             probeElapsedMS: Int64?,
             soak: SoakOutcome?,
             runtimeParameters: WhitelistTransportConfig.RuntimeParameters?,
-            workload: WorkloadOutcome? = nil
+            workload: WorkloadOutcome? = nil,
+            identityRing: IdentityRingStatus? = nil
         ) {
             self.status = status
             self.vpnStartupMS = vpnStartupMS
@@ -254,6 +278,7 @@ actor WLTDeviceControl {
             self.soak = soak
             self.runtimeParameters = runtimeParameters
             self.workload = workload
+            self.identityRing = identityRing
         }
     }
 
@@ -500,6 +525,29 @@ actor WLTDeviceControl {
                 soak: nil,
                 runtimeParameters: nil
             )
+        case .identityRingStatus:
+            return Outcome(
+                status: await profile.status,
+                vpnStartupMS: nil,
+                probeElapsedMS: nil,
+                soak: nil,
+                runtimeParameters: nil,
+                identityRing: try loadIdentityRingStatus()
+            )
+        case .armIdentityRingFault:
+            let currentStatus = await profile.status
+            guard currentStatus == .disconnected || currentStatus == .invalid else {
+                throw ControlError.runtimeCandidateRequiresStoppedVPN
+            }
+            try LibboxArmWLTAuthRingTestRejectActiveOnce(wltAuthSnapshotURL().path)
+            return Outcome(
+                status: currentStatus,
+                vpnStartupMS: nil,
+                probeElapsedMS: nil,
+                soak: nil,
+                runtimeParameters: nil,
+                identityRing: try loadIdentityRingStatus()
+            )
         case .start:
             let startedAt = unixMilliseconds()
             let status = try await start(
@@ -606,6 +654,20 @@ actor WLTDeviceControl {
                 workload: try await runWorkload(workloadPlan)
             )
         }
+    }
+
+    private func wltAuthSnapshotURL() -> URL {
+        FilePath.cacheDirectory
+            .appendingPathComponent("WLT", isDirectory: true)
+            .appendingPathComponent("auth-snapshot.json", isDirectory: false)
+    }
+
+    private func loadIdentityRingStatus() throws -> IdentityRingStatus {
+        let raw = try LibboxWLTAuthRingStatus(wltAuthSnapshotURL().path)
+        guard let data = raw.data(using: .utf8) else {
+            throw ControlError.unexpectedStatus
+        }
+        return try JSONDecoder().decode(IdentityRingStatus.self, from: data)
     }
 
     private func runSoak(
@@ -913,7 +975,7 @@ actor WLTDeviceControl {
         let finishedAt = unixMilliseconds()
         let nsError = error as NSError?
         let result = Result(
-            schema: 5,
+            schema: 6,
             requestID: request.id.uuidString.lowercased(),
             action: request.action,
             state: state,
@@ -936,6 +998,7 @@ actor WLTDeviceControl {
             runtimeParameters: outcome?.runtimeParameters,
             workloadRoute: outcome?.workload?.route,
             workloadProbes: outcome?.workload?.probes,
+            identityRing: outcome?.identityRing,
             networkInitial: networkInitial,
             networkFinal: networkFinal,
             errorDomain: nsError?.domain,
