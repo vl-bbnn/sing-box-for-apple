@@ -94,6 +94,7 @@ public enum PacketTunnelDiagnostics {
     "sing_box_ready",
     "first_packet",
     "traffic_ready",
+    "direct_fallback",
   ]
 
   public static func append(_ message: String) {
@@ -280,6 +281,8 @@ public enum PacketTunnelDiagnostics {
       milestone = "first_packet"
     } else if message.contains("WLT startup phase=traffic_ready") {
       milestone = "traffic_ready"
+    } else if message.contains("using encrypted upstream direct fallback") {
+      milestone = "direct_fallback"
     } else {
       milestone = nil
     }

@@ -931,6 +931,7 @@ actor WLTDeviceControl {
             networkLossObserved: outcome?.soak?.networkLossObserved,
             networkRecovered: outcome?.soak?.networkRecovered,
             startupMilestones: request.action == .start || request.action == .startProbe
+                || request.action == .workload || request.action == .soak
                 ? PacketTunnelDiagnostics.startupMilestones() : nil,
             runtimeParameters: outcome?.runtimeParameters,
             workloadRoute: outcome?.workload?.route,

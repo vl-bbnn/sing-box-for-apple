@@ -352,6 +352,13 @@ if candidate_path and result.get("state") == "succeeded":
     expected = json.load(open(candidate_path))["parameters"]
     if result.get("runtime_parameters") != expected:
         raise SystemExit("runtime candidate evidence mismatch")
+if action in {"start-probe", "workload", "soak"} and result.get("state") == "succeeded":
+    milestones = set(result.get("startup_milestones") or [])
+    required = {"carrier_ready", "traffic_ready"}
+    if not required.issubset(milestones):
+        raise SystemExit("successful WLT action lacks carrier traffic evidence")
+    if "direct_fallback" in milestones:
+        raise SystemExit("successful WLT action used direct-upstream fallback")
 print(json.dumps(allowed, sort_keys=True, separators=(",", ":")))
 if result.get("state") != "succeeded":
     raise SystemExit(1)

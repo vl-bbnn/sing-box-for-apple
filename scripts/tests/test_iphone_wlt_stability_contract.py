@@ -117,9 +117,18 @@ class IPhoneWLTStabilityContractTests(unittest.TestCase):
             'if candidate_path and result.get("state") == "succeeded":',
             control,
         )
+        self.assertIn(
+            'if action in {"start-probe", "workload", "soak"} and result.get("state") == "succeeded":',
+            control,
+        )
+        self.assertIn('required = {"carrier_ready", "traffic_ready"}', control)
+        self.assertIn('if "direct_fallback" in milestones:', control)
         self.assertIn("refresh-profile", control)
         self.assertIn('"startup_milestones": result.get("startup_milestones")', control)
         self.assertIn("PacketTunnelDiagnostics.startupMilestones()", device_control)
+        self.assertIn("request.action == .workload || request.action == .soak", device_control)
+        diagnostics = (SCRIPTS.parent / "Library" / "Network" / "PacketTunnelDiagnostics.swift").read_text()
+        self.assertIn('milestone = "direct_fallback"', diagnostics)
         self.assertIn("CommandClient(.log, logMaxLines: 3_000)", device_control)
         self.assertIn("PacketTunnelDiagnostics.observeStartupLog(entry.message)", device_control)
         self.assertIn("firstTrafficProbeTimeout: TimeInterval = 60", device_control)
