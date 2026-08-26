@@ -539,7 +539,11 @@ actor WLTDeviceControl {
             guard currentStatus == .disconnected || currentStatus == .invalid else {
                 throw ControlError.runtimeCandidateRequiresStoppedVPN
             }
-            try LibboxArmWLTAuthRingTestRejectActiveOnce(wltAuthSnapshotURL().path)
+            var armError: NSError?
+            LibboxArmWLTAuthRingTestRejectActiveOnce(wltAuthSnapshotURL().path, &armError)
+            if let armError {
+                throw armError
+            }
             return Outcome(
                 status: currentStatus,
                 vpnStartupMS: nil,
@@ -663,7 +667,11 @@ actor WLTDeviceControl {
     }
 
     private func loadIdentityRingStatus() throws -> IdentityRingStatus {
-        let raw = try LibboxWLTAuthRingStatus(wltAuthSnapshotURL().path)
+        var statusError: NSError?
+        let raw = LibboxWLTAuthRingStatus(wltAuthSnapshotURL().path, &statusError)
+        if let statusError {
+            throw statusError
+        }
         guard let data = raw.data(using: .utf8) else {
             throw ControlError.unexpectedStatus
         }
