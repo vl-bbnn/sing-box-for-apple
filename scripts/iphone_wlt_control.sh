@@ -64,8 +64,8 @@ validate_integer() {
 run() {
     local action="${1:-}"
     case "$action" in
-        bootstrap-profile|export-profile|ping|probe|refresh-profile|identity-ring-status|arm-identity-ring-fault|start|start-probe|status|stop|soak|workload) ;;
-        *) die "usage: $0 <bootstrap-profile|export-profile|ping|probe|refresh-profile|identity-ring-status|arm-identity-ring-fault|start|start-probe|status|stop|soak|workload>" ;;
+        bootstrap-profile|export-profile|ping|probe|refresh-profile|start|start-probe|status|stop|soak|workload) ;;
+        *) die "usage: $0 <bootstrap-profile|export-profile|ping|probe|refresh-profile|start|start-probe|status|stop|soak|workload>" ;;
     esac
     [[ -n "${WLT_APP_BUNDLE_ID:-}" ]] || die "set WLT_APP_BUNDLE_ID to the installed SFI Dev bundle identifier"
     [[ "$WLT_APP_BUNDLE_ID" =~ ^[A-Za-z0-9.-]+$ ]] || die "WLT_APP_BUNDLE_ID has an invalid format"
@@ -316,7 +316,7 @@ import sys
 
 path, request_id, action, candidate_path = sys.argv[1:]
 result = json.load(open(path))
-if result.get("schema") not in {1, 2, 3, 4, 5, 6}:
+if result.get("schema") not in {1, 2, 3, 4, 5}:
     raise SystemExit("unexpected result schema")
 if result.get("request_id") != request_id:
     raise SystemExit("result request mismatch")
@@ -343,7 +343,6 @@ allowed = {
     "runtime_parameters": result.get("runtime_parameters"),
     "workload_route": result.get("workload_route"),
     "workload_probes": result.get("workload_probes"),
-    "identity_ring": result.get("identity_ring"),
     "network_initial": result.get("network_initial"),
     "network_final": result.get("network_final"),
     "error_domain": result.get("error_domain"),
