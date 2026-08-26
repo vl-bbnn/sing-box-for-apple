@@ -231,7 +231,9 @@ struct MainView: View {
             return
         }
         #endif
-        if url.host == "import-remote-profile" {
+        if url.host == "stage-control", Bundle.main.bundleIdentifier?.hasSuffix(".dev") == true {
+            handleStageControl(url: url)
+        } else if url.host == "import-remote-profile" {
             var error: NSError?
             importRemoteProfile = LibboxParseRemoteProfileImportLink(url.absoluteString, &error)
             if let error {
@@ -247,6 +249,33 @@ struct MainView: View {
             }
         } else {
             alert = AlertState(errorMessage: String(localized: "Handled unknown URL \(url.absoluteString)"))
+        }
+    }
+
+    private func handleStageControl(url: URL) {
+        guard let profile = environments.extensionProfile else {
+            alert = AlertState(errorMessage: String(localized: "NetworkExtension not installed"))
+            return
+        }
+        Task { @MainActor in
+            do {
+                switch url.path {
+                case "/start":
+                    try await profile.start()
+                case "/stop":
+                    try await profile.stop()
+                case "/restart":
+                    try await profile.restart()
+                default:
+                    throw NSError(
+                        domain: "StageControl",
+                        code: 1,
+                        userInfo: [NSLocalizedDescriptionKey: "Unknown stage control action: \(url.path)"]
+                    )
+                }
+            } catch {
+                alert = AlertState(action: "stage control \(url.path)", error: error)
+            }
         }
     }
 }
