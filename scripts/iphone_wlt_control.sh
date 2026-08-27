@@ -214,6 +214,9 @@ import sys
 root = Path(sys.argv[1])
 if root.is_symlink() or not root.is_dir():
     raise SystemExit("identity ring import path must be a regular directory")
+root_metadata = root.lstat()
+if root_metadata.st_uid != os.getuid() or root_metadata.st_mode & 0o077:
+    raise SystemExit("identity ring import directory must be owned and mode 0700")
 expected = {
     "auth-snapshot.json.aesgcm",
     "auth-snapshot.json.reserve.aesgcm",
