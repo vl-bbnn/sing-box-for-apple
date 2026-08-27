@@ -862,7 +862,10 @@ actor WLTDeviceControl {
         else {
             return false
         }
-        for field in ["messages_access_token", "anonym_token", "device_id"] {
+        let bearerMode = "bearer_call_token"
+        let leftMode = left["calls_auth_mode"] as? String ?? "anonymous_token"
+        let rightMode = right["calls_auth_mode"] as? String ?? "anonymous_token"
+        for field in ["anonym_token", "device_id"] {
             guard
                 let leftValue = left[field] as? String,
                 let rightValue = right[field] as? String,
@@ -873,9 +876,23 @@ actor WLTDeviceControl {
                 return false
             }
         }
+        if leftMode != bearerMode || rightMode != bearerMode {
+            guard
+                let leftMessages = left["messages_access_token"] as? String,
+                let rightMessages = right["messages_access_token"] as? String,
+                !leftMessages.isEmpty,
+                !rightMessages.isEmpty,
+                leftMessages != rightMessages
+            else {
+                return false
+            }
+        }
         let leftFingerprint = (left["browser_context"] as? [String: Any])?["fingerprint"] as? String
         let rightFingerprint = (right["browser_context"] as? [String: Any])?["fingerprint"] as? String
-        return leftFingerprint == nil || rightFingerprint == nil || leftFingerprint != rightFingerprint
+        return leftMode == bearerMode && rightMode == bearerMode
+            || leftFingerprint == nil
+            || rightFingerprint == nil
+            || leftFingerprint != rightFingerprint
     }
 
     private func selectedWLTCarrierConfig() async throws -> (String, String) {

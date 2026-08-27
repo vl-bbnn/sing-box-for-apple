@@ -85,6 +85,16 @@ class IPhoneWLTStabilityContractTests(unittest.TestCase):
         self.assertIn("cleanup_identity_transfer", control)
         self.assertIn("identity transfer cleanup could not be proven", control)
 
+    def test_identity_ring_accepts_distinct_authenticated_vk_call_identities(self):
+        device_control = (SCRIPTS.parent / "SFI" / "WLTDeviceControl.swift").read_text()
+        independence = device_control.split(
+            "private func identityRingSnapshotsIndependent", 1
+        )[1].split("private func selectedWLTCarrierConfig", 1)[0]
+        self.assertIn('let bearerMode = "bearer_call_token"', independence)
+        self.assertIn('for field in ["anonym_token", "device_id"]', independence)
+        self.assertIn("leftMode != bearerMode || rightMode != bearerMode", independence)
+        self.assertIn('left["messages_access_token"]', independence)
+
     def test_shortcut_helper_warms_before_delivering_payload(self):
         with tempfile.TemporaryDirectory() as temporary:
             root = Path(temporary)
