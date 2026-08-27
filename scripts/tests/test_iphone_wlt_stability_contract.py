@@ -99,6 +99,16 @@ class IPhoneWLTStabilityContractTests(unittest.TestCase):
             independence,
         )
 
+    def test_identity_ring_resolves_absolute_and_relative_profile_paths_safely(self):
+        device_control = (SCRIPTS.parent / "SFI" / "WLTDeviceControl.swift").read_text()
+        resolver = device_control.split(
+            "private func selectedWLTCarrierConfig", 1
+        )[1].split("private func writeProtectedAtomically", 1)[0]
+        self.assertIn('profile.path.hasPrefix("/")', resolver)
+        self.assertIn("URL(fileURLWithPath: profile.path)", resolver)
+        self.assertIn("sharedDirectory.appendingPathComponent(profile.path)", resolver)
+        self.assertIn('profileURL.path.hasPrefix(sharedDirectory.path + "/")', resolver)
+
     def test_shortcut_helper_warms_before_delivering_payload(self):
         with tempfile.TemporaryDirectory() as temporary:
             root = Path(temporary)
@@ -177,6 +187,12 @@ class IPhoneWLTStabilityContractTests(unittest.TestCase):
         diagnostics = (SCRIPTS.parent / "Library" / "Network" / "PacketTunnelDiagnostics.swift").read_text()
         self.assertIn('milestone = "direct_fallback"', diagnostics)
         self.assertIn("CommandClient(.log, logMaxLines: 3_000)", device_control)
+        self.assertIn("runWorkloadWithCounters", device_control)
+        self.assertIn('message.contains("wlt service stats ")', device_control)
+        self.assertIn("zeroToleranceCounterNames", device_control)
+        self.assertIn('"transport_counters": result.get("transport_counters")', control)
+        self.assertIn('action == "workload"', control)
+        self.assertIn("successful WLT workload has non-zero transport counters", control)
         self.assertIn("PacketTunnelDiagnostics.observeStartupLog(entry.message)", device_control)
         self.assertIn("firstTrafficProbeTimeout: TimeInterval = 60", device_control)
         self.assertIn("firstTrafficRequestTimeout: TimeInterval = 20", device_control)

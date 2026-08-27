@@ -183,6 +183,7 @@ actor WLTDeviceControl {
         let runtimeParameters: WhitelistTransportConfig.RuntimeParameters?
         let workloadRoute: String?
         let workloadProbes: [WorkloadProbeResult]?
+        let transportCounters: [String: Int64]?
         let identityRing: IdentityRingStatus?
         let identityRingImport: IdentityRingImportStatus?
         let networkInitial: NetworkSnapshot?
@@ -212,6 +213,7 @@ actor WLTDeviceControl {
             case runtimeParameters = "runtime_parameters"
             case workloadRoute = "workload_route"
             case workloadProbes = "workload_probes"
+            case transportCounters = "transport_counters"
             case identityRing = "identity_ring"
             case identityRingImport = "identity_ring_import"
             case networkInitial = "network_initial"
@@ -280,6 +282,7 @@ actor WLTDeviceControl {
         let soak: SoakOutcome?
         let runtimeParameters: WhitelistTransportConfig.RuntimeParameters?
         let workload: WorkloadOutcome?
+        let transportCounters: [String: Int64]?
         let identityRing: IdentityRingStatus?
         let identityRingImport: IdentityRingImportStatus?
 
@@ -290,6 +293,7 @@ actor WLTDeviceControl {
             soak: SoakOutcome?,
             runtimeParameters: WhitelistTransportConfig.RuntimeParameters?,
             workload: WorkloadOutcome? = nil,
+            transportCounters: [String: Int64]? = nil,
             identityRing: IdentityRingStatus? = nil,
             identityRingImport: IdentityRingImportStatus? = nil
         ) {
@@ -299,6 +303,7 @@ actor WLTDeviceControl {
             self.soak = soak
             self.runtimeParameters = runtimeParameters
             self.workload = workload
+            self.transportCounters = transportCounters
             self.identityRing = identityRing
             self.identityRingImport = identityRingImport
         }
@@ -345,6 +350,7 @@ actor WLTDeviceControl {
         case identityRingImportInvalid = 19
         case identityRingImportValidationFailed = 20
         case identityRingImportInstallFailed = 21
+        case transportCountersUnavailable = 22
     }
 
     private var isRunning = false
@@ -694,13 +700,15 @@ actor WLTDeviceControl {
             guard let workloadPlan else {
                 throw ControlError.invalidWorkload
             }
+            let (workload, transportCounters) = try await runWorkloadWithCounters(workloadPlan)
             return Outcome(
                 status: await profile.status,
                 vpnStartupMS: nil,
                 probeElapsedMS: nil,
                 soak: nil,
                 runtimeParameters: nil,
-                workload: try await runWorkload(workloadPlan)
+                workload: workload,
+                transportCounters: transportCounters
             )
         }
     }
@@ -901,7 +909,12 @@ actor WLTDeviceControl {
             throw ControlError.selectedProfileUnavailable
         }
         let sharedDirectory = FilePath.sharedDirectory.standardizedFileURL
-        let profileURL = sharedDirectory.appendingPathComponent(profile.path).standardizedFileURL
+        let profileURL: URL
+        if profile.path.hasPrefix("/") {
+            profileURL = URL(fileURLWithPath: profile.path).standardizedFileURL
+        } else {
+            profileURL = sharedDirectory.appendingPathComponent(profile.path).standardizedFileURL
+        }
         guard profileURL.path.hasPrefix(sharedDirectory.path + "/") else {
             throw ControlError.identityRingImportValidationFailed
         }
@@ -1082,6 +1095,55 @@ actor WLTDeviceControl {
             ))
         }
         return WorkloadOutcome(route: plan.route, probes: results)
+    }
+
+    private static let zeroToleranceCounterNames = Set([
+        "failed",
+        "rejected",
+        "reconnect_retries",
+        "reconnects",
+        "mux_open_errors",
+        "mux_ping_timeouts",
+        "mux_disconnects",
+        "mux_control_errors",
+        "mux_flow_drops",
+        "peer_reconnect_failures",
+    ])
+
+    private func runWorkloadWithCounters(
+        _ plan: WorkloadPlan
+    ) async throws -> (WorkloadOutcome, [String: Int64]) {
+        let logClient = CommandClient(.log, logMaxLines: 3_000)
+        logClient.connect()
+        defer { logClient.disconnect() }
+        try? await Task.sleep(nanoseconds: 500_000_000)
+        let initialCount = await MainActor.run { logClient.logList.count }
+        let workload = try await runWorkload(plan)
+        let deadline = Date().addingTimeInterval(35)
+        while Date() < deadline {
+            let messages = await MainActor.run {
+                logClient.logList.dropFirst(initialCount).map(\.message)
+            }
+            for message in messages.reversed() where message.contains("wlt service stats ") {
+                var counters: [String: Int64] = [:]
+                for field in message.split(separator: " ") {
+                    let pair = field.split(separator: "=", maxSplits: 1)
+                    guard
+                        pair.count == 2,
+                        Self.zeroToleranceCounterNames.contains(String(pair[0])),
+                        let value = Int64(pair[1])
+                    else {
+                        continue
+                    }
+                    counters[String(pair[0])] = value
+                }
+                if Set(counters.keys) == Self.zeroToleranceCounterNames {
+                    return (workload, counters)
+                }
+            }
+            try await Task.sleep(nanoseconds: 200_000_000)
+        }
+        throw ControlError.transportCountersUnavailable
     }
 
     private func selectWorkloadRoute(_ route: String) async throws {
@@ -1287,6 +1349,7 @@ actor WLTDeviceControl {
             runtimeParameters: outcome?.runtimeParameters,
             workloadRoute: outcome?.workload?.route,
             workloadProbes: outcome?.workload?.probes,
+            transportCounters: outcome?.transportCounters,
             identityRing: outcome?.identityRing,
             identityRingImport: outcome?.identityRingImport,
             networkInitial: networkInitial,

@@ -447,6 +447,7 @@ allowed = {
     "runtime_parameters": result.get("runtime_parameters"),
     "workload_route": result.get("workload_route"),
     "workload_probes": result.get("workload_probes"),
+    "transport_counters": result.get("transport_counters"),
     "identity_ring": result.get("identity_ring"),
     "identity_ring_import": result.get("identity_ring_import"),
     "network_initial": result.get("network_initial"),
@@ -486,6 +487,24 @@ if action in {"start-probe", "workload", "soak"} and result.get("state") == "suc
         raise SystemExit("successful WLT action lacks carrier traffic evidence")
     if "direct_fallback" in milestones:
         raise SystemExit("successful WLT action used direct-upstream fallback")
+if action == "workload" and result.get("state") == "succeeded":
+    expected_counters = {
+        "failed",
+        "rejected",
+        "reconnect_retries",
+        "reconnects",
+        "mux_open_errors",
+        "mux_ping_timeouts",
+        "mux_disconnects",
+        "mux_control_errors",
+        "mux_flow_drops",
+        "peer_reconnect_failures",
+    }
+    counters = result.get("transport_counters") or {}
+    if set(counters) != expected_counters:
+        raise SystemExit("successful WLT workload lacks zero-tolerance counters")
+    if any(not isinstance(value, int) or value != 0 for value in counters.values()):
+        raise SystemExit("successful WLT workload has non-zero transport counters")
 print(json.dumps(allowed, sort_keys=True, separators=(",", ":")))
 if result.get("state") != "succeeded":
     raise SystemExit(1)
