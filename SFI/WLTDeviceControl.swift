@@ -67,6 +67,7 @@ actor WLTDeviceControl {
         case ping
         case probe
         case refreshProfile = "refresh-profile"
+        case importIdentityRing = "import-identity-ring"
         case identityRingStatus = "identity-ring-status"
         case armIdentityRingFault = "arm-identity-ring-fault"
         case start
@@ -183,6 +184,7 @@ actor WLTDeviceControl {
         let workloadRoute: String?
         let workloadProbes: [WorkloadProbeResult]?
         let identityRing: IdentityRingStatus?
+        let identityRingImport: IdentityRingImportStatus?
         let networkInitial: NetworkSnapshot?
         let networkFinal: NetworkSnapshot?
         let errorDomain: String?
@@ -211,6 +213,7 @@ actor WLTDeviceControl {
             case workloadRoute = "workload_route"
             case workloadProbes = "workload_probes"
             case identityRing = "identity_ring"
+            case identityRingImport = "identity_ring_import"
             case networkInitial = "network_initial"
             case networkFinal = "network_final"
             case errorDomain = "error_domain"
@@ -225,6 +228,7 @@ actor WLTDeviceControl {
         let reservePresent: Bool
         let quarantinePresent: Bool
         let faultArmed: Bool
+        let bootstrapConsumed: Bool
 
         enum CodingKeys: String, CodingKey {
             case version
@@ -233,6 +237,21 @@ actor WLTDeviceControl {
             case reservePresent = "reserve_present"
             case quarantinePresent = "quarantine_present"
             case faultArmed = "fault_armed"
+            case bootstrapConsumed = "bootstrap_consumed"
+        }
+    }
+
+    private struct IdentityRingImportStatus: Codable {
+        let identities: Int
+        let independent: Bool
+        let validated: Bool
+        let staleStateCleared: Bool
+        let transferInputsDeleted: Bool
+
+        enum CodingKeys: String, CodingKey {
+            case identities, independent, validated
+            case staleStateCleared = "stale_state_cleared"
+            case transferInputsDeleted = "transfer_inputs_deleted"
         }
     }
 
@@ -262,6 +281,7 @@ actor WLTDeviceControl {
         let runtimeParameters: WhitelistTransportConfig.RuntimeParameters?
         let workload: WorkloadOutcome?
         let identityRing: IdentityRingStatus?
+        let identityRingImport: IdentityRingImportStatus?
 
         init(
             status: NEVPNStatus?,
@@ -270,7 +290,8 @@ actor WLTDeviceControl {
             soak: SoakOutcome?,
             runtimeParameters: WhitelistTransportConfig.RuntimeParameters?,
             workload: WorkloadOutcome? = nil,
-            identityRing: IdentityRingStatus? = nil
+            identityRing: IdentityRingStatus? = nil,
+            identityRingImport: IdentityRingImportStatus? = nil
         ) {
             self.status = status
             self.vpnStartupMS = vpnStartupMS
@@ -279,6 +300,7 @@ actor WLTDeviceControl {
             self.runtimeParameters = runtimeParameters
             self.workload = workload
             self.identityRing = identityRing
+            self.identityRingImport = identityRingImport
         }
     }
 
@@ -319,6 +341,10 @@ actor WLTDeviceControl {
         case profileStoreNotEmpty = 15
         case profileExportUnavailable = 16
         case networkExtensionInstallFailed = 17
+        case identityRingImportRequiresStoppedVPN = 18
+        case identityRingImportInvalid = 19
+        case identityRingImportValidationFailed = 20
+        case identityRingImportInstallFailed = 21
     }
 
     private var isRunning = false
@@ -329,10 +355,12 @@ actor WLTDeviceControl {
         let workloadURL = workloadPlanURL(request.id)
         let profileURL = profilePlanURL(request.id)
         let exportURL = profileExportURL(request.id)
+        let identityRingImportURLs = identityRingImportURLs(request.id)
         guard !isRunning else {
             try? FileManager.default.removeItem(at: candidateURL)
             try? FileManager.default.removeItem(at: workloadURL)
             try? FileManager.default.removeItem(at: profileURL)
+            identityRingImportURLs.forEach { try? FileManager.default.removeItem(at: $0) }
             writeResult(
                 request: request,
                 receivedAt: receivedAt,
@@ -373,9 +401,11 @@ actor WLTDeviceControl {
         pruneWorkloadPlans(excluding: workloadURL)
         pruneProfilePlans(excluding: profileURL)
         pruneProfileExports(excluding: exportURL)
+        pruneIdentityRingImports(excluding: identityRingImportURLs)
         defer { try? FileManager.default.removeItem(at: candidateURL) }
         defer { try? FileManager.default.removeItem(at: workloadURL) }
         defer { try? FileManager.default.removeItem(at: profileURL) }
+        defer { identityRingImportURLs.forEach { try? FileManager.default.removeItem(at: $0) } }
 
         do {
             let runtimeParameters = try loadRuntimeCandidate(
@@ -504,6 +534,21 @@ actor WLTDeviceControl {
             )
         case .refreshProfile:
             preconditionFailure("refresh-profile is handled before Network Extension loading")
+        case .importIdentityRing:
+            let currentStatus = await profile.status
+            guard currentStatus == .disconnected || currentStatus == .invalid else {
+                throw ControlError.identityRingImportRequiresStoppedVPN
+            }
+            let imported = try await importIdentityRing(request.id)
+            return Outcome(
+                status: currentStatus,
+                vpnStartupMS: nil,
+                probeElapsedMS: nil,
+                soak: nil,
+                runtimeParameters: nil,
+                identityRing: try loadIdentityRingStatus(),
+                identityRingImport: imported
+            )
         case .probe:
             guard await profile.status == .connected else {
                 throw ControlError.probeRequiresConnectedVPN
@@ -664,6 +709,225 @@ actor WLTDeviceControl {
         FilePath.cacheDirectory
             .appendingPathComponent("WLT", isDirectory: true)
             .appendingPathComponent("auth-snapshot.json", isDirectory: false)
+    }
+
+    private func identityRingImportURLs(_ requestID: UUID) -> [URL] {
+        let caches = FileManager.default.urls(
+            for: .cachesDirectory,
+            in: .userDomainMask
+        ).first!
+        let prefix = "wlt-test-identity-ring-\(requestID.uuidString.lowercased())"
+        return [
+            caches.appendingPathComponent("\(prefix)-active.aesgcm"),
+            caches.appendingPathComponent("\(prefix)-reserve.aesgcm"),
+            caches.appendingPathComponent("\(prefix)-key.base64"),
+        ]
+    }
+
+    private func importIdentityRing(_ requestID: UUID) async throws -> IdentityRingImportStatus {
+        let inputs = identityRingImportURLs(requestID)
+        defer { inputs.forEach { try? FileManager.default.removeItem(at: $0) } }
+        guard inputs.count == 3 else {
+            throw ControlError.identityRingImportInvalid
+        }
+        let fileManager = FileManager.default
+        for (index, input) in inputs.enumerated() {
+            let values = try? input.resourceValues(forKeys: [
+                .isRegularFileKey,
+                .isSymbolicLinkKey,
+                .fileSizeKey,
+            ])
+            let minimumSize = index == 2 ? 40 : 28
+            let maximumSize = index == 2 ? 128 : 512 * 1_024
+            guard
+                values?.isRegularFile == true,
+                values?.isSymbolicLink != true,
+                let size = values?.fileSize,
+                (minimumSize ... maximumSize).contains(size)
+            else {
+                throw ControlError.identityRingImportInvalid
+            }
+            try? fileManager.setAttributes(
+                [.protectionKey: FileProtectionType.completeUntilFirstUserAuthentication],
+                ofItemAtPath: input.path
+            )
+        }
+
+        let encodedKey = try Data(contentsOf: inputs[2])
+        guard
+            let encodedKeyString = String(data: encodedKey, encoding: .utf8),
+            let keyData = Data(base64Encoded: encodedKeyString.trimmingCharacters(in: .whitespacesAndNewlines)),
+            keyData.count == 32
+        else {
+            throw ControlError.identityRingImportInvalid
+        }
+        let key = SymmetricKey(data: keyData)
+        let active = try decryptIdentityRingSnapshot(at: inputs[0], using: key)
+        let reserve = try decryptIdentityRingSnapshot(at: inputs[1], using: key)
+        guard identityRingSnapshotsIndependent(active, reserve) else {
+            throw ControlError.identityRingImportValidationFailed
+        }
+        let (carrierConfig, carrierConfigFile) = try await selectedWLTCarrierConfig()
+        for snapshot in [active, reserve] {
+            guard let snapshotString = String(data: snapshot, encoding: .utf8) else {
+                throw ControlError.identityRingImportValidationFailed
+            }
+            var validationError: NSError?
+            LibboxValidateWLTAuthSnapshot(
+                carrierConfig,
+                carrierConfigFile,
+                snapshotString,
+                &validationError
+            )
+            if validationError != nil {
+                throw ControlError.identityRingImportValidationFailed
+            }
+        }
+
+        for input in inputs {
+            try fileManager.removeItem(at: input)
+        }
+        guard inputs.allSatisfy({ !fileManager.fileExists(atPath: $0.path) }) else {
+            throw ControlError.identityRingImportInvalid
+        }
+
+        let snapshot = wltAuthSnapshotURL()
+        let reserveSnapshot = URL(fileURLWithPath: snapshot.path + ".reserve")
+        let managed = [
+            snapshot,
+            URL(fileURLWithPath: snapshot.path + ".previous"),
+            reserveSnapshot,
+            URL(fileURLWithPath: snapshot.path + ".reserve.previous"),
+            URL(fileURLWithPath: snapshot.path + ".quarantine"),
+            URL(fileURLWithPath: snapshot.path + ".provider-cooldown"),
+            URL(fileURLWithPath: snapshot.path + ".bootstrap-consumed"),
+            URL(fileURLWithPath: snapshot.path + ".test-reject-active-once"),
+        ]
+        let original = try managed.map { url -> (URL, Data?) in
+            if fileManager.fileExists(atPath: url.path) {
+                return (url, try Data(contentsOf: url))
+            }
+            return (url, nil)
+        }
+
+        do {
+            try writeProtectedAtomically(reserve, to: reserveSnapshot)
+            try writeProtectedAtomically(active, to: snapshot)
+            for stale in managed where stale != snapshot && stale != reserveSnapshot {
+                if fileManager.fileExists(atPath: stale.path) {
+                    try fileManager.removeItem(at: stale)
+                }
+            }
+            let status = try loadIdentityRingStatus()
+            guard status.activePresent, status.reservePresent else {
+                throw ControlError.identityRingImportInstallFailed
+            }
+        } catch {
+            for (url, content) in original {
+                if let content {
+                    try? writeProtectedAtomically(content, to: url)
+                } else if fileManager.fileExists(atPath: url.path) {
+                    try? fileManager.removeItem(at: url)
+                }
+            }
+            throw ControlError.identityRingImportInstallFailed
+        }
+        return IdentityRingImportStatus(
+            identities: 2,
+            independent: true,
+            validated: true,
+            staleStateCleared: true,
+            transferInputsDeleted: true
+        )
+    }
+
+    private func decryptIdentityRingSnapshot(at url: URL, using key: SymmetricKey) throws -> Data {
+        let encrypted = try Data(contentsOf: url)
+        guard (28 ... 512 * 1_024).contains(encrypted.count) else {
+            throw ControlError.identityRingImportInvalid
+        }
+        do {
+            return try AES.GCM.open(AES.GCM.SealedBox(combined: encrypted), using: key)
+        } catch {
+            throw ControlError.identityRingImportValidationFailed
+        }
+    }
+
+    private func identityRingSnapshotsIndependent(_ active: Data, _ reserve: Data) -> Bool {
+        guard
+            let leftRoot = try? JSONSerialization.jsonObject(with: active) as? [String: Any],
+            let rightRoot = try? JSONSerialization.jsonObject(with: reserve) as? [String: Any],
+            let left = leftRoot["vk"] as? [String: Any],
+            let right = rightRoot["vk"] as? [String: Any]
+        else {
+            return false
+        }
+        for field in ["messages_access_token", "anonym_token", "device_id"] {
+            guard
+                let leftValue = left[field] as? String,
+                let rightValue = right[field] as? String,
+                !leftValue.isEmpty,
+                !rightValue.isEmpty,
+                leftValue != rightValue
+            else {
+                return false
+            }
+        }
+        let leftFingerprint = (left["browser_context"] as? [String: Any])?["fingerprint"] as? String
+        let rightFingerprint = (right["browser_context"] as? [String: Any])?["fingerprint"] as? String
+        return leftFingerprint == nil || rightFingerprint == nil || leftFingerprint != rightFingerprint
+    }
+
+    private func selectedWLTCarrierConfig() async throws -> (String, String) {
+        let profileID = await SharedPreferences.selectedProfileID.get()
+        guard let profile = try await ProfileManager.get(profileID) else {
+            throw ControlError.selectedProfileUnavailable
+        }
+        let sharedDirectory = FilePath.sharedDirectory.standardizedFileURL
+        let profileURL = sharedDirectory.appendingPathComponent(profile.path).standardizedFileURL
+        guard profileURL.path.hasPrefix(sharedDirectory.path + "/") else {
+            throw ControlError.identityRingImportValidationFailed
+        }
+        let rootData = try Data(contentsOf: profileURL)
+        guard
+            let root = try JSONSerialization.jsonObject(with: rootData) as? [String: Any],
+            let services = root["services"] as? [[String: Any]],
+            let service = services.first(where: { $0["type"] as? String == "wlt" }),
+            let carrierConfig = service["carrier_config"] as? String,
+            !carrierConfig.isEmpty
+        else {
+            throw ControlError.identityRingImportValidationFailed
+        }
+        let carrierConfigFile = service["carrier_config_file"] as? String ?? ""
+        return (carrierConfig, carrierConfigFile)
+    }
+
+    private func writeProtectedAtomically(_ data: Data, to destination: URL) throws {
+        let fileManager = FileManager.default
+        let directory = destination.deletingLastPathComponent()
+        try fileManager.createDirectory(
+            at: directory,
+            withIntermediateDirectories: true,
+            attributes: [
+                .posixPermissions: 0o700,
+                .protectionKey: FileProtectionType.completeUntilFirstUserAuthentication,
+            ]
+        )
+        let temporary = directory.appendingPathComponent(".\(UUID().uuidString).tmp")
+        defer { try? fileManager.removeItem(at: temporary) }
+        try data.write(to: temporary, options: [.withoutOverwriting])
+        try fileManager.setAttributes(
+            [
+                .posixPermissions: 0o600,
+                .protectionKey: FileProtectionType.completeUntilFirstUserAuthentication,
+            ],
+            ofItemAtPath: temporary.path
+        )
+        if fileManager.fileExists(atPath: destination.path) {
+            _ = try fileManager.replaceItemAt(destination, withItemAt: temporary)
+        } else {
+            try fileManager.moveItem(at: temporary, to: destination)
+        }
     }
 
     private func loadIdentityRingStatus() throws -> IdentityRingStatus {
@@ -983,7 +1247,7 @@ actor WLTDeviceControl {
         let finishedAt = unixMilliseconds()
         let nsError = error as NSError?
         let result = Result(
-            schema: 6,
+            schema: 7,
             requestID: request.id.uuidString.lowercased(),
             action: request.action,
             state: state,
@@ -1007,6 +1271,7 @@ actor WLTDeviceControl {
             workloadRoute: outcome?.workload?.route,
             workloadProbes: outcome?.workload?.probes,
             identityRing: outcome?.identityRing,
+            identityRingImport: outcome?.identityRingImport,
             networkInitial: networkInitial,
             networkFinal: networkFinal,
             errorDomain: nsError?.domain,
@@ -1281,6 +1546,27 @@ actor WLTDeviceControl {
 
     private func pruneProfileExports(excluding current: URL) {
         pruneProfileFiles(prefix: "wlt-test-profile-export-", excluding: current)
+    }
+
+    private func pruneIdentityRingImports(excluding current: [URL]) {
+        guard let first = current.first else {
+            return
+        }
+        let excluded = Set(current.map(\.lastPathComponent))
+        let directory = first.deletingLastPathComponent()
+        guard let files = try? FileManager.default.contentsOfDirectory(
+            at: directory,
+            includingPropertiesForKeys: nil,
+            options: [.skipsHiddenFiles]
+        ) else {
+            return
+        }
+        for file in files where
+            !excluded.contains(file.lastPathComponent)
+            && file.lastPathComponent.hasPrefix("wlt-test-identity-ring-")
+        {
+            try? FileManager.default.removeItem(at: file)
+        }
     }
 
     private func pruneProfileFiles(prefix: String, excluding current: URL) {

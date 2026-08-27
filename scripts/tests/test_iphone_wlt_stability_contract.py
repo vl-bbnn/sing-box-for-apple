@@ -56,6 +56,35 @@ class IPhoneWLTStabilityContractTests(unittest.TestCase):
         self.assertIn("autoUpdate: false", bootstrap)
         self.assertNotIn("profile.url", control)
 
+    def test_identity_ring_import_is_encrypted_validated_and_atomic(self):
+        control = (SCRIPTS / "iphone_wlt_control.sh").read_text()
+        device_control = (SCRIPTS.parent / "SFI" / "WLTDeviceControl.swift").read_text()
+        self.assertIn("import-identity-ring", control)
+        self.assertIn("WLT_CONTROL_IDENTITY_RING_DIR", control)
+        self.assertIn('metadata.st_mode & 0o077', control)
+        self.assertIn('"transfer-key.base64"', control)
+        self.assertIn('case importIdentityRing = "import-identity-ring"', device_control)
+        importer = device_control.split(
+            "private func importIdentityRing", 1
+        )[1].split("private func decryptIdentityRingSnapshot", 1)[0]
+        self.assertIn("AES.GCM", device_control)
+        self.assertIn("LibboxValidateWLTAuthSnapshot", importer)
+        self.assertIn("identityRingSnapshotsIndependent", importer)
+        self.assertIn("writeProtectedAtomically(reserve", importer)
+        self.assertLess(
+            importer.index("writeProtectedAtomically(reserve"),
+            importer.index("writeProtectedAtomically(active"),
+        )
+        self.assertIn('snapshot.path + ".provider-cooldown"', importer)
+        self.assertIn('snapshot.path + ".test-reject-active-once"', importer)
+        self.assertIn("transferInputsDeleted: true", importer)
+        self.assertIn("for (url, content) in original", importer)
+        self.assertIn('"identity_ring_import": result.get("identity_ring_import")', control)
+        self.assertIn('if action == "import-identity-ring"', control)
+        self.assertIn("umask 077", control)
+        self.assertIn("cleanup_identity_transfer", control)
+        self.assertIn("identity transfer cleanup could not be proven", control)
+
     def test_shortcut_helper_warms_before_delivering_payload(self):
         with tempfile.TemporaryDirectory() as temporary:
             root = Path(temporary)

@@ -1,6 +1,7 @@
 #!/usr/bin/env bash
 
 set -euo pipefail
+umask 077
 
 script_dir="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 repo_root="$(cd "$script_dir/.." && pwd)"
@@ -14,6 +15,7 @@ candidate_file="${WLT_CONTROL_CANDIDATE_FILE:-}"
 workload_file="${WLT_CONTROL_WORKLOAD_FILE:-}"
 profile_file="${WLT_CONTROL_PROFILE_FILE:-}"
 profile_export_file="${WLT_CONTROL_PROFILE_EXPORT_FILE:-}"
+identity_ring_dir="${WLT_CONTROL_IDENTITY_RING_DIR:-}"
 soak_seconds="${WLT_CONTROL_SOAK_SECONDS:-1800}"
 soak_interval_seconds="${WLT_CONTROL_SOAK_INTERVAL_SECONDS:-30}"
 
@@ -64,8 +66,8 @@ validate_integer() {
 run() {
     local action="${1:-}"
     case "$action" in
-        bootstrap-profile|export-profile|ping|probe|refresh-profile|identity-ring-status|arm-identity-ring-fault|start|start-probe|status|stop|soak|workload) ;;
-        *) die "usage: $0 <bootstrap-profile|export-profile|ping|probe|refresh-profile|identity-ring-status|arm-identity-ring-fault|start|start-probe|status|stop|soak|workload>" ;;
+        bootstrap-profile|export-profile|ping|probe|refresh-profile|import-identity-ring|identity-ring-status|arm-identity-ring-fault|start|start-probe|status|stop|soak|workload) ;;
+        *) die "usage: $0 <bootstrap-profile|export-profile|ping|probe|refresh-profile|import-identity-ring|identity-ring-status|arm-identity-ring-fault|start|start-probe|status|stop|soak|workload>" ;;
     esac
     [[ -n "${WLT_APP_BUNDLE_ID:-}" ]] || die "set WLT_APP_BUNDLE_ID to the installed SFI Dev bundle identifier"
     [[ "$WLT_APP_BUNDLE_ID" =~ ^[A-Za-z0-9.-]+$ ]] || die "WLT_APP_BUNDLE_ID has an invalid format"
@@ -199,9 +201,49 @@ PY
     elif [[ -n "$profile_export_file" ]]; then
         die "WLT_CONTROL_PROFILE_EXPORT_FILE is valid only for export-profile"
     fi
+    if [[ -n "$identity_ring_dir" ]]; then
+        [[ "$action" == "import-identity-ring" ]] \
+            || die "WLT_CONTROL_IDENTITY_RING_DIR is valid only for import-identity-ring"
+        /usr/bin/python3 - "$identity_ring_dir" <<'PY'
+import base64
+import os
+from pathlib import Path
+import stat
+import sys
+
+root = Path(sys.argv[1])
+if root.is_symlink() or not root.is_dir():
+    raise SystemExit("identity ring import path must be a regular directory")
+expected = {
+    "auth-snapshot.json.aesgcm",
+    "auth-snapshot.json.reserve.aesgcm",
+    "transfer-key.base64",
+}
+files = list(root.iterdir())
+if {item.name for item in files} != expected:
+    raise SystemExit("identity ring import must contain exactly active, reserve, and key files")
+for item in files:
+    metadata = item.lstat()
+    if (
+        item.is_symlink()
+        or not stat.S_ISREG(metadata.st_mode)
+        or metadata.st_uid != os.getuid()
+        or metadata.st_nlink != 1
+        or metadata.st_mode & 0o077
+    ):
+        raise SystemExit("identity ring import inputs must be owned mode-0600 regular files")
+    if item.name.endswith(".aesgcm") and not 28 <= metadata.st_size <= 512 * 1024:
+        raise SystemExit("identity ring encrypted input size is invalid")
+key = base64.b64decode((root / "transfer-key.base64").read_text().strip(), validate=True)
+if len(key) != 32:
+    raise SystemExit("identity ring transfer key must contain 32 bytes")
+PY
+    elif [[ "$action" == "import-identity-ring" ]]; then
+        die "WLT_CONTROL_IDENTITY_RING_DIR is required for import-identity-ring"
+    fi
 
     mkdir -p "$artifact_dir"
-    local device request_id result_name remote_result remote_candidate remote_workload remote_profile remote_profile_export local_result deadline copy_log payload_url
+    local device request_id result_name remote_result remote_candidate remote_workload remote_profile remote_profile_export remote_identity_active remote_identity_reserve remote_identity_key local_result deadline copy_log payload_url
     device="$(device_id)"
     request_id="$(uuidgen | tr '[:upper:]' '[:lower:]')"
     result_name="$request_id.json"
@@ -210,9 +252,21 @@ PY
     remote_workload="Library/Caches/wlt-test-workload-$result_name"
     remote_profile="Library/Caches/wlt-test-profile-$result_name"
     remote_profile_export="Library/Caches/wlt-test-profile-export-$result_name"
+    remote_identity_active="Library/Caches/wlt-test-identity-ring-${request_id}-active.aesgcm"
+    remote_identity_reserve="Library/Caches/wlt-test-identity-ring-${request_id}-reserve.aesgcm"
+    remote_identity_key="Library/Caches/wlt-test-identity-ring-${request_id}-key.base64"
     local_result="$artifact_dir/$result_name"
     copy_log="$artifact_dir/devicectl-copy.log"
     deadline=$((SECONDS + timeout_seconds))
+
+    cleanup_identity_transfer() {
+        [[ -n "$identity_ring_dir" ]] || return 0
+        local cleanup_dir="$artifact_dir/identity-transfer-cleanup"
+        WLT_CONTROL_IDENTITY_RING_DIR= \
+        WLT_CONTROL_ARTIFACT_DIR="$cleanup_dir" \
+        "$0" ping >"$artifact_dir/identity-transfer-cleanup.stdout" \
+            2>"$artifact_dir/identity-transfer-cleanup.stderr"
+    }
 
     if [[ -n "$candidate_file" ]]; then
         log "copying validated runtime parameters to the Dev app container"
@@ -256,30 +310,73 @@ PY
             || die "profile plan copy failed; see $artifact_dir/profile-copy.log"
     fi
 
+    if [[ -n "$identity_ring_dir" ]]; then
+        log "copying protected identity ring to the Dev app container"
+        local identity_source identity_destination identity_label
+        for identity_label in active reserve key; do
+            case "$identity_label" in
+                active)
+                    identity_source="$identity_ring_dir/auth-snapshot.json.aesgcm"
+                    identity_destination="$remote_identity_active"
+                    ;;
+                reserve)
+                    identity_source="$identity_ring_dir/auth-snapshot.json.reserve.aesgcm"
+                    identity_destination="$remote_identity_reserve"
+                    ;;
+                key)
+                    identity_source="$identity_ring_dir/transfer-key.base64"
+                    identity_destination="$remote_identity_key"
+                    ;;
+            esac
+            if ! xcrun devicectl device copy to \
+                --device "$device" \
+                --domain-type appDataContainer \
+                --domain-identifier "$WLT_APP_BUNDLE_ID" \
+                --source "$identity_source" \
+                --destination "$identity_destination" \
+                --timeout "$copy_timeout_seconds" \
+                --json-output "$artifact_dir/identity-$identity_label-copy.json" \
+                >"$artifact_dir/identity-$identity_label-copy.log" 2>&1
+            then
+                cleanup_identity_transfer \
+                    || die "identity ring copy failed and remote cleanup could not be proven"
+                die "identity ring $identity_label copy failed; remote cleanup succeeded"
+            fi
+        done
+    fi
+
     payload_url="sing-box://wlt-test-control/$action?request=$request_id"
     if [[ "$action" == "soak" ]]; then
         payload_url="$payload_url&duration=$soak_seconds&interval=$soak_interval_seconds"
     fi
     log "sending $action through CoreDevice (no XCTest/UI Automation)"
     if [[ "$action" == "stop" ]]; then
-        xcrun devicectl device process launch \
+        if ! xcrun devicectl device process launch \
             --device "$device" \
             --terminate-existing \
             --payload-url "$payload_url" \
             --activate \
             --timeout "$launch_timeout_seconds" \
             --json-output "$artifact_dir/launch.json" \
-            "$WLT_APP_BUNDLE_ID" >"$artifact_dir/launch.log" 2>&1 \
-            || die "CoreDevice launch failed; see $artifact_dir/launch.log"
+            "$WLT_APP_BUNDLE_ID" >"$artifact_dir/launch.log" 2>&1
+        then
+            cleanup_identity_transfer \
+                || die "CoreDevice launch failed and identity transfer cleanup could not be proven"
+            die "CoreDevice launch failed; identity transfer cleanup succeeded"
+        fi
     else
-        xcrun devicectl device process launch \
+        if ! xcrun devicectl device process launch \
             --device "$device" \
             --payload-url "$payload_url" \
             --activate \
             --timeout "$launch_timeout_seconds" \
             --json-output "$artifact_dir/launch.json" \
-            "$WLT_APP_BUNDLE_ID" >"$artifact_dir/launch.log" 2>&1 \
-            || die "CoreDevice launch failed; see $artifact_dir/launch.log"
+            "$WLT_APP_BUNDLE_ID" >"$artifact_dir/launch.log" 2>&1
+        then
+            cleanup_identity_transfer \
+                || die "CoreDevice launch failed and identity transfer cleanup could not be proven"
+            die "CoreDevice launch failed; identity transfer cleanup succeeded"
+        fi
     fi
 
     while (( SECONDS < deadline )); do
@@ -295,7 +392,11 @@ PY
         fi
         sleep 0.2
     done
-    [[ -f "$local_result" ]] || die "timed out waiting for the sanitized result; see $artifact_dir"
+    if [[ ! -f "$local_result" ]]; then
+        cleanup_identity_transfer \
+            || die "timed out and identity transfer cleanup could not be proven"
+        die "timed out waiting for the sanitized result; identity transfer cleanup succeeded"
+    fi
 
     if [[ "$action" == "export-profile" ]]; then
         xcrun devicectl device copy from \
@@ -316,7 +417,7 @@ import sys
 
 path, request_id, action, candidate_path = sys.argv[1:]
 result = json.load(open(path))
-if result.get("schema") not in {1, 2, 3, 4, 5, 6}:
+if result.get("schema") not in {1, 2, 3, 4, 5, 6, 7}:
     raise SystemExit("unexpected result schema")
 if result.get("request_id") != request_id:
     raise SystemExit("result request mismatch")
@@ -344,6 +445,7 @@ allowed = {
     "workload_route": result.get("workload_route"),
     "workload_probes": result.get("workload_probes"),
     "identity_ring": result.get("identity_ring"),
+    "identity_ring_import": result.get("identity_ring_import"),
     "network_initial": result.get("network_initial"),
     "network_final": result.get("network_final"),
     "error_domain": result.get("error_domain"),
@@ -353,6 +455,27 @@ if candidate_path and result.get("state") == "succeeded":
     expected = json.load(open(candidate_path))["parameters"]
     if result.get("runtime_parameters") != expected:
         raise SystemExit("runtime candidate evidence mismatch")
+if action == "import-identity-ring" and result.get("state") == "succeeded":
+    imported = result.get("identity_ring_import") or {}
+    expected = {
+        "identities": 2,
+        "independent": True,
+        "validated": True,
+        "stale_state_cleared": True,
+        "transfer_inputs_deleted": True,
+    }
+    if imported != expected:
+        raise SystemExit("identity ring import evidence mismatch")
+    ring = result.get("identity_ring") or {}
+    if not ring.get("active_present") or not ring.get("reserve_present"):
+        raise SystemExit("identity ring import did not install active and reserve")
+    if (
+        ring.get("previous_present")
+        or ring.get("quarantine_present")
+        or ring.get("fault_armed")
+        or ring.get("bootstrap_consumed")
+    ):
+        raise SystemExit("identity ring import left stale state")
 if action in {"start-probe", "workload", "soak"} and result.get("state") == "succeeded":
     milestones = set(result.get("startup_milestones") or [])
     required = {"carrier_ready", "traffic_ready"}
