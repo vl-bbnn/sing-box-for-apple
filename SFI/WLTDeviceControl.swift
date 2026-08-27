@@ -865,7 +865,7 @@ actor WLTDeviceControl {
         let bearerMode = "bearer_call_token"
         let leftMode = left["calls_auth_mode"] as? String ?? "anonymous_token"
         let rightMode = right["calls_auth_mode"] as? String ?? "anonymous_token"
-        for field in ["anonym_token", "device_id"] {
+        let fieldIsDistinct = { (field: String) -> Bool in
             guard
                 let leftValue = left[field] as? String,
                 let rightValue = right[field] as? String,
@@ -875,22 +875,22 @@ actor WLTDeviceControl {
             else {
                 return false
             }
+            return true
         }
-        if leftMode != bearerMode || rightMode != bearerMode {
-            guard
-                let leftMessages = left["messages_access_token"] as? String,
-                let rightMessages = right["messages_access_token"] as? String,
-                !leftMessages.isEmpty,
-                !rightMessages.isEmpty,
-                leftMessages != rightMessages
-            else {
+        if leftMode == bearerMode && rightMode == bearerMode {
+            // Authenticated messages.getCallToken and TURN credentials are
+            // stable for an account/app pair. Independence is established by
+            // the separate version-3 calls sessions instead.
+            return fieldIsDistinct("device_id") && fieldIsDistinct("session_key")
+        }
+        for field in ["anonym_token", "device_id", "messages_access_token"] {
+            guard fieldIsDistinct(field) else {
                 return false
             }
         }
         let leftFingerprint = (left["browser_context"] as? [String: Any])?["fingerprint"] as? String
         let rightFingerprint = (right["browser_context"] as? [String: Any])?["fingerprint"] as? String
-        return leftMode == bearerMode && rightMode == bearerMode
-            || leftFingerprint == nil
+        return leftFingerprint == nil
             || rightFingerprint == nil
             || leftFingerprint != rightFingerprint
     }

@@ -91,9 +91,13 @@ class IPhoneWLTStabilityContractTests(unittest.TestCase):
             "private func identityRingSnapshotsIndependent", 1
         )[1].split("private func selectedWLTCarrierConfig", 1)[0]
         self.assertIn('let bearerMode = "bearer_call_token"', independence)
-        self.assertIn('for field in ["anonym_token", "device_id"]', independence)
-        self.assertIn("leftMode != bearerMode || rightMode != bearerMode", independence)
-        self.assertIn('left["messages_access_token"]', independence)
+        self.assertIn("leftMode == bearerMode && rightMode == bearerMode", independence)
+        self.assertIn('fieldIsDistinct("device_id")', independence)
+        self.assertIn('fieldIsDistinct("session_key")', independence)
+        self.assertIn(
+            'for field in ["anonym_token", "device_id", "messages_access_token"]',
+            independence,
+        )
 
     def test_shortcut_helper_warms_before_delivering_payload(self):
         with tempfile.TemporaryDirectory() as temporary:
