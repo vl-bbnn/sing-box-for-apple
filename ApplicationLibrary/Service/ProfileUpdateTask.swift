@@ -79,8 +79,12 @@ public enum ProfileUpdateTask {
     private nonisolated static func shouldDeferAutomaticUpdate(_ profile: Profile) async -> Bool {
         let selectedProfileID = await SharedPreferences.selectedProfileID.get()
         let isSelected = profile.id == selectedProfileID
+        #if SFI_DEV
         let content = try? await profile.readAsync()
         let usesWLT = content.map(WhitelistTransportConfig.usesCoreWhitelistTransport) ?? false
+        #else
+        let usesWLT = false
+        #endif
         if !isSelected && !usesWLT { return false }
         guard let extensionProfile = try? await ExtensionProfile.load() else {
             return true
