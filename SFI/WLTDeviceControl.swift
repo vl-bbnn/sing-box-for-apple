@@ -17,6 +17,7 @@ actor WLTDeviceControl {
     struct Request: Equatable {
         let id: UUID
         let action: Action
+        let profileName: String?
         let soakDurationSeconds: Int?
         let soakIntervalSeconds: Int?
 
@@ -38,6 +39,19 @@ actor WLTDeviceControl {
             }
             self.id = id
             self.action = action
+            if action == .selectProfile {
+                guard
+                    let name = components.queryItems?
+                        .first(where: { $0.name == "name" })?.value,
+                    !name.isEmpty,
+                    name.count <= 128
+                else {
+                    return nil
+                }
+                profileName = name
+            } else {
+                profileName = nil
+            }
             if action == .soak {
                 guard
                     let durationValue = components.queryItems?
@@ -63,10 +77,13 @@ actor WLTDeviceControl {
 
     enum Action: String, Codable {
         case bootstrapProfile = "bootstrap-profile"
+        case upsertProfile = "upsert-profile"
         case exportProfile = "export-profile"
         case ping
         case probe
         case refreshProfile = "refresh-profile"
+        case selectProfile = "select-profile"
+        case assertMergedProfile = "assert-merged-profile"
         case importIdentityRing = "import-identity-ring"
         case identityRingStatus = "identity-ring-status"
         case armIdentityRingFault = "arm-identity-ring-fault"
@@ -351,6 +368,7 @@ actor WLTDeviceControl {
         case identityRingImportValidationFailed = 20
         case identityRingImportInstallFailed = 21
         case transportCountersUnavailable = 22
+        case mergedProfileContractFailed = 23
     }
 
     private var isRunning = false
@@ -382,7 +400,7 @@ actor WLTDeviceControl {
         isRunning = true
         defer { isRunning = false }
         let keepsDeviceAwake = switch request.action {
-        case .bootstrapProfile, .start, .startProbe, .soak, .workload:
+        case .bootstrapProfile, .upsertProfile, .start, .startProbe, .soak, .workload:
             true
         default:
             false
@@ -494,6 +512,44 @@ actor WLTDeviceControl {
                 runtimeParameters: nil
             )
         }
+        if action == .selectProfile {
+            guard let requestedName = request.profileName else {
+                throw ControlError.invalidProfilePlan
+            }
+            guard let extensionProfile = try await ExtensionProfile.load() else {
+                throw ControlError.networkExtensionNotInstalled
+            }
+            await extensionProfile.register()
+            let status = await extensionProfile.status
+            guard status == .disconnected || status == .invalid else {
+                throw ControlError.unexpectedStatus
+            }
+            let normalized = requestedName.lowercased().filter { $0.isLetter || $0.isNumber }
+            let matches = try await ProfileManager.list().filter {
+                $0.name.lowercased().filter { $0.isLetter || $0.isNumber } == normalized
+            }
+            guard matches.count == 1 else {
+                throw ControlError.selectedProfileUnavailable
+            }
+            await SharedPreferences.selectedProfileID.set(matches[0].mustID)
+            return Outcome(
+                status: status,
+                vpnStartupMS: nil,
+                probeElapsedMS: nil,
+                soak: nil,
+                runtimeParameters: nil
+            )
+        }
+        if action == .assertMergedProfile {
+            try await assertSelectedMergedProfile()
+            return Outcome(
+                status: nil,
+                vpnStartupMS: nil,
+                probeElapsedMS: nil,
+                soak: nil,
+                runtimeParameters: nil
+            )
+        }
         if action == .exportProfile {
             try await exportSelectedProfile(to: profileExportURL(request.id))
             let currentStatus = await loadCurrentStatus()
@@ -518,6 +574,19 @@ actor WLTDeviceControl {
                 runtimeParameters: nil
             )
         }
+        if action == .upsertProfile {
+            guard let profilePlan else {
+                throw ControlError.invalidProfilePlan
+            }
+            let installedProfile = try await upsertProfile(profilePlan)
+            return Outcome(
+                status: await installedProfile.status,
+                vpnStartupMS: nil,
+                probeElapsedMS: nil,
+                soak: nil,
+                runtimeParameters: nil
+            )
+        }
         guard let profile = try await ExtensionProfile.load() else {
             throw ControlError.networkExtensionNotInstalled
         }
@@ -528,7 +597,7 @@ actor WLTDeviceControl {
         }
 
         switch action {
-        case .bootstrapProfile, .exportProfile:
+        case .bootstrapProfile, .upsertProfile, .exportProfile, .selectProfile, .assertMergedProfile:
             preconditionFailure("profile actions are handled before Network Extension loading")
         case .ping:
             return Outcome(
@@ -932,6 +1001,47 @@ actor WLTDeviceControl {
         return (carrierConfig, carrierConfigFile)
     }
 
+    private func assertSelectedMergedProfile() async throws {
+        let profileID = await SharedPreferences.selectedProfileID.get()
+        guard let profile = try await ProfileManager.get(profileID) else {
+            throw ControlError.selectedProfileUnavailable
+        }
+        let sharedDirectory = FilePath.sharedDirectory.standardizedFileURL
+        let profileURL: URL
+        if profile.path.hasPrefix("/") {
+            profileURL = URL(fileURLWithPath: profile.path).standardizedFileURL
+        } else {
+            profileURL = sharedDirectory.appendingPathComponent(profile.path).standardizedFileURL
+        }
+        guard profileURL.path.hasPrefix(sharedDirectory.path + "/") else {
+            throw ControlError.mergedProfileContractFailed
+        }
+        let data = try Data(contentsOf: profileURL)
+        guard
+            let root = try JSONSerialization.jsonObject(with: data) as? [String: Any],
+            let route = root["route"] as? [String: Any],
+            route["final"] as? String == "direct_or_wlt-ru",
+            let outbounds = root["outbounds"] as? [[String: Any]]
+        else {
+            throw ControlError.mergedProfileContractFailed
+        }
+        var byTag: [String: [String: Any]] = [:]
+        for outbound in outbounds {
+            guard let tag = outbound["tag"] as? String, !tag.isEmpty else { continue }
+            guard byTag[tag] == nil else { throw ControlError.mergedProfileContractFailed }
+            byTag[tag] = outbound
+        }
+        guard
+            byTag["direct_or_wlt-ru"]?["type"] as? String == "urltest",
+            byTag["direct_or_wlt-ru"]?["outbounds"] as? [String] == ["direct", "vless-wlt-ru"],
+            byTag["ru_or_wlt-ru"]?["type"] as? String == "urltest",
+            byTag["eu_or_wlt-eu"]?["type"] as? String == "urltest",
+            byTag["direct-always"]?["outbounds"] as? [String] == ["direct"]
+        else {
+            throw ControlError.mergedProfileContractFailed
+        }
+    }
+
     private func writeProtectedAtomically(_ data: Data, to destination: URL) throws {
         let fileManager = FileManager.default
         let directory = destination.deletingLastPathComponent()
@@ -1283,7 +1393,7 @@ actor WLTDeviceControl {
         timeout: TimeInterval = 15,
         requestTimeout: TimeInterval = 10
     ) async throws {
-        let endpoint = URL(string: "https://cp.cloudflare.com/generate_204")!
+        let endpoint = URL(string: "https://www.google.com/generate_204")!
         let deadline = Date().addingTimeInterval(timeout)
         let configuration = URLSessionConfiguration.ephemeral
         configuration.requestCachePolicy = .reloadIgnoringLocalAndRemoteCacheData
@@ -1433,7 +1543,7 @@ actor WLTDeviceControl {
     }
 
     private func loadProfilePlan(for action: Action, at url: URL) throws -> ProfilePlan? {
-        guard action == .bootstrapProfile else {
+        guard action == .bootstrapProfile || action == .upsertProfile else {
             return nil
         }
         guard FileManager.default.fileExists(atPath: url.path) else {
@@ -1535,6 +1645,76 @@ actor WLTDeviceControl {
             try await Task.sleep(nanoseconds: 200_000_000)
         }
         throw ControlError.networkExtensionInstallFailed
+    }
+
+    private func upsertProfile(_ plan: ProfilePlan) async throws -> ExtensionProfile {
+        let network = await captureNetworkSnapshot()
+        guard network.status == "satisfied", network.wifi, !network.cellular else {
+            throw ControlError.profileBootstrapRequiresWiFi
+        }
+        guard let extensionProfile = try await ExtensionProfile.load() else {
+            throw ControlError.networkExtensionNotInstalled
+        }
+        await extensionProfile.register()
+        guard await extensionProfile.status == .disconnected else {
+            throw ControlError.unexpectedStatus
+        }
+
+        let normalized = plan.name.lowercased().filter { $0.isLetter || $0.isNumber }
+        let namedMatches = try await ProfileManager.list().filter {
+            $0.name.lowercased().filter { $0.isLetter || $0.isNumber } == normalized
+        }
+        guard namedMatches.count <= 1 else {
+            throw ControlError.selectedProfileUnavailable
+        }
+
+        let selectedProfile: Profile
+        if let existing = namedMatches.first {
+            guard existing.type == .remote, existing.remoteURL == plan.url else {
+                throw ControlError.selectedProfileUnavailable
+            }
+            try await existing.updateRemoteProfile()
+            selectedProfile = existing
+        } else if let existing = try await ProfileManager.get(remoteURL: plan.url) {
+            existing.name = plan.name
+            try await ProfileManager.update(existing)
+            try await existing.updateRemoteProfile()
+            selectedProfile = existing
+        } else {
+            let remoteContent = try await HTTPClient.getStringAsync(plan.url)
+            var configError: NSError?
+            LibboxCheckConfig(remoteContent, &configError)
+            if let configError {
+                throw configError
+            }
+            let nextProfileID = try await ProfileManager.nextID()
+            let profileDirectory = FilePath.sharedDirectory.appendingPathComponent(
+                "configs",
+                isDirectory: true
+            )
+            let profileURL = profileDirectory.appendingPathComponent(
+                "config_\(nextProfileID).json",
+                isDirectory: false
+            )
+            try FileManager.default.createDirectory(
+                at: profileDirectory,
+                withIntermediateDirectories: true
+            )
+            try remoteContent.write(to: profileURL, atomically: true, encoding: .utf8)
+            let profile = Profile(
+                name: plan.name,
+                type: .remote,
+                path: profileURL.relativePath,
+                remoteURL: plan.url,
+                autoUpdate: false,
+                autoUpdateInterval: 0,
+                lastUpdated: .now
+            )
+            try await ProfileManager.create(profile)
+            selectedProfile = profile
+        }
+        await SharedPreferences.selectedProfileID.set(selectedProfile.mustID)
+        return extensionProfile
     }
 
     private func loadWorkloadPlan(for action: Action, at url: URL) throws -> WorkloadPlan? {

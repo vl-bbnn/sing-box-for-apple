@@ -66,11 +66,17 @@ validate_integer() {
 run() {
     local action="${1:-}"
     case "$action" in
-        bootstrap-profile|export-profile|ping|probe|refresh-profile|import-identity-ring|identity-ring-status|arm-identity-ring-fault|start|start-probe|status|stop|soak|workload) ;;
-        *) die "usage: $0 <bootstrap-profile|export-profile|ping|probe|refresh-profile|import-identity-ring|identity-ring-status|arm-identity-ring-fault|start|start-probe|status|stop|soak|workload>" ;;
+        bootstrap-profile|upsert-profile|export-profile|select-profile|assert-merged-profile|ping|probe|refresh-profile|import-identity-ring|identity-ring-status|arm-identity-ring-fault|start|start-probe|status|stop|soak|workload) ;;
+        *) die "usage: $0 <bootstrap-profile|upsert-profile|export-profile|select-profile|assert-merged-profile|ping|probe|refresh-profile|import-identity-ring|identity-ring-status|arm-identity-ring-fault|start|start-probe|status|stop|soak|workload>" ;;
     esac
     [[ -n "${WLT_APP_BUNDLE_ID:-}" ]] || die "set WLT_APP_BUNDLE_ID to the installed SFI Dev bundle identifier"
     [[ "$WLT_APP_BUNDLE_ID" =~ ^[A-Za-z0-9.-]+$ ]] || die "WLT_APP_BUNDLE_ID has an invalid format"
+    if [[ "$action" == "select-profile" ]]; then
+        [[ -n "${WLT_CONTROL_PROFILE_NAME:-}" ]] || die "WLT_CONTROL_PROFILE_NAME is required for select-profile"
+        (( ${#WLT_CONTROL_PROFILE_NAME} <= 128 )) || die "WLT_CONTROL_PROFILE_NAME is too long"
+    elif [[ -n "${WLT_CONTROL_PROFILE_NAME:-}" ]]; then
+        die "WLT_CONTROL_PROFILE_NAME is valid only for select-profile"
+    fi
     validate_integer "$timeout_seconds" "WLT_CONTROL_TIMEOUT_SECONDS"
     validate_integer "$launch_timeout_seconds" "WLT_CONTROL_LAUNCH_TIMEOUT_SECONDS"
     validate_integer "$copy_timeout_seconds" "WLT_CONTROL_COPY_TIMEOUT_SECONDS"
@@ -166,8 +172,8 @@ PY
         die "WLT_CONTROL_WORKLOAD_FILE is required for workload"
     fi
     if [[ -n "$profile_file" ]]; then
-        [[ "$action" == "bootstrap-profile" ]] \
-            || die "WLT_CONTROL_PROFILE_FILE is valid only for bootstrap-profile"
+        [[ "$action" == "bootstrap-profile" || "$action" == "upsert-profile" ]] \
+            || die "WLT_CONTROL_PROFILE_FILE is valid only for bootstrap-profile/upsert-profile"
         [[ -f "$profile_file" ]] || die "missing profile plan file"
         /usr/bin/python3 - "$profile_file" <<'PY'
 import json
@@ -192,8 +198,8 @@ valid = (
 if not valid:
     raise SystemExit("invalid profile plan")
 PY
-    elif [[ "$action" == "bootstrap-profile" ]]; then
-        die "WLT_CONTROL_PROFILE_FILE is required for bootstrap-profile"
+    elif [[ "$action" == "bootstrap-profile" || "$action" == "upsert-profile" ]]; then
+        die "WLT_CONTROL_PROFILE_FILE is required for bootstrap-profile/upsert-profile"
     fi
     if [[ "$action" == "export-profile" ]]; then
         [[ -n "$profile_export_file" ]] \
@@ -349,6 +355,10 @@ PY
     fi
 
     payload_url="sing-box://wlt-test-control/$action?request=$request_id"
+    if [[ "$action" == "select-profile" ]]; then
+        encoded_name="$(/usr/bin/python3 -c 'import sys,urllib.parse; print(urllib.parse.quote(sys.argv[1], safe=""))' "$WLT_CONTROL_PROFILE_NAME")"
+        payload_url="$payload_url&name=$encoded_name"
+    fi
     if [[ "$action" == "soak" ]]; then
         payload_url="$payload_url&duration=$soak_seconds&interval=$soak_interval_seconds"
     fi
