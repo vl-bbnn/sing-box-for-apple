@@ -630,8 +630,11 @@ actor WLTDeviceControl {
             }
             let probeStartedAt = unixMilliseconds()
             try await probeTraffic()
+            guard await profile.status == .connected else {
+                throw ControlError.probeRequiresConnectedVPN
+            }
             return Outcome(
-                status: await profile.status,
+                status: .connected,
                 vpnStartupMS: nil,
                 probeElapsedMS: max(0, unixMilliseconds() - probeStartedAt),
                 soak: nil,
@@ -755,8 +758,11 @@ actor WLTDeviceControl {
                 durationSeconds: durationSeconds,
                 intervalSeconds: intervalSeconds
             )
+            guard await profile.status == .connected else {
+                throw ControlError.probeRequiresConnectedVPN
+            }
             return Outcome(
-                status: await profile.status,
+                status: .connected,
                 vpnStartupMS: nil,
                 probeElapsedMS: nil,
                 soak: soak,
@@ -770,8 +776,11 @@ actor WLTDeviceControl {
                 throw ControlError.invalidWorkload
             }
             let (workload, transportCounters) = try await runWorkloadWithCounters(workloadPlan)
+            guard await profile.status == .connected else {
+                throw ControlError.probeRequiresConnectedVPN
+            }
             return Outcome(
-                status: await profile.status,
+                status: .connected,
                 vpnStartupMS: nil,
                 probeElapsedMS: nil,
                 soak: nil,
@@ -1393,7 +1402,7 @@ actor WLTDeviceControl {
         timeout: TimeInterval = 15,
         requestTimeout: TimeInterval = 10
     ) async throws {
-        let endpoint = URL(string: "https://www.google.com/generate_204")!
+        let endpoint = URL(string: "https://rozetked.me/")!
         let deadline = Date().addingTimeInterval(timeout)
         let configuration = URLSessionConfiguration.ephemeral
         configuration.requestCachePolicy = .reloadIgnoringLocalAndRemoteCacheData
@@ -1409,7 +1418,9 @@ actor WLTDeviceControl {
             request.setValue("no-cache", forHTTPHeaderField: "Cache-Control")
             do {
                 let (_, response) = try await session.data(for: request)
-                if let response = response as? HTTPURLResponse, response.statusCode == 204 {
+                if let response = response as? HTTPURLResponse,
+                    (200 ..< 400).contains(response.statusCode)
+                {
                     return
                 }
             } catch {

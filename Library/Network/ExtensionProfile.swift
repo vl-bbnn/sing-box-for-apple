@@ -176,12 +176,23 @@ public class ExtensionProfile: ObservableObject {
     #if SFI_DEV
       PacketTunnelDiagnostics.appendStartupMilestone("profile_loaded")
     #endif
+    let options = try await prepareStartOptions(
+      configContentTransform: configContentTransform
+    )
     manager.isEnabled = true
     let alwaysOn = await SharedPreferences.alwaysOn.get()
     let onDemandEnabled = await SharedPreferences.onDemandEnabled.get()
-    if alwaysOn || onDemandEnabled {
+    #if os(iOS) && SFI_DEV
+      let whitelistTransportAutoRecovery =
+        (options["whitelistTransportEnabled"] as? NSNumber)?.boolValue ?? false
+    #else
+      let whitelistTransportAutoRecovery = false
+    #endif
+    if alwaysOn || onDemandEnabled || whitelistTransportAutoRecovery {
       manager.isOnDemandEnabled = true
-      await setOnDemandRules(useDefaultRules: alwaysOn)
+      await setOnDemandRules(
+        useDefaultRules: alwaysOn || whitelistTransportAutoRecovery
+      )
     }
     if let proto = manager.protocolConfiguration as? NETunnelProviderProtocol {
       var config = proto.providerConfiguration ?? [:]
@@ -208,9 +219,6 @@ public class ExtensionProfile: ObservableObject {
       }
     #endif
     try await manager.saveToPreferences()
-    let options = try await prepareStartOptions(
-      configContentTransform: configContentTransform
-    )
     #if SFI_DEV
       PacketTunnelDiagnostics.appendStartupMilestone("start_options_ready")
     #endif
@@ -304,8 +312,8 @@ public class ExtensionProfile: ObservableObject {
       let usesLegacyWhitelistTransport = WhitelistTransportConfig.usesLegacyWhitelistTransport(configContent)
       if usesCoreWhitelistTransport {
         options["whitelistTransportEnabled"] = NSNumber(value: true)
-        options["whitelistTransportMemoryRecoveryThreshold"] = NSNumber(value: 48 * 1024 * 1024)
-        options["whitelistTransportMemoryRecoveryUrgentThreshold"] = NSNumber(value: 56 * 1024 * 1024)
+        options["whitelistTransportMemoryRecoveryThreshold"] = NSNumber(value: 45 * 1024 * 1024)
+        options["whitelistTransportMemoryRecoveryUrgentThreshold"] = NSNumber(value: 47 * 1024 * 1024)
         options["whitelistTransportMemoryRecoveryCooldown"] = NSNumber(value: 45)
         options["whitelistTransportMemoryRecoveryUrgentCooldown"] = NSNumber(value: 20)
       }

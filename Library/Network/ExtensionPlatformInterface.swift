@@ -310,7 +310,7 @@ public class ExtensionPlatformInterface: NSObject, LibboxPlatformInterfaceProtoc
     _ listener: LibboxInterfaceUpdateListenerProtocol, _ path: Network.NWPath
   ) {
     guard path.status != .unsatisfied,
-      let defaultInterface = path.availableInterfaces.first
+      let defaultInterface = activeDefaultInterface(path)
     else {
       listener.updateDefaultInterface(
         "", interfaceIndex: -1, isExpensive: false, isConstrained: false)
@@ -319,6 +319,25 @@ public class ExtensionPlatformInterface: NSObject, LibboxPlatformInterfaceProtoc
     listener.updateDefaultInterface(
       defaultInterface.name, interfaceIndex: Int32(defaultInterface.index),
       isExpensive: path.isExpensive, isConstrained: path.isConstrained)
+  }
+
+  private func activeDefaultInterface(_ path: Network.NWPath) -> Network.NWInterface? {
+    // availableInterfaces is not ordered by route preference. In particular,
+    // after Wi-Fi/cellular handover it may still list the old interface first,
+    // which prevents libbox from observing the interface change and closing
+    // stale outbound connection pools. Select an interface the path actually
+    // uses, preferring the normal physical underlays over .other/loopback.
+    let preferredTypes: [Network.NWInterface.InterfaceType] = [
+      .wiredEthernet, .wifi, .cellular,
+    ]
+    for type in preferredTypes where path.usesInterfaceType(type) {
+      if let interface = path.availableInterfaces.first(where: { $0.type == type }) {
+        return interface
+      }
+    }
+    return path.availableInterfaces.first(where: {
+      $0.type != .other && $0.type != .loopback
+    }) ?? path.availableInterfaces.first
   }
 
   public func closeDefaultInterfaceMonitor(_: LibboxInterfaceUpdateListenerProtocol?) throws {

@@ -203,6 +203,7 @@ class IPhoneWLTStabilityContractTests(unittest.TestCase):
             "case .stop:", 1
         )[0]
         self.assertIn("try await probeTraffic()", ordinary_probe)
+        self.assertIn("guard await profile.status == .connected", ordinary_probe)
         self.assertNotIn("firstTrafficProbeTimeout", ordinary_probe)
         self.assertIn("timeout: Self.firstTrafficProbeTimeout", start_probe)
         self.assertIn("requestTimeout: Self.firstTrafficRequestTimeout", start_probe)
@@ -210,8 +211,8 @@ class IPhoneWLTStabilityContractTests(unittest.TestCase):
         self.assertIn("trafficLogObserver.cancel()", start_probe)
         self.assertIn("requestTimeout: TimeInterval = 10", device_control)
         self.assertIn("probeTraffic(timeout: 12)", device_control)
-        self.assertIn("https://cp.cloudflare.com/generate_204", device_control)
-        self.assertNotIn("https://www.google.com/generate_204", device_control)
+        self.assertIn("https://rozetked.me/", device_control)
+        self.assertIn("(200 ..< 400).contains(response.statusCode)", device_control)
         self.assertIn("|workload)", control)
         self.assertIn("WLT_CONTROL_WORKLOAD_FILE", control)
         self.assertIn("case .workload:", device_control)
@@ -274,6 +275,57 @@ class IPhoneWLTStabilityContractTests(unittest.TestCase):
         ).read_text()
         self.assertIn("shouldDeferAutomaticUpdate(profile)", update_task)
         self.assertIn("extensionProfile.status != .connected", update_task)
+
+    def test_core_wlt_memory_recovery_restarts_provider_and_enables_on_demand(self):
+        provider = (
+            SCRIPTS.parent / "Library" / "Network" / "ExtensionProvider.swift"
+        ).read_text()
+        recovery = provider.split(
+            "private func performWhitelistTransportMemoryRecovery", 1
+        )[1].split("private func whitelistTransportMemoryRecoveryThreshold", 1)[0]
+        self.assertIn("if isCoreWhitelistTransportProfile()", recovery)
+        self.assertIn("cancelTunnelWithError(restartError)", recovery)
+        self.assertIn("memory recovery requesting core provider restart", recovery)
+
+        profile = (
+            SCRIPTS.parent / "Library" / "Network" / "ExtensionProfile.swift"
+        ).read_text()
+        start = profile.split("private func start(", 1)[1].split(
+            "public func reloadService", 1
+        )[0]
+        self.assertIn("whitelistTransportAutoRecovery", start)
+        self.assertIn(
+            "alwaysOn || onDemandEnabled || whitelistTransportAutoRecovery",
+            start,
+        )
+        self.assertIn(
+            "useDefaultRules: alwaysOn || whitelistTransportAutoRecovery",
+            start,
+        )
+
+    def test_default_interface_monitor_uses_active_path_not_list_order(self):
+        platform = (
+            SCRIPTS.parent
+            / "Library"
+            / "Network"
+            / "ExtensionPlatformInterface.swift"
+        ).read_text()
+        update = platform.split(
+            "private func onUpdateDefaultInterface", 1
+        )[1].split("public func closeDefaultInterfaceMonitor", 1)[0]
+        self.assertIn("activeDefaultInterface(path)", update)
+        self.assertIn("path.usesInterfaceType(type)", update)
+        self.assertNotIn("path.availableInterfaces.first\n", update.split(
+            "private func activeDefaultInterface", 1
+        )[0])
+
+    def test_headless_profile_selection_updates_visible_dashboard(self):
+        main_view = (SCRIPTS.parent / "SFI" / "MainView.swift").read_text()
+        control = main_view.split(
+            "if let request = WLTDeviceControl.Request(url: url)", 1
+        )[1].split("if url.host ==", 1)[0]
+        self.assertIn("request.action == .selectProfile", control)
+        self.assertIn("environments.selectedProfileUpdate.send()", control)
 
     def test_deprecated_note_probe_does_not_surface_command_socket_shutdown(self):
         global_checks = (

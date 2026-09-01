@@ -19,9 +19,9 @@ open class ExtensionProvider: NEPacketTunnelProvider {
   private static let whitelistTransportMemoryRecoveryThresholdDefault: UInt64 = 42 * 1024 * 1024
   private static let whitelistTransportMemoryRecoveryUrgentThresholdDefault: UInt64 =
     44 * 1024 * 1024
-  private static let whitelistTransportMemoryRecoveryThresholdCore: UInt64 = 48 * 1024 * 1024
+  private static let whitelistTransportMemoryRecoveryThresholdCore: UInt64 = 45 * 1024 * 1024
   private static let whitelistTransportMemoryRecoveryUrgentThresholdCore: UInt64 =
-    56 * 1024 * 1024
+    47 * 1024 * 1024
   private static let whitelistTransportMemoryRecoveryCooldownDefault: TimeInterval = 20
   private static let whitelistTransportMemoryRecoveryUrgentCooldownDefault: TimeInterval = 15
   private static let whitelistTransportMemoryRecoveryCooldownCore: TimeInterval = 45
@@ -563,6 +563,20 @@ open class ExtensionProvider: NEPacketTunnelProvider {
         memoryRecoveryInProgress = false
       }
       do {
+        if isCoreWhitelistTransportProfile() {
+          let restartError = NSError(
+            domain: "WhitelistTransportMemoryRecovery",
+            code: 1,
+            userInfo: [
+              NSLocalizedDescriptionKey:
+                "Core WLT memory recovery requested a clean provider restart"
+            ]
+          )
+          recordLifecycleIncident(
+            "(packet-tunnel): memory recovery requesting core provider restart reason=\(reason) memory=\(PacketTunnelDiagnostics.residentMemoryDescription())")
+          cancelTunnelWithError(restartError)
+          return
+        }
         try await reloadService()
         recordLifecycleIncident(
           "(packet-tunnel): memory recovery completed reason=\(reason) elapsed=\(formatDuration(Date().timeIntervalSince(recoveryStartedAt))) memory=\(PacketTunnelDiagnostics.residentMemoryDescription())")

@@ -227,6 +227,11 @@ struct MainView: View {
         if let request = WLTDeviceControl.Request(url: url) {
             Task {
                 await WLTDeviceControl.shared.execute(request)
+                if request.action == .selectProfile {
+                    await MainActor.run {
+                        environments.selectedProfileUpdate.send()
+                    }
+                }
             }
             return
         }
