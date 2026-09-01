@@ -327,6 +327,12 @@ class IPhoneWLTStabilityContractTests(unittest.TestCase):
         self.assertIn("request.action == .selectProfile", control)
         self.assertIn("environments.selectedProfileUpdate.send()", control)
 
+        device_control = (SCRIPTS.parent / "SFI" / "WLTDeviceControl.swift").read_text()
+        merged_contract = device_control.split(
+            "private func assertSelectedMergedProfile", 1
+        )[1].split("private func writeProtectedAtomically", 1)[0]
+        self.assertEqual(merged_contract.count('"prefer_first_available"'), 3)
+
     def test_deprecated_note_probe_does_not_surface_command_socket_shutdown(self):
         global_checks = (
             SCRIPTS.parent

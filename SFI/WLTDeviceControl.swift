@@ -1043,8 +1043,11 @@ actor WLTDeviceControl {
         guard
             byTag["direct_or_wlt-ru"]?["type"] as? String == "urltest",
             byTag["direct_or_wlt-ru"]?["outbounds"] as? [String] == ["direct", "vless-wlt-ru"],
+            byTag["direct_or_wlt-ru"]?["prefer_first_available"] as? Bool == true,
             byTag["ru_or_wlt-ru"]?["type"] as? String == "urltest",
+            byTag["ru_or_wlt-ru"]?["prefer_first_available"] as? Bool == true,
             byTag["eu_or_wlt-eu"]?["type"] as? String == "urltest",
+            byTag["eu_or_wlt-eu"]?["prefer_first_available"] as? Bool == true,
             byTag["direct-always"]?["outbounds"] as? [String] == ["direct"]
         else {
             throw ControlError.mergedProfileContractFailed
