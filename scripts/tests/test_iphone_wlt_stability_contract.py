@@ -171,7 +171,11 @@ class IPhoneWLTStabilityContractTests(unittest.TestCase):
             control,
         )
         self.assertIn(
-            'if action in {"start-probe", "workload", "soak"} and result.get("state") == "succeeded":',
+            'if action in {"start-probe", "soak"} and result.get("state") == "succeeded":',
+            control,
+        )
+        self.assertIn(
+            'if action == "workload" and result.get("state") == "succeeded":',
             control,
         )
         self.assertIn('required = {"carrier_ready", "traffic_ready"}', control)
@@ -193,6 +197,11 @@ class IPhoneWLTStabilityContractTests(unittest.TestCase):
         self.assertIn('"transport_counters": result.get("transport_counters")', control)
         self.assertIn('action == "workload"', control)
         self.assertIn("successful WLT workload has non-zero transport counters", control)
+        self.assertIn("WLT_CONTROL_MAX_SUCCESSFUL_RECONNECTS", control)
+        self.assertIn("WLT_CONTROL_MAX_RECONNECT_RETRIES", control)
+        self.assertIn('zero_tolerance = expected_counters - {"reconnects", "reconnect_retries"}', control)
+        self.assertIn("successful WLT workload exceeded reconnect allowance", control)
+        self.assertIn("successful WLT workload exceeded reconnect retry allowance", control)
         self.assertIn("PacketTunnelDiagnostics.observeStartupLog(entry.message)", device_control)
         self.assertIn("firstTrafficProbeTimeout: TimeInterval = 60", device_control)
         self.assertIn("firstTrafficRequestTimeout: TimeInterval = 20", device_control)
@@ -213,7 +222,7 @@ class IPhoneWLTStabilityContractTests(unittest.TestCase):
         self.assertIn("probeTraffic(timeout: 12)", device_control)
         self.assertIn("https://rozetked.me/", device_control)
         self.assertIn("(200 ..< 400).contains(response.statusCode)", device_control)
-        self.assertIn("|workload)", control)
+        self.assertIn("|workload|network-workload)", control)
         self.assertIn("WLT_CONTROL_WORKLOAD_FILE", control)
         self.assertIn("case .workload:", device_control)
         self.assertIn("selectWorkloadRoute(plan.route)", device_control)

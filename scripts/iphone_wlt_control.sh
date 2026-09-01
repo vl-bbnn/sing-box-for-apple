@@ -18,6 +18,8 @@ profile_export_file="${WLT_CONTROL_PROFILE_EXPORT_FILE:-}"
 identity_ring_dir="${WLT_CONTROL_IDENTITY_RING_DIR:-}"
 soak_seconds="${WLT_CONTROL_SOAK_SECONDS:-1800}"
 soak_interval_seconds="${WLT_CONTROL_SOAK_INTERVAL_SECONDS:-30}"
+max_successful_reconnects="${WLT_CONTROL_MAX_SUCCESSFUL_RECONNECTS:-0}"
+max_reconnect_retries="${WLT_CONTROL_MAX_RECONNECT_RETRIES:-0}"
 
 log() {
     printf '[wlt-device-control] %s\n' "$*" >&2
@@ -80,6 +82,14 @@ run() {
     validate_integer "$timeout_seconds" "WLT_CONTROL_TIMEOUT_SECONDS"
     validate_integer "$launch_timeout_seconds" "WLT_CONTROL_LAUNCH_TIMEOUT_SECONDS"
     validate_integer "$copy_timeout_seconds" "WLT_CONTROL_COPY_TIMEOUT_SECONDS"
+    [[ "$max_successful_reconnects" =~ ^[0-9]+$ ]] \
+        || die "WLT_CONTROL_MAX_SUCCESSFUL_RECONNECTS must be a non-negative integer"
+    [[ "$max_reconnect_retries" =~ ^[0-9]+$ ]] \
+        || die "WLT_CONTROL_MAX_RECONNECT_RETRIES must be a non-negative integer"
+    if (( max_successful_reconnects > 0 || max_reconnect_retries > 0 )) \
+        && [[ "$action" != "workload" ]]; then
+        die "WLT reconnect allowances are valid only for workload"
+    fi
     if [[ "$action" == "soak" ]]; then
         validate_integer "$soak_seconds" "WLT_CONTROL_SOAK_SECONDS"
         validate_integer "$soak_interval_seconds" "WLT_CONTROL_SOAK_INTERVAL_SECONDS"
@@ -424,11 +434,13 @@ PY
         chmod 600 "$profile_export_file"
     fi
 
-    /usr/bin/python3 - "$local_result" "$request_id" "$action" "$candidate_file" <<'PY'
+    /usr/bin/python3 - "$local_result" "$request_id" "$action" "$candidate_file" "$max_successful_reconnects" "$max_reconnect_retries" <<'PY'
 import json
 import sys
 
-path, request_id, action, candidate_path = sys.argv[1:]
+path, request_id, action, candidate_path, max_successful_reconnects_raw, max_reconnect_retries_raw = sys.argv[1:]
+max_successful_reconnects = int(max_successful_reconnects_raw)
+max_reconnect_retries = int(max_reconnect_retries_raw)
 result = json.load(open(path))
 if result.get("schema") not in {1, 2, 3, 4, 5, 6, 7}:
     raise SystemExit("unexpected result schema")
@@ -519,8 +531,15 @@ if action == "workload" and result.get("state") == "succeeded":
     counters = result.get("transport_counters") or {}
     if set(counters) != expected_counters:
         raise SystemExit("successful WLT workload lacks zero-tolerance counters")
-    if any(not isinstance(value, int) or value != 0 for value in counters.values()):
+    if any(not isinstance(value, int) or value < 0 for value in counters.values()):
+        raise SystemExit("successful WLT workload has invalid transport counters")
+    zero_tolerance = expected_counters - {"reconnects", "reconnect_retries"}
+    if any(counters[name] != 0 for name in zero_tolerance):
         raise SystemExit("successful WLT workload has non-zero transport counters")
+    if counters["reconnects"] > max_successful_reconnects:
+        raise SystemExit("successful WLT workload exceeded reconnect allowance")
+    if counters["reconnect_retries"] > max_reconnect_retries:
+        raise SystemExit("successful WLT workload exceeded reconnect retry allowance")
 print(json.dumps(allowed, sort_keys=True, separators=(",", ":")))
 if result.get("state") != "succeeded":
     raise SystemExit(1)
