@@ -90,9 +90,11 @@ actor WLTDeviceControl {
         case start
         case startProbe = "start-probe"
         case status
+        case groupStatus = "group-status"
         case stop
         case soak
         case workload
+        case networkWorkload = "network-workload"
     }
 
     private struct ProfilePlan: Codable {
@@ -153,6 +155,12 @@ actor WLTDeviceControl {
         let probes: [WorkloadProbeResult]
     }
 
+    private struct GroupSelection: Codable, Sendable {
+        let tag: String
+        let selected: String
+        let available: [String]
+    }
+
     private struct SoakProbeSample: Codable {
         let offsetMS: Int64
         let success: Bool
@@ -200,6 +208,7 @@ actor WLTDeviceControl {
         let runtimeParameters: WhitelistTransportConfig.RuntimeParameters?
         let workloadRoute: String?
         let workloadProbes: [WorkloadProbeResult]?
+        let groupSelections: [GroupSelection]?
         let transportCounters: [String: Int64]?
         let identityRing: IdentityRingStatus?
         let identityRingImport: IdentityRingImportStatus?
@@ -230,6 +239,7 @@ actor WLTDeviceControl {
             case runtimeParameters = "runtime_parameters"
             case workloadRoute = "workload_route"
             case workloadProbes = "workload_probes"
+            case groupSelections = "group_selections"
             case transportCounters = "transport_counters"
             case identityRing = "identity_ring"
             case identityRingImport = "identity_ring_import"
@@ -299,6 +309,7 @@ actor WLTDeviceControl {
         let soak: SoakOutcome?
         let runtimeParameters: WhitelistTransportConfig.RuntimeParameters?
         let workload: WorkloadOutcome?
+        let groupSelections: [GroupSelection]?
         let transportCounters: [String: Int64]?
         let identityRing: IdentityRingStatus?
         let identityRingImport: IdentityRingImportStatus?
@@ -310,6 +321,7 @@ actor WLTDeviceControl {
             soak: SoakOutcome?,
             runtimeParameters: WhitelistTransportConfig.RuntimeParameters?,
             workload: WorkloadOutcome? = nil,
+            groupSelections: [GroupSelection]? = nil,
             transportCounters: [String: Int64]? = nil,
             identityRing: IdentityRingStatus? = nil,
             identityRingImport: IdentityRingImportStatus? = nil
@@ -320,6 +332,7 @@ actor WLTDeviceControl {
             self.soak = soak
             self.runtimeParameters = runtimeParameters
             self.workload = workload
+            self.groupSelections = groupSelections
             self.transportCounters = transportCounters
             self.identityRing = identityRing
             self.identityRingImport = identityRingImport
@@ -400,7 +413,7 @@ actor WLTDeviceControl {
         isRunning = true
         defer { isRunning = false }
         let keepsDeviceAwake = switch request.action {
-        case .bootstrapProfile, .upsertProfile, .start, .startProbe, .soak, .workload:
+        case .bootstrapProfile, .upsertProfile, .start, .startProbe, .soak, .workload, .networkWorkload:
             true
         default:
             false
@@ -648,6 +661,18 @@ actor WLTDeviceControl {
                 soak: nil,
                 runtimeParameters: nil
             )
+        case .groupStatus:
+            guard await profile.status == .connected else {
+                throw ControlError.probeRequiresConnectedVPN
+            }
+            return Outcome(
+                status: .connected,
+                vpnStartupMS: nil,
+                probeElapsedMS: nil,
+                soak: nil,
+                runtimeParameters: nil,
+                groupSelections: try await loadMergedGroupSelections()
+            )
         case .identityRingStatus:
             return Outcome(
                 status: await profile.status,
@@ -787,6 +812,19 @@ actor WLTDeviceControl {
                 runtimeParameters: nil,
                 workload: workload,
                 transportCounters: transportCounters
+            )
+        case .networkWorkload:
+            guard let workloadPlan else {
+                throw ControlError.invalidWorkload
+            }
+            let workload = try await runWorkload(workloadPlan)
+            return Outcome(
+                status: await profile.status,
+                vpnStartupMS: nil,
+                probeElapsedMS: nil,
+                soak: nil,
+                runtimeParameters: nil,
+                workload: workload
             )
         }
     }
@@ -1437,6 +1475,52 @@ actor WLTDeviceControl {
         throw ControlError.probeFailed
     }
 
+    private func loadMergedGroupSelections() async throws -> [GroupSelection] {
+        let expected = Set([
+            "direct_or_wlt-ru",
+            "ru_or_wlt-ru",
+            "eu_or_wlt-eu",
+        ])
+        let commandClient = await MainActor.run { () -> CommandClient in
+            let client = CommandClient(.groups)
+            client.connect()
+            return client
+        }
+        defer {
+            Task { @MainActor in
+                commandClient.disconnect()
+            }
+        }
+
+        let deadline = Date().addingTimeInterval(12)
+        while Date() < deadline {
+            let selections = await MainActor.run { () -> [GroupSelection] in
+                guard let groups = commandClient.groups else { return [] }
+                return groups.compactMap { group in
+                    guard expected.contains(group.tag) else { return nil }
+                    let iterator = group.getItems()
+                    var available: [String] = []
+                    while iterator?.hasNext() == true {
+                        guard let item = iterator?.next() else { continue }
+                        if item.urlTestDelay > 0 {
+                            available.append(item.tag)
+                        }
+                    }
+                    return GroupSelection(
+                        tag: group.tag,
+                        selected: group.selected,
+                        available: available
+                    )
+                }.sorted { $0.tag < $1.tag }
+            }
+            if selections.count == expected.count {
+                return selections
+            }
+            try await Task.sleep(nanoseconds: 200_000_000)
+        }
+        throw ControlError.timeout
+    }
+
     private func writeResult(
         request: Request,
         receivedAt: Int64,
@@ -1473,6 +1557,7 @@ actor WLTDeviceControl {
             runtimeParameters: outcome?.runtimeParameters,
             workloadRoute: outcome?.workload?.route,
             workloadProbes: outcome?.workload?.probes,
+            groupSelections: outcome?.groupSelections,
             transportCounters: outcome?.transportCounters,
             identityRing: outcome?.identityRing,
             identityRingImport: outcome?.identityRingImport,
@@ -1732,7 +1817,7 @@ actor WLTDeviceControl {
     }
 
     private func loadWorkloadPlan(for action: Action, at url: URL) throws -> WorkloadPlan? {
-        guard action == .workload else {
+        guard action == .workload || action == .networkWorkload else {
             return nil
         }
         guard FileManager.default.fileExists(atPath: url.path) else {

@@ -66,8 +66,8 @@ validate_integer() {
 run() {
     local action="${1:-}"
     case "$action" in
-        bootstrap-profile|upsert-profile|export-profile|select-profile|assert-merged-profile|ping|probe|refresh-profile|import-identity-ring|identity-ring-status|arm-identity-ring-fault|start|start-probe|status|stop|soak|workload) ;;
-        *) die "usage: $0 <bootstrap-profile|upsert-profile|export-profile|select-profile|assert-merged-profile|ping|probe|refresh-profile|import-identity-ring|identity-ring-status|arm-identity-ring-fault|start|start-probe|status|stop|soak|workload>" ;;
+        bootstrap-profile|upsert-profile|export-profile|select-profile|assert-merged-profile|ping|probe|refresh-profile|import-identity-ring|identity-ring-status|arm-identity-ring-fault|start|start-probe|status|group-status|stop|soak|workload|network-workload) ;;
+        *) die "usage: $0 <bootstrap-profile|upsert-profile|export-profile|select-profile|assert-merged-profile|ping|probe|refresh-profile|import-identity-ring|identity-ring-status|arm-identity-ring-fault|start|start-probe|status|group-status|stop|soak|workload|network-workload>" ;;
     esac
     [[ -n "${WLT_APP_BUNDLE_ID:-}" ]] || die "set WLT_APP_BUNDLE_ID to the installed SFI Dev bundle identifier"
     [[ "$WLT_APP_BUNDLE_ID" =~ ^[A-Za-z0-9.-]+$ ]] || die "WLT_APP_BUNDLE_ID has an invalid format"
@@ -121,8 +121,8 @@ PY
     fi
 
     if [[ -n "$workload_file" ]]; then
-        [[ "$action" == "workload" ]] \
-            || die "WLT_CONTROL_WORKLOAD_FILE is valid only for workload"
+        [[ "$action" == "workload" || "$action" == "network-workload" ]] \
+            || die "WLT_CONTROL_WORKLOAD_FILE is valid only for workload/network-workload"
         [[ -f "$workload_file" ]] || die "missing workload file: $workload_file"
         /usr/bin/python3 - "$workload_file" <<'PY'
 import json
@@ -168,8 +168,8 @@ for probe in probes:
     if not isinstance(statuses, list) or any(not isinstance(code, int) or not 100 <= code <= 599 for code in statuses):
         raise SystemExit("invalid workload accepted_status_codes")
 PY
-    elif [[ "$action" == "workload" ]]; then
-        die "WLT_CONTROL_WORKLOAD_FILE is required for workload"
+    elif [[ "$action" == "workload" || "$action" == "network-workload" ]]; then
+        die "WLT_CONTROL_WORKLOAD_FILE is required for workload/network-workload"
     fi
     if [[ -n "$profile_file" ]]; then
         [[ "$action" == "bootstrap-profile" || "$action" == "upsert-profile" ]] \
@@ -457,6 +457,7 @@ allowed = {
     "runtime_parameters": result.get("runtime_parameters"),
     "workload_route": result.get("workload_route"),
     "workload_probes": result.get("workload_probes"),
+    "group_selections": result.get("group_selections"),
     "transport_counters": result.get("transport_counters"),
     "identity_ring": result.get("identity_ring"),
     "identity_ring_import": result.get("identity_ring_import"),
@@ -490,7 +491,7 @@ if action == "import-identity-ring" and result.get("state") == "succeeded":
         or ring.get("bootstrap_consumed")
     ):
         raise SystemExit("identity ring import left stale state")
-if action in {"start-probe", "workload", "soak"} and result.get("state") == "succeeded":
+if action in {"start-probe", "soak"} and result.get("state") == "succeeded":
     milestones = set(result.get("startup_milestones") or [])
     required = {"carrier_ready", "traffic_ready"}
     if not required.issubset(milestones):
@@ -498,6 +499,11 @@ if action in {"start-probe", "workload", "soak"} and result.get("state") == "suc
     if "direct_fallback" in milestones:
         raise SystemExit("successful WLT action used direct-upstream fallback")
 if action == "workload" and result.get("state") == "succeeded":
+    milestones = set(result.get("startup_milestones") or [])
+    if not {"carrier_ready", "core_started"}.issubset(milestones):
+        raise SystemExit("successful WLT workload lacks carrier startup evidence")
+    if "direct_fallback" in milestones:
+        raise SystemExit("successful WLT workload used direct-upstream fallback")
     expected_counters = {
         "failed",
         "rejected",
