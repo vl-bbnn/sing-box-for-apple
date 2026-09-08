@@ -79,6 +79,7 @@ actor WLTDeviceControl {
         case bootstrapProfile = "bootstrap-profile"
         case upsertProfile = "upsert-profile"
         case exportProfile = "export-profile"
+        case exportState = "export-state"
         case ping
         case probe
         case refreshProfile = "refresh-profile"
@@ -91,6 +92,7 @@ actor WLTDeviceControl {
         case startProbe = "start-probe"
         case status
         case groupStatus = "group-status"
+        case routeDiagnostics = "route-diagnostics"
         case stop
         case soak
         case workload
@@ -161,6 +163,24 @@ actor WLTDeviceControl {
         let available: [String]
     }
 
+    private struct RouteDiagnostics: Codable, Sendable {
+        let instagramFamily: [String: Int]
+        let metaFamily: [String: Int]
+        let tiktokFamily: [String: Int]
+        let youtubeFamily: [String: Int]
+        let githubFamily: [String: Int]
+        let neutralExample: [String: Int]
+
+        enum CodingKeys: String, CodingKey {
+            case instagramFamily = "instagram-family"
+            case metaFamily = "meta-family"
+            case tiktokFamily = "tiktok-family"
+            case youtubeFamily = "youtube-family"
+            case githubFamily = "github-family"
+            case neutralExample = "neutral-example"
+        }
+    }
+
     private struct SoakProbeSample: Codable {
         let offsetMS: Int64
         let success: Bool
@@ -209,6 +229,8 @@ actor WLTDeviceControl {
         let workloadRoute: String?
         let workloadProbes: [WorkloadProbeResult]?
         let groupSelections: [GroupSelection]?
+        let routeDiagnostics: RouteDiagnostics?
+        let routeDiagnosticsScope: String?
         let transportCounters: [String: Int64]?
         let identityRing: IdentityRingStatus?
         let identityRingImport: IdentityRingImportStatus?
@@ -240,6 +262,8 @@ actor WLTDeviceControl {
             case workloadRoute = "workload_route"
             case workloadProbes = "workload_probes"
             case groupSelections = "group_selections"
+            case routeDiagnostics = "route_diagnostics"
+            case routeDiagnosticsScope = "route_diagnostics_scope"
             case transportCounters = "transport_counters"
             case identityRing = "identity_ring"
             case identityRingImport = "identity_ring_import"
@@ -310,6 +334,7 @@ actor WLTDeviceControl {
         let runtimeParameters: WhitelistTransportConfig.RuntimeParameters?
         let workload: WorkloadOutcome?
         let groupSelections: [GroupSelection]?
+        let routeDiagnostics: RouteDiagnostics?
         let transportCounters: [String: Int64]?
         let identityRing: IdentityRingStatus?
         let identityRingImport: IdentityRingImportStatus?
@@ -322,6 +347,7 @@ actor WLTDeviceControl {
             runtimeParameters: WhitelistTransportConfig.RuntimeParameters?,
             workload: WorkloadOutcome? = nil,
             groupSelections: [GroupSelection]? = nil,
+            routeDiagnostics: RouteDiagnostics? = nil,
             transportCounters: [String: Int64]? = nil,
             identityRing: IdentityRingStatus? = nil,
             identityRingImport: IdentityRingImportStatus? = nil
@@ -333,6 +359,7 @@ actor WLTDeviceControl {
             self.runtimeParameters = runtimeParameters
             self.workload = workload
             self.groupSelections = groupSelections
+            self.routeDiagnostics = routeDiagnostics
             self.transportCounters = transportCounters
             self.identityRing = identityRing
             self.identityRingImport = identityRingImport
@@ -382,6 +409,9 @@ actor WLTDeviceControl {
         case identityRingImportInstallFailed = 21
         case transportCountersUnavailable = 22
         case mergedProfileContractFailed = 23
+        case stateExportRequiresStoppedVPN = 24
+        case stateExportInvalidProfilePath = 25
+        case stateExportChangedDuringCapture = 26
     }
 
     private var isRunning = false
@@ -392,6 +422,7 @@ actor WLTDeviceControl {
         let workloadURL = workloadPlanURL(request.id)
         let profileURL = profilePlanURL(request.id)
         let exportURL = profileExportURL(request.id)
+        let stateExportURL = stateExportURL(request.id)
         let identityRingImportURLs = identityRingImportURLs(request.id)
         guard !isRunning else {
             try? FileManager.default.removeItem(at: candidateURL)
@@ -438,17 +469,20 @@ actor WLTDeviceControl {
         pruneWorkloadPlans(excluding: workloadURL)
         pruneProfilePlans(excluding: profileURL)
         pruneProfileExports(excluding: exportURL)
+        pruneStateExports(excluding: stateExportURL)
         pruneIdentityRingImports(excluding: identityRingImportURLs)
         defer { try? FileManager.default.removeItem(at: candidateURL) }
         defer { try? FileManager.default.removeItem(at: workloadURL) }
         defer { try? FileManager.default.removeItem(at: profileURL) }
         defer { identityRingImportURLs.forEach { try? FileManager.default.removeItem(at: $0) } }
 
+        var loadedRuntimeParameters: WhitelistTransportConfig.RuntimeParameters?
         do {
             let runtimeParameters = try loadRuntimeCandidate(
                 for: request.action,
                 at: candidateURL
             )
+            loadedRuntimeParameters = runtimeParameters
             let workloadPlan = try loadWorkloadPlan(
                 for: request.action,
                 at: workloadURL
@@ -484,7 +518,15 @@ actor WLTDeviceControl {
                 receivedAt: receivedAt,
                 state: "failed",
                 vpnStatus: currentStatus.map(statusDescription) ?? "unknown",
-                outcome: nil,
+                outcome: loadedRuntimeParameters.map {
+                    Outcome(
+                        status: currentStatus,
+                        vpnStartupMS: nil,
+                        probeElapsedMS: nil,
+                        soak: nil,
+                        runtimeParameters: $0
+                    )
+                },
                 networkInitial: nil,
                 networkFinal: networkFinal,
                 error: error
@@ -574,6 +616,20 @@ actor WLTDeviceControl {
                 runtimeParameters: nil
             )
         }
+        if action == .exportState {
+            let currentStatus = await loadCurrentStatus()
+            guard currentStatus == .disconnected else {
+                throw ControlError.stateExportRequiresStoppedVPN
+            }
+            try await exportState(to: stateExportURL(request.id))
+            return Outcome(
+                status: currentStatus,
+                vpnStartupMS: nil,
+                probeElapsedMS: nil,
+                soak: nil,
+                runtimeParameters: nil
+            )
+        }
         if action == .bootstrapProfile {
             guard let profilePlan else {
                 throw ControlError.invalidProfilePlan
@@ -610,7 +666,7 @@ actor WLTDeviceControl {
         }
 
         switch action {
-        case .bootstrapProfile, .upsertProfile, .exportProfile, .selectProfile, .assertMergedProfile:
+        case .bootstrapProfile, .upsertProfile, .exportProfile, .exportState, .selectProfile, .assertMergedProfile:
             preconditionFailure("profile actions are handled before Network Extension loading")
         case .ping:
             return Outcome(
@@ -665,13 +721,27 @@ actor WLTDeviceControl {
             guard await profile.status == .connected else {
                 throw ControlError.probeRequiresConnectedVPN
             }
+            let groupSelections = try await loadMergedGroupSelections()
             return Outcome(
                 status: .connected,
                 vpnStartupMS: nil,
                 probeElapsedMS: nil,
                 soak: nil,
                 runtimeParameters: nil,
-                groupSelections: try await loadMergedGroupSelections()
+                groupSelections: groupSelections,
+                routeDiagnostics: await loadRouteDiagnostics()
+            )
+        case .routeDiagnostics:
+            guard await profile.status == .connected else {
+                throw ControlError.probeRequiresConnectedVPN
+            }
+            return Outcome(
+                status: .connected,
+                vpnStartupMS: nil,
+                probeElapsedMS: nil,
+                soak: nil,
+                runtimeParameters: nil,
+                routeDiagnostics: await loadRouteDiagnostics()
             )
         case .identityRingStatus:
             return Outcome(
@@ -719,6 +789,16 @@ actor WLTDeviceControl {
                 profile,
                 runtimeParameters: runtimeParameters
             )
+            // A clean WLT profile has a fixed whitelist-exit selector.  Its
+            // first child can be the RU path, while the content gate asks for
+            // the EU path immediately afterwards.  Selecting EU only after
+            // the first probe creates an avoidable live-path handoff and can
+            // surface mux-open errors on the first media workload.  Resolve
+            // the clean selector before the initial traffic probe; merged
+            // profiles keep their independent urltest groups unchanged.
+            if try await selectedProfileUsesCleanWLT() {
+                try await selectWorkloadRoute("eu")
+            }
             let startupMS = max(0, unixMilliseconds() - startedAt)
             let trafficLogClient = CommandClient(.log, logMaxLines: 1_000)
             trafficLogClient.connect()
@@ -824,7 +904,8 @@ actor WLTDeviceControl {
                 probeElapsedMS: nil,
                 soak: nil,
                 runtimeParameters: nil,
-                workload: workload
+                workload: workload,
+                routeDiagnostics: await loadRouteDiagnostics()
             )
         }
     }
@@ -1092,6 +1173,32 @@ actor WLTDeviceControl {
         }
     }
 
+    private func selectedProfileUsesCleanWLT() async throws -> Bool {
+        let profileID = await SharedPreferences.selectedProfileID.get()
+        guard let profile = try await ProfileManager.get(profileID) else {
+            throw ControlError.selectedProfileUnavailable
+        }
+        let sharedDirectory = FilePath.sharedDirectory.standardizedFileURL
+        let profileURL: URL
+        if profile.path.hasPrefix("/") {
+            profileURL = URL(fileURLWithPath: profile.path).standardizedFileURL
+        } else {
+            profileURL = sharedDirectory.appendingPathComponent(profile.path).standardizedFileURL
+        }
+        guard profileURL.path.hasPrefix(sharedDirectory.path + "/") else {
+            throw ControlError.mergedProfileContractFailed
+        }
+        let data = try Data(contentsOf: profileURL)
+        guard
+            let root = try JSONSerialization.jsonObject(with: data) as? [String: Any],
+            let route = root["route"] as? [String: Any],
+            let final = route["final"] as? String
+        else {
+            throw ControlError.mergedProfileContractFailed
+        }
+        return final == "whitelist-exit"
+    }
+
     private func writeProtectedAtomically(_ data: Data, to destination: URL) throws {
         let fileManager = FileManager.default
         let directory = destination.deletingLastPathComponent()
@@ -1277,12 +1384,13 @@ actor WLTDeviceControl {
         logClient.connect()
         defer { logClient.disconnect() }
         try? await Task.sleep(nanoseconds: 500_000_000)
-        let initialCount = await MainActor.run { logClient.logList.count }
+        // The log buffer evicts old entries at its limit, so its count is not a cursor.
+        let initialLogIDs = await MainActor.run { Set(logClient.logList.map(\.id)) }
         let workload = try await runWorkload(plan)
         let deadline = Date().addingTimeInterval(35)
         while Date() < deadline {
             let messages = await MainActor.run {
-                logClient.logList.dropFirst(initialCount).map(\.message)
+                logClient.logList.filter { !initialLogIDs.contains($0.id) }.map(\.message)
             }
             for message in messages.reversed() where message.contains("wlt service stats ") {
                 var counters: [String: Int64] = [:]
@@ -1307,13 +1415,18 @@ actor WLTDeviceControl {
     }
 
     private func selectWorkloadRoute(_ route: String) async throws {
-        guard route == "eu" else {
+        guard route == "eu" || route == "ru" else {
             throw ControlError.invalidWorkload
         }
-        let selections = [
-            ("whitelist-exit", "eu"),
-            ("eu_or_wlt-eu", "vless-wlt-eu"),
-        ]
+        let selections: [(String, String)] = route == "ru"
+            ? [
+                ("whitelist-exit", "ru"),
+                ("ru_or_wlt-ru", "vless-wlt-ru"),
+            ]
+            : [
+                ("whitelist-exit", "eu"),
+                ("eu_or_wlt-eu", "vless-wlt-eu"),
+            ]
         var selected = false
         for (group, outbound) in selections {
             do {
@@ -1521,6 +1634,86 @@ actor WLTDeviceControl {
         throw ControlError.timeout
     }
 
+    private func loadRouteDiagnostics() async -> RouteDiagnostics {
+        let allowedCategories = [
+            "instagram-family", "meta-family", "tiktok-family",
+            "youtube-family", "github-family", "neutral-example",
+        ]
+        let allowedOutbounds = ["wlt-eu", "wlt-ru", "direct", "other"]
+        let allowedNetworks = ["tcp", "udp"]
+        let allowedAttempts = ["primary", "fallback"]
+        let commandClient = await MainActor.run { () -> CommandClient in
+            let client = CommandClient(.log, logMaxLines: 3_000)
+            client.connect()
+            return client
+        }
+        defer {
+            Task { @MainActor in
+                commandClient.disconnect()
+            }
+        }
+        let deadline = Date().addingTimeInterval(2)
+        while Date() < deadline {
+            let connected = await MainActor.run { commandClient.isConnected }
+            if connected {
+                try? await Task.sleep(nanoseconds: 300_000_000)
+                break
+            }
+            try? await Task.sleep(nanoseconds: 100_000_000)
+        }
+        let messages = await MainActor.run { commandClient.logList.map(\.message) }
+        var counts: [String: [String: Int]] = [
+            "instagram-family": [:],
+            "meta-family": [:],
+            "tiktok-family": [:],
+            "youtube-family": [:],
+            "github-family": [:],
+            "neutral-example": [:],
+        ]
+        for message in messages {
+            guard message.components(separatedBy: "wlt-route-leaf-category=").count == 2,
+                  !message.contains("wlt-route-policy-category="),
+                  !message.contains("wlt-route-category=")
+            else { continue }
+            for category in allowedCategories {
+                let marker = "wlt-route-leaf-category=\(category) "
+                guard let markerRange = message.range(of: marker) else { continue }
+                let remainder = message[markerRange.upperBound...]
+                let allowedFieldNames = ["outbound-class", "network", "attempt"]
+                var fields: [String: String] = [:]
+                var malformed = false
+                for token in remainder.split(whereSeparator: \.isWhitespace) {
+                    let parts = token.split(separator: "=", maxSplits: 1, omittingEmptySubsequences: false)
+                    guard parts.count == 2 else {
+                        malformed = true
+                        break
+                    }
+                    let name = String(parts[0])
+                    let value = String(parts[1])
+                    guard allowedFieldNames.contains(name), !value.isEmpty, fields[name] == nil else {
+                        malformed = true
+                        break
+                    }
+                    fields[name] = value
+                }
+                guard !malformed, fields.count == allowedFieldNames.count,
+                      let outbound = fields["outbound-class"], allowedOutbounds.contains(outbound),
+                      let network = fields["network"], allowedNetworks.contains(network),
+                      let attempt = fields["attempt"], allowedAttempts.contains(attempt)
+                else { continue }
+                counts[category, default: [:]][outbound, default: 0] += 1
+            }
+        }
+        return RouteDiagnostics(
+            instagramFamily: counts["instagram-family"] ?? [:],
+            metaFamily: counts["meta-family"] ?? [:],
+            tiktokFamily: counts["tiktok-family"] ?? [:],
+            youtubeFamily: counts["youtube-family"] ?? [:],
+            githubFamily: counts["github-family"] ?? [:],
+            neutralExample: counts["neutral-example"] ?? [:]
+        )
+    }
+
     private func writeResult(
         request: Request,
         receivedAt: Int64,
@@ -1558,6 +1751,8 @@ actor WLTDeviceControl {
             workloadRoute: outcome?.workload?.route,
             workloadProbes: outcome?.workload?.probes,
             groupSelections: outcome?.groupSelections,
+            routeDiagnostics: outcome?.routeDiagnostics,
+            routeDiagnosticsScope: outcome?.routeDiagnostics == nil ? nil : "leaf_selection",
             transportCounters: outcome?.transportCounters,
             identityRing: outcome?.identityRing,
             identityRingImport: outcome?.identityRingImport,
@@ -1639,6 +1834,163 @@ actor WLTDeviceControl {
             "wlt-test-profile-export-\(requestID.uuidString.lowercased()).json",
             isDirectory: false
         )
+    }
+
+    private func stateExportURL(_ requestID: UUID) -> URL {
+        FilePath.cacheDirectory.appendingPathComponent(
+            "wlt-test-state-export-\(requestID.uuidString.lowercased())",
+            isDirectory: true
+        )
+    }
+
+    private func exportState(to destination: URL) async throws {
+        let fileManager = FileManager.default
+        let shared = FilePath.sharedDirectory.standardizedFileURL
+        let profiles = (try await ProfileManager.list()).sorted { $0.mustID < $1.mustID }
+        guard !profiles.isEmpty, profiles.count <= 64 else {
+            throw ControlError.stateExportChangedDuringCapture
+        }
+
+        struct Captured {
+            let databasePath: String
+            let relativePath: String
+            let main: Data
+            let lastKnownGood: Data?
+        }
+        func resolve(_ rawPath: String) throws -> (URL, String) {
+            let url = rawPath.hasPrefix("/")
+                ? URL(fileURLWithPath: rawPath).standardizedFileURL
+                : shared.appendingPathComponent(rawPath).standardizedFileURL
+            guard url.path.hasPrefix(shared.path + "/") else {
+                throw ControlError.stateExportInvalidProfilePath
+            }
+            guard url.resolvingSymlinksInPath() == url else {
+                throw ControlError.stateExportInvalidProfilePath
+            }
+            let values = try url.resourceValues(forKeys: [.isRegularFileKey, .isSymbolicLinkKey])
+            guard values.isRegularFile == true, values.isSymbolicLink != true else {
+                throw ControlError.stateExportInvalidProfilePath
+            }
+            return (url, String(url.path.dropFirst(shared.path.count + 1)))
+        }
+        func readCapture() throws -> [Captured] {
+            var seen = Set<String>()
+            var totalBytes = 0
+            return try profiles.map { profile in
+                let (url, relativePath) = try resolve(profile.path)
+                guard seen.insert(relativePath).inserted else {
+                    throw ControlError.stateExportInvalidProfilePath
+                }
+                let mainSize = try url.resourceValues(forKeys: [.fileSizeKey]).fileSize
+                guard let mainSize, mainSize <= 16 * 1_024 * 1_024 else {
+                    throw ControlError.stateExportChangedDuringCapture
+                }
+                let main = try Data(contentsOf: url)
+                let lastKnownGoodURL = URL(fileURLWithPath: url.path + ".last-known-good")
+                let lastKnownGood: Data?
+                if let values = try? lastKnownGoodURL.resourceValues(forKeys: [.isSymbolicLinkKey]),
+                   values.isSymbolicLink == true
+                {
+                    throw ControlError.stateExportInvalidProfilePath
+                }
+                if fileManager.fileExists(atPath: lastKnownGoodURL.path) {
+                    let values = try lastKnownGoodURL.resourceValues(
+                        forKeys: [.isRegularFileKey, .isSymbolicLinkKey, .fileSizeKey]
+                    )
+                    guard lastKnownGoodURL.resolvingSymlinksInPath() == lastKnownGoodURL,
+                          values.isRegularFile == true,
+                          values.isSymbolicLink != true,
+                          let fileSize = values.fileSize,
+                          fileSize <= 16 * 1_024 * 1_024
+                    else {
+                        throw ControlError.stateExportInvalidProfilePath
+                    }
+                    lastKnownGood = try Data(contentsOf: lastKnownGoodURL)
+                } else {
+                    lastKnownGood = nil
+                }
+                guard main.count <= 16 * 1_024 * 1_024,
+                      (lastKnownGood?.count ?? 0) <= 16 * 1_024 * 1_024
+                else {
+                    throw ControlError.stateExportChangedDuringCapture
+                }
+                totalBytes += main.count + (lastKnownGood?.count ?? 0)
+                guard totalBytes <= 32 * 1_024 * 1_024 else {
+                    throw ControlError.stateExportChangedDuringCapture
+                }
+                return Captured(databasePath: profile.path, relativePath: relativePath,
+                                main: main, lastKnownGood: lastKnownGood)
+            }
+        }
+        func digest(_ data: Data) -> String {
+            SHA256.hash(data: data).map { String(format: "%02x", $0) }.joined()
+        }
+
+        let before = try readCapture()
+        try fileManager.createDirectory(
+            at: destination,
+            withIntermediateDirectories: false,
+            attributes: [.posixPermissions: 0o700,
+                         .protectionKey: FileProtectionType.completeUntilFirstUserAuthentication]
+        )
+        let databaseURL = destination.appendingPathComponent("settings.db")
+        let databasePaths = try await ProfileManager.backupProfileDatabase(to: databaseURL)
+        try fileManager.setAttributes(
+            [.posixPermissions: 0o600,
+             .protectionKey: FileProtectionType.completeUntilFirstUserAuthentication],
+            ofItemAtPath: databaseURL.path
+        )
+        let after = try readCapture()
+        guard before.map(\.databasePath) == databasePaths,
+              before.count == after.count,
+              before.indices.allSatisfy({ index in
+                  before[index].databasePath == after[index].databasePath
+                      && before[index].relativePath == after[index].relativePath
+                      && before[index].main == after[index].main
+                      && before[index].lastKnownGood == after[index].lastKnownGood
+              })
+        else {
+            throw ControlError.stateExportChangedDuringCapture
+        }
+
+        let filesURL = destination.appendingPathComponent("configs", isDirectory: true)
+        try fileManager.createDirectory(at: filesURL, withIntermediateDirectories: false,
+                                        attributes: [.posixPermissions: 0o700])
+        var entries: [[String: Any]] = []
+        for (index, capture) in before.enumerated() {
+            let base = String(format: "%03d", index)
+            let mainName = "\(base).json"
+            let mainURL = filesURL.appendingPathComponent(mainName)
+            try writeProtectedAtomically(capture.main, to: mainURL)
+            try fileManager.setAttributes([.posixPermissions: 0o600], ofItemAtPath: mainURL.path)
+            var entry: [String: Any] = [
+                "source_relative_path": capture.relativePath,
+                "database_path": capture.databasePath,
+                "main": ["path": "configs/\(mainName)", "bytes": capture.main.count,
+                         "sha256": digest(capture.main)],
+                "last_known_good_present": capture.lastKnownGood != nil,
+            ]
+            if let lkg = capture.lastKnownGood {
+                let lkgName = "\(base).last-known-good.json"
+                let lkgURL = filesURL.appendingPathComponent(lkgName)
+                try writeProtectedAtomically(lkg, to: lkgURL)
+                try fileManager.setAttributes([.posixPermissions: 0o600], ofItemAtPath: lkgURL.path)
+                entry["last_known_good"] = ["path": "configs/\(lkgName)", "bytes": lkg.count,
+                                             "sha256": digest(lkg)]
+            }
+            entries.append(entry)
+        }
+        let databaseData = try Data(contentsOf: databaseURL)
+        let manifest: [String: Any] = [
+            "schema": 1,
+            "database": ["path": "settings.db", "bytes": databaseData.count,
+                         "sha256": digest(databaseData)],
+            "profiles": entries,
+        ]
+        let manifestData = try JSONSerialization.data(withJSONObject: manifest, options: [.sortedKeys])
+        let manifestURL = destination.appendingPathComponent("manifest.json")
+        try writeProtectedAtomically(manifestData, to: manifestURL)
+        try fileManager.setAttributes([.posixPermissions: 0o600], ofItemAtPath: manifestURL.path)
     }
 
     private func loadProfilePlan(for action: Action, at url: URL) throws -> ProfilePlan? {
@@ -1824,7 +2176,7 @@ actor WLTDeviceControl {
             throw ControlError.invalidWorkload
         }
         let plan = try JSONDecoder().decode(WorkloadPlan.self, from: Data(contentsOf: url))
-        guard plan.schema == 1, plan.route == "eu", (1 ... 32).contains(plan.probes.count) else {
+        guard plan.schema == 1, ["eu", "ru"].contains(plan.route), (1 ... 32).contains(plan.probes.count) else {
             throw ControlError.invalidWorkload
         }
         var names = Set<String>()
@@ -1905,6 +2257,23 @@ actor WLTDeviceControl {
 
     private func pruneProfileExports(excluding current: URL) {
         pruneProfileFiles(prefix: "wlt-test-profile-export-", excluding: current)
+    }
+
+    private func pruneStateExports(excluding current: URL) {
+        let directory = current.deletingLastPathComponent()
+        guard let files = try? FileManager.default.contentsOfDirectory(
+            at: directory,
+            includingPropertiesForKeys: [.isDirectoryKey],
+            options: [.skipsHiddenFiles]
+        ) else {
+            return
+        }
+        for file in files where
+            file.lastPathComponent != current.lastPathComponent
+            && file.lastPathComponent.hasPrefix("wlt-test-state-export-")
+        {
+            try? FileManager.default.removeItem(at: file)
+        }
     }
 
     private func pruneIdentityRingImports(excluding current: [URL]) {
