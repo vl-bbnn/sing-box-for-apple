@@ -21,6 +21,7 @@ lte_shortcut="${WLT_HEADLESS_LTE_SHORTCUT:-WLT LTE}"
 lte_rescan_shortcut="${WLT_HEADLESS_LTE_RESCAN_SHORTCUT:-wltrescan}"
 lte_rescan_after_seconds="${WLT_HEADLESS_LTE_RESCAN_AFTER_SECONDS:-25}"
 lte_rescan_attempts="${WLT_HEADLESS_LTE_RESCAN_ATTEMPTS:-2}"
+prepare_transport="${WLT_HEADLESS_PREPARE_TRANSPORT:-1}"
 transition_script="$script_dir/iphone_network_transition.sh"
 
 log() {
@@ -94,6 +95,28 @@ launch_shortcut() {
         --log-output "$artifact_dir/shortcut-$label.log" >/dev/null
 }
 
+resume_headless_app() {
+    local label="$1"
+    # Running a Shortcut leaves Shortcuts in the foreground. iOS can then
+    # suspend the app-side scenario before it observes the requested NWPath.
+    # Launching the already-running app without --terminate-existing resumes
+    # the same task and preserves the active VPN session.
+    "$coredevice_cli" device process launch \
+        --device "$device_id" \
+        --timeout 60 \
+        --json-output "$artifact_dir/resume-$label.json" \
+        --log-output "$artifact_dir/resume-$label.log" \
+        "$bundle_id" >/dev/null
+}
+
+launch_transition_shortcut() {
+    local name="$1"
+    local label="$2"
+    launch_shortcut "$name" "$label"
+    sleep 1
+    resume_headless_app "$label"
+}
+
 copy_final_evidence() {
     copy_app_group_file "$result_name" "$artifact_dir/result.json" || true
     copy_support_evidence
@@ -114,6 +137,8 @@ validate_positive_integer WLT_HEADLESS_POLL_SECONDS "$poll_seconds"
 validate_positive_integer WLT_HEADLESS_LTE_RESCAN_AFTER_SECONDS "$lte_rescan_after_seconds"
 [[ "$lte_rescan_attempts" =~ ^[0-9]+$ ]] \
     || die "WLT_HEADLESS_LTE_RESCAN_ATTEMPTS must be a non-negative integer"
+[[ "$prepare_transport" == "0" || "$prepare_transport" == "1" ]] \
+    || die "WLT_HEADLESS_PREPARE_TRANSPORT must be 0 or 1"
 
 mkdir -p "$artifact_dir"
 temporary_dir="$(mktemp -d)"
@@ -132,6 +157,11 @@ cp "$temporary_dir/configuration.json" "$artifact_dir/configuration.json"
 encoded_configuration="$(base64 <"$temporary_dir/configuration.json" | tr -d '\n')"
 has_network_recovery="$(jq -r '(.network_recovery_phases // []) | length > 0' \
     "$temporary_dir/configuration.json")"
+required_transport="$(jq -r '.required_transport' "$temporary_dir/configuration.json")"
+requires_wifi_restore="false"
+if [[ "$required_transport" == "cellular" || "$has_network_recovery" == "true" ]]; then
+    requires_wifi_restore="true"
+fi
 
 "$coredevice_cli" device info lockState \
     --device "$device_id" \
@@ -157,6 +187,22 @@ jq -e --arg bundle "$bundle_id" '
 ' "$artifact_dir/installed-app.json" >/dev/null \
     || die "$bundle_id is not installed; install/trust it once on unrestricted Wi-Fi"
 
+if [[ "$prepare_transport" == "1" ]]; then
+    transition_mode="wifi"
+    if [[ "$required_transport" == "cellular" ]]; then
+        transition_mode="lte"
+    fi
+    log "preparing initial $required_transport path through device-only transition"
+    DEVICE_ID="$device_id" \
+    WLT_TRANSITION_BUNDLE_ID="$bundle_id" \
+    WLT_TRANSITION_APP_GROUP="$app_group" \
+    WLT_TRANSITION_ARTIFACT_DIR="$artifact_dir/initial-$transition_mode" \
+    WLT_TRANSITION_COREDEVICE_CLI="$coredevice_cli" \
+    WLT_TRANSITION_LTE_RESCAN_SHORTCUT="$lte_rescan_shortcut" \
+    WLT_TRANSITION_LTE_RESCAN_ATTEMPTS="$lte_rescan_attempts" \
+        "$transition_script" "$transition_mode" >/dev/null
+fi
+
 log "launching installed app without XCTest or Automation Mode (run_id=$run_id)"
 launch 0 >/dev/null
 
@@ -178,7 +224,10 @@ while ((SECONDS < deadline)); do
         log "status=$final_status"
         transition_id="$(jq -r '.transition_request.id // empty' "$poll_file")"
         transition_transport="$(jq -r '.transition_request.transport // empty' "$poll_file")"
-        if [[ -n "$transition_id" && "$transition_id" != "$handled_transition_id" ]]; then
+        if [[ -n "$transition_id" && ( \
+            "$transition_id" != "$handled_transition_id" || \
+            "$transition_transport" != "$handled_transition_transport" \
+        ) ]]; then
             transition_attempt=$((transition_attempt + 1))
             handled_transition_id="$transition_id"
             handled_transition_transport="$transition_transport"
@@ -187,11 +236,13 @@ while ((SECONDS < deadline)); do
             case "$transition_transport" in
                 wifi)
                     log "checkpoint=$transition_id: requesting device-only Wi-Fi"
-                    launch_shortcut "$wifi_shortcut" "transition-$transition_attempt-wifi"
+                    launch_transition_shortcut \
+                        "$wifi_shortcut" "transition-$transition_attempt-wifi"
                     ;;
                 cellular)
                     log "checkpoint=$transition_id: requesting device-only LTE"
-                    launch_shortcut "$lte_shortcut" "transition-$transition_attempt-lte"
+                    launch_transition_shortcut \
+                        "$lte_shortcut" "transition-$transition_attempt-lte"
                     ;;
                 *)
                     die "unsupported app-side transition request: $transition_transport"
@@ -205,7 +256,7 @@ while ((SECONDS < deadline)); do
             lte_rescan_count=$((lte_rescan_count + 1))
             transition_started_seconds=$SECONDS
             log "LTE checkpoint still pending; requesting airplane-mode rescan ($lte_rescan_count/$lte_rescan_attempts)"
-            launch_shortcut "$lte_rescan_shortcut" \
+            launch_transition_shortcut "$lte_rescan_shortcut" \
                 "transition-$transition_attempt-rescan-$lte_rescan_count"
         fi
         case "$final_status" in
@@ -223,7 +274,7 @@ if [[ "$final_status" != "passed" && "$final_status" != "failed" ]]; then
     launch 1 >/dev/null || true
     sleep 5
     copy_app_group_file "$result_name" "$artifact_dir/cleanup-result.json" || true
-    if [[ "$has_network_recovery" == "true" ]]; then
+    if [[ "$requires_wifi_restore" == "true" ]]; then
         DEVICE_ID="$device_id" \
         WLT_TRANSITION_ARTIFACT_DIR="$artifact_dir/timeout-wifi-restore" \
             "$transition_script" wifi || true
@@ -235,8 +286,8 @@ fi
 
 copy_final_evidence
 wifi_restored="not_requested"
-if [[ "$has_network_recovery" == "true" ]]; then
-    log "recovery scenario finished; restoring stopped VPN plus strict Wi-Fi"
+if [[ "$requires_wifi_restore" == "true" ]]; then
+    log "cellular scenario finished; restoring stopped VPN plus strict Wi-Fi"
     if DEVICE_ID="$device_id" \
         WLT_TRANSITION_ARTIFACT_DIR="$artifact_dir/final-wifi-restore" \
         "$transition_script" wifi; then

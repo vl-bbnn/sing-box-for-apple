@@ -88,6 +88,9 @@ enum WLTHeadlessScenarioRunner {
         var routeWorkloads: [RouteWorkload]
         var warmProbe: HTTPProbe?
         var networkRecoveryPhases: [NetworkRecoveryPhase]?
+        var soakDurationSeconds: Double?
+        var soakIntervalSeconds: Double?
+        var soakProbe: HTTPProbe?
 
         enum CodingKeys: String, CodingKey {
             case runID = "run_id"
@@ -99,6 +102,9 @@ enum WLTHeadlessScenarioRunner {
             case routeWorkloads = "route_workloads"
             case warmProbe = "warm_probe"
             case networkRecoveryPhases = "network_recovery_phases"
+            case soakDurationSeconds = "soak_duration_seconds"
+            case soakIntervalSeconds = "soak_interval_seconds"
+            case soakProbe = "soak_probe"
         }
     }
 
@@ -239,6 +245,8 @@ enum WLTHeadlessScenarioRunner {
         var warmStartupMilliseconds: Double?
         var routes: [RouteResult]
         var networkRecoveryPhases: [NetworkRecoveryPhaseResult]? = nil
+        var soakElapsedMilliseconds: Double? = nil
+        var soakSamples: Int? = nil
         var cleanupSucceeded: Bool
         var error: String?
 
@@ -249,6 +257,8 @@ enum WLTHeadlessScenarioRunner {
             case warmStartupMilliseconds = "warm_startup_ms"
             case cleanupSucceeded = "cleanup_succeeded"
             case networkRecoveryPhases = "network_recovery_phases"
+            case soakElapsedMilliseconds = "soak_elapsed_ms"
+            case soakSamples = "soak_samples"
         }
     }
 
@@ -510,6 +520,57 @@ enum WLTHeadlessScenarioRunner {
                             collectClassifications(routeResult, vpnMode: vpnMode, into: &result)
                         }
 
+                        if vpnMode == "wlt",
+                           let soakDuration = configuration.soakDurationSeconds,
+                           soakDuration > 0,
+                           let soakInterval = configuration.soakIntervalSeconds,
+                           let soakProbe = configuration.soakProbe
+                        {
+                            let soakStarted = Date()
+                            let soakDeadline = soakStarted.addingTimeInterval(soakDuration)
+                            var sampleIndex = 0
+                            while true {
+                                if sampleIndex > 0 {
+                                    let target = min(
+                                        soakDeadline,
+                                        soakStarted.addingTimeInterval(
+                                            Double(sampleIndex) * soakInterval
+                                        )
+                                    )
+                                    let delay = target.timeIntervalSinceNow
+                                    if delay > 0 {
+                                        try await Task.sleep(
+                                            nanoseconds: UInt64(delay * 1_000_000_000)
+                                        )
+                                    }
+                                }
+                                let soakResult = await runHTTPProbe(
+                                    soakProbe,
+                                    allowsCellularAccess: allowsCellularAccess
+                                )
+                                let soakRoute = RouteResult(
+                                    route: "soak-sentinel",
+                                    selectMilliseconds: nil,
+                                    httpProbes: [soakResult],
+                                    playbackProbes: [],
+                                    infrastructureError: nil,
+                                    error: soakResult.success ? nil
+                                        : soakResult.error ?? soakResult.classification
+                                )
+                                repetition.routes.append(soakRoute)
+                                collectClassifications(
+                                    soakRoute,
+                                    vpnMode: vpnMode,
+                                    into: &result
+                                )
+                                sampleIndex += 1
+                                if Date() >= soakDeadline { break }
+                            }
+                            repetition.soakElapsedMilliseconds = Date()
+                                .timeIntervalSince(soakStarted) * 1_000
+                            repetition.soakSamples = sampleIndex
+                        }
+
                         if vpnMode == "wlt" {
                             await exportServiceLog(environments)
                             try await stop(profile, timeout: 45)
@@ -677,6 +738,30 @@ enum WLTHeadlessScenarioRunner {
                     }
                 }
             }
+        }
+        let soakDuration = configuration.soakDurationSeconds ?? 0
+        if soakDuration > 0 {
+            guard (configuration.vpnMode ?? "wlt") == "wlt" else {
+                throw scenarioError("soak requires vpn_mode=wlt")
+            }
+            guard configuration.networkRecoveryPhases == nil else {
+                throw scenarioError("soak and network recovery cannot be combined")
+            }
+            guard let interval = configuration.soakIntervalSeconds, interval > 0 else {
+                throw scenarioError("soak_interval_seconds must be positive")
+            }
+            guard interval <= soakDuration else {
+                throw scenarioError("soak interval cannot exceed soak duration")
+            }
+            guard configuration.soakProbe != nil else {
+                throw scenarioError("soak_probe is required for soak")
+            }
+        } else if configuration.soakIntervalSeconds != nil
+            || configuration.soakProbe != nil
+        {
+            throw scenarioError(
+                "soak_duration_seconds must be positive when soak fields are set"
+            )
         }
     }
 

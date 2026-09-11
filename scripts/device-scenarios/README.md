@@ -129,12 +129,25 @@ scripts/iphone_wlt_headless.sh
 ```
 
 The default scenario requires `wifi=false cellular=true` plus LTE/5G before
-starting WLT and rechecks the same condition after final cleanup. If the phone
-is on Wi-Fi, EDGE, offline, locked, missing the preinstalled Dev app, or cannot
-stop the VPN during cleanup, the run fails as infrastructure rather than
-transport quality. One supervised unrestricted-Wi-Fi setup is still required
-whenever a new signed Dev binary must be installed or trusted. Repeated runs of
-that installed binary require no XCTest permission and no user confirmation.
+starting WLT and rechecks the same condition after final cleanup. The host
+runner prepares that initial path itself: it invokes the device-side Wi-Fi or
+LTE Shortcut before launching the scenario, and the LTE transition performs
+an airplane-mode rescan only after an in-app snapshot proves EDGE/3G. Offline,
+locked, missing-app, exhausted-rescan, and cleanup failures remain
+infrastructure rather than transport quality. Set
+`WLT_HEADLESS_PREPARE_TRANSPORT=0` only for a diagnostic run that has already
+proved the required path atomically. One supervised unrestricted-Wi-Fi setup is
+still required whenever a new signed Dev binary must be installed or trusted.
+Repeated runs of that installed binary require no XCTest permission and no
+user confirmation.
+
+`wlt-headless-soak.json` keeps one PacketTunnel/WLT session active for at
+least 30 minutes. `soak_duration_seconds`, `soak_interval_seconds`, and
+`soak_probe` schedule an immediate probe and periodic probes without stopping
+the VPN between them. The result records `soak_elapsed_ms` and `soak_samples`
+inside the repetition, so a short host run cannot be mistaken for endurance
+evidence. Soak cannot be combined with network-recovery phases; recovery uses
+its own LTE→Wi-Fi→LTE scenario and transport checkpoints.
 
 XCUITest remains useful as a separate, explicitly supervised native-app UX
 gate for accessibility navigation and screenshots. It is not a prerequisite
