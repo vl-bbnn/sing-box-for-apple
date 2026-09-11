@@ -35,6 +35,9 @@ open class ExtensionProvider: NEPacketTunnelProvider {
   public var tunnelOptions: [String: NSObject]?
   private var startOptionsURL: URL?
   private var whitelistTransportProfileIsCore = false
+  #if os(iOS) && SFI_DEV
+    private var wltCoreLifetimeJournal: WLTCoreLifetimeJournal?
+  #endif
   #if os(iOS)
     private var diagnosticsMemoryPressure: DispatchSourceMemoryPressure?
   #endif
@@ -834,6 +837,9 @@ open class ExtensionProvider: NEPacketTunnelProvider {
     guard var configContent = tunnelOptions?["configContent"] as? String else {
       throw ExtensionStartupError("(packet-tunnel) error: missing configContent in tunnel options")
     }
+    #if os(iOS) && SFI_DEV
+      var preparedJournalGeneration: WLTCoreLifetimeJournal.PreparedGeneration?
+    #endif
     #if SFI_DEV
       if whitelistTransportProfileIsCore {
         let snapshotFile = FilePath.cacheDirectory
@@ -849,6 +855,24 @@ open class ExtensionProvider: NEPacketTunnelProvider {
           writeLifecycleMessage("(packet-tunnel): core whitelist transport auth snapshot cache configured")
           configContent = injectedConfig
         }
+        #if os(iOS)
+          if wltCoreLifetimeJournal == nil {
+            let journalRoot = FilePath.cacheDirectory
+              .appendingPathComponent("WLT", isDirectory: true)
+              .appendingPathComponent("LifetimeJournals", isDirectory: true)
+            try? WLTCoreLifetimeJournal.enforceRetention(
+              in: journalRoot,
+              keepingLatestSealedSessions: 4
+            )
+            wltCoreLifetimeJournal = try WLTCoreLifetimeJournal(rootDirectory: journalRoot)
+          }
+          guard let journal = wltCoreLifetimeJournal else {
+            throw ExtensionStartupError("(packet-tunnel) error: create WLT lifetime journal")
+          }
+          let prepared = try journal.prepareGeneration(configContent: configContent)
+          preparedJournalGeneration = prepared
+          configContent = prepared.configContent
+        #endif
       }
     #endif
 
@@ -856,9 +880,26 @@ open class ExtensionProvider: NEPacketTunnelProvider {
     do {
       try commandServer!.startOrReloadService(configContent, options: options)
     } catch {
+      #if os(iOS) && SFI_DEV
+        if let preparedJournalGeneration {
+          try? wltCoreLifetimeJournal?.didFailToStartGeneration(
+            preparedJournalGeneration,
+            errorDescription: error.localizedDescription
+          )
+        }
+      #endif
       throw ExtensionStartupError(
         "(packet-tunnel) error: start service: \(error.localizedDescription)")
     }
+    #if os(iOS) && SFI_DEV
+      if let preparedJournalGeneration {
+        // r2 propagates the prior Instance.Close result before it starts this generation.
+        try? wltCoreLifetimeJournal?.didStartGeneration(
+          preparedJournalGeneration,
+          previousGenerationCloseConfirmed: true
+        )
+      }
+    #endif
     #if os(macOS)
       if !Variant.useSystemExtension, commandServer!.needWIFIState() {
         locationManager = CLLocationManager()
@@ -881,15 +922,47 @@ open class ExtensionProvider: NEPacketTunnelProvider {
 
   #endif
 
-  func stopService() {
+  func stopService(
+    finalizeJournal: Bool = false,
+    journalCloseReason: String = "service_stop"
+  ) {
+    var serviceCloseSucceeded = false
+    var serviceCloseError: String?
     do {
-      try commandServer?.closeService()
+      if let commandServer {
+        try commandServer.closeService()
+        serviceCloseSucceeded = true
+      } else {
+        serviceCloseError = "command server unavailable"
+      }
     } catch {
       let description = error.localizedDescription
+      serviceCloseError = description
       if !description.localizedCaseInsensitiveContains("invalid argument") {
         writeLifecycleMessage("(packet-tunnel) stop service: \(description)")
       }
     }
+    #if os(iOS) && SFI_DEV
+      if let journal = wltCoreLifetimeJournal {
+        if serviceCloseSucceeded {
+          // r2 joins tracked terminal observers before the core log factory closes.
+          try? journal.didCloseService(
+            reason: journalCloseReason,
+            finalizeSession: finalizeJournal,
+            terminalObserversConfirmed: true
+          )
+        } else {
+          try? journal.didFailToCloseService(
+            reason: journalCloseReason,
+            errorDescription: serviceCloseError ?? "close service failed",
+            finalizeSession: finalizeJournal
+          )
+        }
+        if finalizeJournal {
+          wltCoreLifetimeJournal = nil
+        }
+      }
+    #endif
     #if os(iOS) && SFI_DEV
       stopWhitelistTransport()
     #endif
@@ -926,7 +999,10 @@ open class ExtensionProvider: NEPacketTunnelProvider {
     markStopTunnelRequested()
     writeLifecycleMessage("(packet-tunnel) stopping, reason: \(reasonDescription)")
     stopDiagnosticsHeartbeat()
-    stopService()
+    stopService(
+      finalizeJournal: true,
+      journalCloseReason: "tunnel_stop_\(reasonDescription)"
+    )
     if let server = commandServer {
       try? await Task.sleep(nanoseconds: 100 * NSEC_PER_MSEC)
       server.close()
@@ -958,6 +1034,11 @@ open class ExtensionProvider: NEPacketTunnelProvider {
   }
 
   override open func handleAppMessage(_ messageData: Data) async -> Data? {
+    #if os(iOS) && SFI_DEV
+      if ExtensionDiagnosticMessage.isDiagnostic(messageData) {
+        return handleDiagnosticMessage(messageData)
+      }
+    #endif
     do {
       let options = try ExtensionStartOptions.decode(messageData)
       applyStartOptions(options)
@@ -968,6 +1049,51 @@ open class ExtensionProvider: NEPacketTunnelProvider {
       return error.localizedDescription.data(using: .utf8)
     }
   }
+
+  #if os(iOS) && SFI_DEV
+    private func handleDiagnosticMessage(_ messageData: Data) -> Data? {
+      let request: ExtensionDiagnosticMessage.Request
+      do {
+        request = try ExtensionDiagnosticMessage.decodeRequest(messageData)
+      } catch {
+        return try? ExtensionDiagnosticMessage.encodeResponse(
+          ExtensionDiagnosticMessage.Response(
+            version: 1, status: "failed", resultJSON: nil,
+            errorCode: "invalid_diagnostic_envelope"))
+      }
+      guard let commandServer else {
+        return try? ExtensionDiagnosticMessage.encodeResponse(
+          ExtensionDiagnosticMessage.Response(
+            version: 1, status: "failed", resultJSON: nil,
+            errorCode: "command_server_unavailable"))
+      }
+      let response: ExtensionDiagnosticMessage.Response
+      do {
+        var probeError: NSError?
+        let resultJSON = commandServer.probeWltOutbound(
+          request.requestJSON, error: &probeError)
+        if let probeError {
+          throw probeError
+        }
+        guard resultJSON.utf8.count <= 16 * 1024 else {
+          response = ExtensionDiagnosticMessage.Response(
+            version: 1, status: "failed", resultJSON: nil,
+            errorCode: "result_too_large")
+          return try? ExtensionDiagnosticMessage.encodeResponse(response)
+        }
+        response = ExtensionDiagnosticMessage.Response(
+          version: 1, status: "success", resultJSON: resultJSON,
+          errorCode: "")
+      } catch {
+        // Core probe errors are deliberately collapsed to a bounded code.
+        // The core result carries its own sanitized network failure details.
+        response = ExtensionDiagnosticMessage.Response(
+          version: 1, status: "failed", resultJSON: nil,
+          errorCode: "probe_rejected")
+      }
+      return try? ExtensionDiagnosticMessage.encodeResponse(response)
+    }
+  #endif
 
   override open func sleep() async {
     writeLifecycleMessage("(packet-tunnel): sleep")
