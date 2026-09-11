@@ -472,7 +472,26 @@ public class ExtensionPlatformInterface: NSObject, LibboxPlatformInterfaceProtoc
   }
 
   public func serviceStop() throws {
-    tunnel.stopService()
+    #if os(iOS) && SFI_DEV
+      let result = tunnel.stopService(
+        finalizeJournal: true,
+        journalCloseReason: "app_service_stop"
+      )
+      switch result {
+      case .succeeded:
+        return
+      case .failed(let description):
+        throw NSError(
+          domain: "ExtensionServiceClose", code: 1,
+          userInfo: [NSLocalizedDescriptionKey: description])
+      case .inProgress:
+        throw NSError(
+          domain: "ExtensionServiceClose", code: 2,
+          userInfo: [NSLocalizedDescriptionKey: "service close already in progress"])
+      }
+    #else
+      tunnel.stopService()
+    #endif
   }
 
   public func serviceReload() throws {

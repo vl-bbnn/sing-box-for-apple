@@ -97,6 +97,53 @@ public enum PacketTunnelDiagnostics {
     "direct_fallback",
   ]
 
+  #if os(iOS) && SFI_DEV
+    private static let stopStages: Set<String> = [
+      "app_rpc_enter", "app_rpc_return_ok", "app_rpc_return_error",
+      "app_os_stop_enter", "app_os_stop_return",
+      "provider_close_enter", "provider_close_already_ok", "provider_close_already_error",
+      "provider_close_busy", "provider_core_close_enter", "provider_core_close_ok",
+      "provider_core_close_error", "provider_core_absent", "provider_journal_enter",
+      "provider_journal_ok", "provider_journal_error", "provider_journal_failure_recorded",
+      "provider_journal_absent", "provider_sidecar_close_enter", "provider_sidecar_close_return",
+      "provider_platform_reset_enter", "provider_platform_reset_return",
+      "provider_close_return_ok", "provider_close_return_error", "provider_stop_tunnel_enter",
+      "provider_server_close_enter", "provider_server_close_return", "provider_stop_tunnel_return",
+    ]
+
+    // Separate process-owned files avoid cross-process append/rotation races.
+    // No core logger, platform callback, or service lock is used in this path.
+    public static func appendStopStage(_ stage: String, operationID: String) {
+      guard stopStages.contains(stage), UUID(uuidString: operationID) != nil else { return }
+      let owner = stage.hasPrefix("app_") ? "app" : "provider"
+      let url = FilePath.cacheDirectory.appendingPathComponent("wlt-stop-\(owner).jsonl")
+      let entry: [String: Any] = [
+        "schema": 1, "stage": stage, "operation_id": operationID,
+        "wall_unix_ms": Int64(Date().timeIntervalSince1970 * 1000),
+        "monotonic_ns": DispatchTime.now().uptimeNanoseconds,
+        "pid": ProcessInfo.processInfo.processIdentifier,
+      ]
+      queue.sync {
+        do {
+          var data = try JSONSerialization.data(withJSONObject: entry, options: [.sortedKeys])
+          data.append(10)
+          try FileManager.default.createDirectory(at: url.deletingLastPathComponent(), withIntermediateDirectories: true)
+          if !FileManager.default.fileExists(atPath: url.path) {
+            try Data().write(to: url, options: .atomic)
+          }
+          let handle = try FileHandle(forWritingTo: url)
+          defer { try? handle.close() }
+          try handle.seekToEnd()
+          try handle.write(contentsOf: data)
+          try handle.synchronize()
+          trimIfNeeded(url, maxBytes: 512 * 1024)
+        } catch {
+          // Receipts are diagnostic; missing receipts never establish success.
+        }
+      }
+    }
+  #endif
+
   public static func append(_ message: String) {
     append(message, to: fileURL, maxBytes: maxBytes)
   }
