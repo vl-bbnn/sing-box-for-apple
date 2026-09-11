@@ -324,8 +324,13 @@ class IPhoneWLTStabilityContractTests(unittest.TestCase):
         self.assertIn("zeroToleranceCounterNames", device_control)
         self.assertIn('"transport_counters": result.get("transport_counters")', control)
         self.assertIn('"route_diagnostics": result.get("route_diagnostics")', control)
+        self.assertIn('"route_diagnostics_scope": result.get("route_diagnostics_scope")', control)
         self.assertIn('case routeDiagnosticsScope = "route_diagnostics_scope"', device_control)
-        self.assertIn('routeDiagnosticsScope: outcome?.routeDiagnostics == nil ? nil : "leaf_selection"', device_control)
+        self.assertIn('routeDiagnosticsScope: outcome?.routeDiagnosticsScope', device_control)
+        self.assertIn('cleanProfile ? "clean_group_selection" : "leaf_selection"', device_control)
+        self.assertIn('private func loadCleanGroupSelections', device_control)
+        self.assertIn('"whitelist-exit": ["ru", "eu"]', device_control)
+        self.assertIn('"eu": ["vless-wlt-eu"]', device_control)
         self.assertIn("private func loadRouteDiagnostics", device_control)
         route_diagnostics = device_control.split(
             "private func loadRouteDiagnostics", 1

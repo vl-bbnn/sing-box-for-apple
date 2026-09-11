@@ -673,6 +673,7 @@ allowed = {
     "workload_probes": result.get("workload_probes"),
     "group_selections": result.get("group_selections"),
     "route_diagnostics": result.get("route_diagnostics"),
+    "route_diagnostics_scope": result.get("route_diagnostics_scope"),
     "transport_counters": result.get("transport_counters"),
     "identity_ring": result.get("identity_ring"),
     "identity_ring_import": result.get("identity_ring_import"),

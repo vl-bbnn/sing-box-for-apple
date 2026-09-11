@@ -335,6 +335,7 @@ actor WLTDeviceControl {
         let workload: WorkloadOutcome?
         let groupSelections: [GroupSelection]?
         let routeDiagnostics: RouteDiagnostics?
+        let routeDiagnosticsScope: String?
         let transportCounters: [String: Int64]?
         let identityRing: IdentityRingStatus?
         let identityRingImport: IdentityRingImportStatus?
@@ -348,6 +349,7 @@ actor WLTDeviceControl {
             workload: WorkloadOutcome? = nil,
             groupSelections: [GroupSelection]? = nil,
             routeDiagnostics: RouteDiagnostics? = nil,
+            routeDiagnosticsScope: String? = nil,
             transportCounters: [String: Int64]? = nil,
             identityRing: IdentityRingStatus? = nil,
             identityRingImport: IdentityRingImportStatus? = nil
@@ -360,6 +362,7 @@ actor WLTDeviceControl {
             self.workload = workload
             self.groupSelections = groupSelections
             self.routeDiagnostics = routeDiagnostics
+            self.routeDiagnosticsScope = routeDiagnosticsScope
             self.transportCounters = transportCounters
             self.identityRing = identityRing
             self.identityRingImport = identityRingImport
@@ -721,7 +724,10 @@ actor WLTDeviceControl {
             guard await profile.status == .connected else {
                 throw ControlError.probeRequiresConnectedVPN
             }
-            let groupSelections = try await loadMergedGroupSelections()
+            let cleanProfile = try await selectedProfileUsesCleanWLT()
+            let groupSelections = cleanProfile
+                ? try await loadCleanGroupSelections()
+                : try await loadMergedGroupSelections()
             return Outcome(
                 status: .connected,
                 vpnStartupMS: nil,
@@ -729,7 +735,8 @@ actor WLTDeviceControl {
                 soak: nil,
                 runtimeParameters: nil,
                 groupSelections: groupSelections,
-                routeDiagnostics: await loadRouteDiagnostics()
+                routeDiagnostics: cleanProfile ? nil : await loadRouteDiagnostics(),
+                routeDiagnosticsScope: cleanProfile ? "clean_group_selection" : "leaf_selection"
             )
         case .routeDiagnostics:
             guard await profile.status == .connected else {
@@ -1189,14 +1196,35 @@ actor WLTDeviceControl {
             throw ControlError.mergedProfileContractFailed
         }
         let data = try Data(contentsOf: profileURL)
+        guard let root = try JSONSerialization.jsonObject(with: data) as? [String: Any],
+              let route = root["route"] as? [String: Any],
+              let final = route["final"] as? String else {
+            throw ControlError.mergedProfileContractFailed
+        }
+        guard final == "whitelist-exit" else { return false }
+        guard let outbounds = root["outbounds"] as? [[String: Any]] else {
+            throw ControlError.mergedProfileContractFailed
+        }
+        var byTag: [String: [String: Any]] = [:]
+        for outbound in outbounds {
+            guard let tag = outbound["tag"] as? String, !tag.isEmpty, byTag[tag] == nil else {
+                throw ControlError.mergedProfileContractFailed
+            }
+            byTag[tag] = outbound
+        }
         guard
-            let root = try JSONSerialization.jsonObject(with: data) as? [String: Any],
-            let route = root["route"] as? [String: Any],
-            let final = route["final"] as? String
+            byTag["whitelist-exit"]?["type"] as? String == "selector",
+            byTag["whitelist-exit"]?["outbounds"] as? [String] == ["ru", "eu"],
+            byTag["ru"]?["type"] as? String == "selector",
+            byTag["ru"]?["outbounds"] as? [String] == ["vless-wlt-ru"],
+            byTag["eu"]?["type"] as? String == "selector",
+            byTag["eu"]?["outbounds"] as? [String] == ["vless-wlt-eu"],
+            byTag["vless-wlt-ru"]?["type"] as? String == "vless",
+            byTag["vless-wlt-eu"]?["type"] as? String == "vless"
         else {
             throw ControlError.mergedProfileContractFailed
         }
-        return final == "whitelist-exit"
+        return true
     }
 
     private func writeProtectedAtomically(_ data: Data, to destination: URL) throws {
@@ -1634,6 +1662,47 @@ actor WLTDeviceControl {
         throw ControlError.timeout
     }
 
+    private func loadCleanGroupSelections() async throws -> [GroupSelection] {
+        let expected: [String: [String]] = [
+            "whitelist-exit": ["ru", "eu"],
+            "ru": ["vless-wlt-ru"],
+            "eu": ["vless-wlt-eu"],
+        ]
+        let commandClient = await MainActor.run { () -> CommandClient in
+            let client = CommandClient(.groups)
+            client.connect()
+            return client
+        }
+        defer {
+            Task { @MainActor in
+                commandClient.disconnect()
+            }
+        }
+
+        let deadline = Date().addingTimeInterval(12)
+        while Date() < deadline {
+            let selections = await MainActor.run { () -> [GroupSelection] in
+                guard let groups = commandClient.groups else { return [] }
+                return groups.compactMap { group in
+                    guard let required = expected[group.tag] else { return nil }
+                    let iterator = group.getItems()
+                    var available: [String] = []
+                    while iterator?.hasNext() == true {
+                        guard let item = iterator?.next() else { continue }
+                        available.append(item.tag)
+                    }
+                    guard available == required, required.contains(group.selected) else { return nil }
+                    return GroupSelection(tag: group.tag, selected: group.selected, available: available)
+                }.sorted { $0.tag < $1.tag }
+            }
+            if selections.count == expected.count {
+                return selections
+            }
+            try await Task.sleep(nanoseconds: 200_000_000)
+        }
+        throw ControlError.timeout
+    }
+
     private func loadRouteDiagnostics() async -> RouteDiagnostics {
         let allowedCategories = [
             "instagram-family", "meta-family", "tiktok-family",
@@ -1752,7 +1821,8 @@ actor WLTDeviceControl {
             workloadProbes: outcome?.workload?.probes,
             groupSelections: outcome?.groupSelections,
             routeDiagnostics: outcome?.routeDiagnostics,
-            routeDiagnosticsScope: outcome?.routeDiagnostics == nil ? nil : "leaf_selection",
+            routeDiagnosticsScope: outcome?.routeDiagnosticsScope
+                ?? (outcome?.routeDiagnostics == nil ? nil : "leaf_selection"),
             transportCounters: outcome?.transportCounters,
             identityRing: outcome?.identityRing,
             identityRingImport: outcome?.identityRingImport,
