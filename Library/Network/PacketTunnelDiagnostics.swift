@@ -97,6 +97,108 @@ public enum PacketTunnelDiagnostics {
     "direct_fallback",
   ]
 
+  #if os(iOS) && SFI_DEV
+    private static let stopStages: Set<String> = [
+      "app_prepare_enter", "app_prepare_error", "app_rpc_enter", "app_rpc_return_ok", "app_rpc_return_error",
+      "app_os_stop_enter", "app_os_stop_return",
+      "provider_close_enter", "provider_close_already_ok", "provider_close_already_error",
+      "provider_close_busy", "provider_core_close_enter", "provider_core_close_ok",
+      "provider_core_close_error", "provider_core_absent", "provider_journal_enter",
+      "provider_journal_ok", "provider_journal_error", "provider_journal_failure_recorded",
+      "provider_journal_absent", "provider_sidecar_close_enter", "provider_sidecar_close_return",
+      "provider_platform_reset_enter", "provider_platform_reset_return",
+      "provider_close_return_ok", "provider_close_return_error", "provider_stop_tunnel_enter",
+      "provider_close_wait_timeout",
+      "provider_server_close_enter", "provider_server_close_return", "provider_stop_tunnel_return",
+    ]
+
+    // Separate process-owned files avoid cross-process append/rotation races.
+    // No core logger, platform callback, or service lock is used in this path.
+    // This is deliberately a bounded receipt vocabulary: it must never retain
+    // exception descriptions, configurations, endpoints, or request payloads.
+    private static func stopReceiptDisposition(_ stage: String) -> (String, String, Bool, String, String) {
+      if stage == "app_prepare_error" {
+        return ("failed", "app", true, "invalid_state", "prepare_failed")
+      }
+      if stage == "app_rpc_return_error" {
+        return ("failed", "app", true, "service_unavailable", "close_rpc_failed")
+      }
+      if stage == "provider_core_absent" {
+        return ("failed", "provider", true, "service_unavailable", "command_server_absent")
+      }
+      if stage == "provider_close_already_error" || stage == "provider_journal_failure_recorded" {
+        return ("failed", "provider", true, "core_close_failed", "prior_close_failed")
+      }
+      if stage == "provider_close_wait_timeout" {
+        return ("failed", "provider", true, "timeout", "close_wait_timeout")
+      }
+      if stage.hasSuffix("_error") {
+        let journal = stage.contains("journal")
+        return ("failed", "provider", true,
+                journal ? "journal_finalize_failed" : "core_close_failed",
+                journal ? "journal_finalize_failed" : "core_close_failed")
+      }
+      if stage == "provider_close_busy" {
+        return ("waiting", "provider", false, "none", "none")
+      }
+      if stage.hasSuffix("_enter") || stage == "app_prepare_enter" {
+        return ("started", stage.hasPrefix("app_") ? "app" : "provider", false, "none", "none")
+      }
+      return ("succeeded", stage.hasPrefix("app_") ? "app" : "provider", false, "none", "none")
+    }
+
+    private static func stopReceiptSequence(_ url: URL) throws -> Int {
+      guard FileManager.default.fileExists(atPath: url.path) else { return 1 }
+      let text = try String(contentsOf: url, encoding: .utf8)
+      let records = text.split(separator: "\n", omittingEmptySubsequences: true)
+      var expected = 1
+      for line in records {
+        guard let data = line.data(using: .utf8),
+              let row = try JSONSerialization.jsonObject(with: data) as? [String: Any],
+              row["sequence"] as? Int == expected else {
+          throw NSError(domain: "WLTStopReceipt", code: 1)
+        }
+        expected += 1
+      }
+      return expected
+    }
+
+    public static func appendStopStage(_ stage: String, operationID: String) {
+      guard stopStages.contains(stage), UUID(uuidString: operationID) != nil else { return }
+      let owner = stage.hasPrefix("app_") ? "app" : "provider"
+      let url = FilePath.cacheDirectory.appendingPathComponent("wlt-stop-\(owner).jsonl")
+      queue.sync {
+        do {
+          let disposition = stopReceiptDisposition(stage)
+          try FileManager.default.createDirectory(at: url.deletingLastPathComponent(), withIntermediateDirectories: true,
+                                                  attributes: [.posixPermissions: 0o700])
+          let entry: [String: Any] = [
+            "schema": 1, "sequence": try stopReceiptSequence(url), "stage": stage,
+            "operation_id": operationID, "ownership": disposition.1, "outcome": disposition.0,
+            "cleanup_required": disposition.2,
+            "error": ["class": disposition.3, "code": disposition.4, "retryable": false],
+            "wall_unix_ms": Int64(Date().timeIntervalSince1970 * 1000),
+            "monotonic_ns": DispatchTime.now().uptimeNanoseconds,
+          ]
+          var data = try JSONSerialization.data(withJSONObject: entry, options: [.sortedKeys])
+          data.append(10)
+          if !FileManager.default.fileExists(atPath: url.path) {
+            try Data().write(to: url, options: .atomic)
+            try FileManager.default.setAttributes([.posixPermissions: 0o600], ofItemAtPath: url.path)
+          }
+          let handle = try FileHandle(forWritingTo: url)
+          defer { try? handle.close() }
+          try handle.seekToEnd()
+          try handle.write(contentsOf: data)
+          try handle.synchronize()
+          trimIfNeeded(url, maxBytes: 512 * 1024)
+        } catch {
+          // Receipts are diagnostic; missing receipts never establish success.
+        }
+      }
+    }
+  #endif
+
   public static func append(_ message: String) {
     append(message, to: fileURL, maxBytes: maxBytes)
   }
