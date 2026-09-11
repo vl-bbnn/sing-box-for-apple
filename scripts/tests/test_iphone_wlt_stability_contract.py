@@ -391,8 +391,17 @@ class IPhoneWLTStabilityContractTests(unittest.TestCase):
         self.assertIn("requestTimeout: TimeInterval = 10", device_control)
         self.assertIn("probeTraffic(timeout: 12)", device_control)
         self.assertIn("https://rozetked.me/", device_control)
-        self.assertIn("(200 ..< 400).contains(response.statusCode)", device_control)
-        self.assertIn("|workload|network-workload)", control)
+        traffic_probe = device_control.split("private func probeTraffic(", 1)[1].split(
+            "private func ", 1
+        )[0]
+        self.assertIn("response as? HTTPURLResponse", traffic_probe)
+        self.assertIn("(200 ..< 400).contains($0.statusCode)", traffic_probe)
+        self.assertIn("} ?? false", traffic_probe)
+        action_case = control.split('case "$action" in', 1)[1].split("esac", 1)[0]
+        accepted_actions = action_case.split(") ;;", 1)[0].strip().split("|")
+        self.assertIn("workload", accepted_actions)
+        self.assertIn("network-workload", accepted_actions)
+        self.assertIn("explicit_saved_WLT_outbound_reachability", accepted_actions)
         self.assertIn("WLT_CONTROL_WORKLOAD_FILE", control)
         self.assertIn("case .workload:", device_control)
         network_workload = device_control.split("case .networkWorkload:", 1)[1].split(

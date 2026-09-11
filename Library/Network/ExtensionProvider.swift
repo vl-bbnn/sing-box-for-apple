@@ -993,6 +993,14 @@ open class ExtensionProvider: NEPacketTunnelProvider {
       try commandServer!.startOrReloadService(configContent, options: options)
     } catch {
       #if os(iOS) && SFI_DEV
+        // A throwing libbox reload may leave the preceding core alive. Close
+        // admission before releasing the caller's lifecycle transition; the
+        // existing owner waits for that release before touching the resources.
+        // Do not let a later reload overwrite an ambiguous generation.
+        _ = requestOwnedStopService(
+          operationID: UUID().uuidString.lowercased(),
+          journalCloseReason: "start_or_reload_failed"
+        )
         if let preparedJournalGeneration {
           try? wltCoreLifetimeJournal?.didFailToStartGeneration(
             preparedJournalGeneration,
