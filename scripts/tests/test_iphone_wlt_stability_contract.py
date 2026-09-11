@@ -1,7 +1,9 @@
 import json
+import hashlib
 import os
 from pathlib import Path
 import subprocess
+import sqlite3
 import tempfile
 import textwrap
 import unittest
@@ -25,17 +27,41 @@ class IPhoneWLTStabilityContractTests(unittest.TestCase):
         self.assertIn("WLT_IOS_WIFI_TRUST_PROOF", helper)
         self.assertIn("age <= 900", helper)
 
-    def test_device_install_selects_only_connected_paired_iphone(self):
+    def test_device_install_selects_only_connected_paired_physical_iphone(self):
         helper = DEVICE_HELPER.read_text()
         selector = helper.split("device_id()", 1)[1].split("device_status()", 1)[0]
         self.assertIn('connection.get("pairingState") == "paired"', selector)
         self.assertIn('connection.get("tunnelState") == "connected"', selector)
-        self.assertIn("connected paired iOS device", selector)
+        self.assertIn('connection.get("transportType") != "sameMachine"', selector)
+        self.assertIn("connected paired physical iOS device", selector)
 
     def test_device_control_copy_timeout_is_configurable_for_lte(self):
         control = (SCRIPTS / "iphone_wlt_control.sh").read_text()
         self.assertIn('WLT_CONTROL_COPY_TIMEOUT_SECONDS:-30', control)
         self.assertGreaterEqual(control.count('--timeout "$copy_timeout_seconds"'), 4)
+
+    def test_libbox_build_is_anchored_to_apple_repository(self):
+        helper = DEVICE_HELPER.read_text()
+        build_libbox = helper.split("build_libbox()", 1)[1].split("verify_libbox()", 1)[0]
+        self.assertIn('cd "$repo_root"', build_libbox)
+        self.assertLess(
+            build_libbox.index('cd "$repo_root"'),
+            build_libbox.index('bash "$repo_root/scripts/build_libbox.sh"'),
+        )
+        self.assertIn('>"$build_dir/build-libbox-iphone.log" 2>&1', build_libbox)
+
+    def test_coredevice_launch_retries_only_remote_xpc_invalidation_once(self):
+        control = (SCRIPTS / "iphone_wlt_control.sh").read_text()
+        classifier = control.split(
+            "retryable_coredevice_launch_failure()", 1
+        )[1].split("run()", 1)[0]
+        self.assertIn('"com.apple.dt.CoreDeviceError"', classifier)
+        self.assertIn('error.get("code") == 3', classifier)
+        self.assertIn('error.get("code") == 10004', classifier)
+        self.assertIn('"com.apple.Mercury.error"', classifier)
+        self.assertIn('underlying.get("code") == 1001', classifier)
+        self.assertIn("for launch_attempt in 1 2", control)
+        self.assertIn("launch-attempt-1.json", control)
 
     def test_clean_profile_bootstrap_is_dev_controlled_and_wifi_only(self):
         control = (SCRIPTS / "iphone_wlt_control.sh").read_text()
@@ -55,6 +81,101 @@ class IPhoneWLTStabilityContractTests(unittest.TestCase):
         self.assertIn("LibboxCheckConfig", bootstrap)
         self.assertIn("autoUpdate: false", bootstrap)
         self.assertNotIn("profile.url", control)
+
+    def test_state_export_is_bounded_consistent_and_private(self):
+        control = (SCRIPTS / "iphone_wlt_control.sh").read_text()
+        device_control = (SCRIPTS.parent / "SFI" / "WLTDeviceControl.swift").read_text()
+        profile_manager = (SCRIPTS.parent / "Library" / "Database" / "ProfileManager.swift").read_text()
+        self.assertIn('case exportState = "export-state"', device_control)
+        self.assertIn("currentStatus == .disconnected", device_control)
+        self.assertIn("backupProfileDatabase", device_control)
+        self.assertIn("before.indices.allSatisfy", device_control)
+        self.assertIn("last_known_good_present", device_control)
+        self.assertIn("32 * 1_024 * 1_024", device_control)
+        self.assertIn("Database.sharedWriter.backup(to: backup)", profile_manager)
+        self.assertIn('PRAGMA integrity_check', profile_manager)
+        self.assertNotIn("wal_checkpoint", profile_manager)
+        self.assertIn("WLT_CONTROL_STATE_EXPORT_DIR", control)
+        self.assertIn("WLT_APP_GROUP_ID", control)
+        self.assertIn("appGroupDataContainer", control)
+        self.assertIn("state export inventory mismatch", control)
+        self.assertIn('mode=ro&immutable=1', control)
+
+    def test_state_export_rejects_missing_or_existing_destination_before_device_access(self):
+        control = SCRIPTS / "iphone_wlt_control.sh"
+        environment = dict(os.environ, WLT_APP_BUNDLE_ID="example.dev")
+        missing = subprocess.run(
+            [str(control), "export-state"], env=environment, capture_output=True, text=True
+        )
+        self.assertNotEqual(missing.returncode, 0)
+        self.assertIn("WLT_CONTROL_STATE_EXPORT_DIR is required", missing.stderr)
+        with tempfile.TemporaryDirectory() as directory:
+            environment.update(
+                WLT_APP_GROUP_ID="group.example.dev",
+                WLT_CONTROL_STATE_EXPORT_DIR=directory,
+            )
+            existing = subprocess.run(
+                [str(control), "export-state"], env=environment, capture_output=True, text=True
+            )
+        self.assertNotEqual(existing.returncode, 0)
+        self.assertIn("must not exist", existing.stderr)
+
+    def test_state_export_verifier_accepts_only_empty_wal_and_valid_shm(self):
+        control = (SCRIPTS / "iphone_wlt_control.sh").read_text()
+        marker = '/usr/bin/python3 - "$state_export_dir" "$artifact_dir/state-export-sidecars.json" <<\'PY\'\n'
+        verifier = control.split(marker, 1)[1].split("\nPY\n", 1)[0]
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory) / "state"
+            root.mkdir()
+            config = root / "config.json"
+            config.write_text("{}")
+            database = root / "settings.db"
+            connection = sqlite3.connect(database)
+            connection.execute("CREATE TABLE profiles (id INTEGER PRIMARY KEY, path TEXT)")
+            connection.execute("INSERT INTO profiles(path) VALUES (?)", ("/private/group/config.json",))
+            connection.commit()
+            connection.close()
+            digest = lambda path: hashlib.sha256(path.read_bytes()).hexdigest()
+            manifest = {
+                "schema": 1,
+                "database": {"path": "settings.db", "bytes": database.stat().st_size,
+                             "sha256": digest(database)},
+                "profiles": [{
+                    "database_path": "/private/group/config.json",
+                    "source_relative_path": "config.json",
+                    "main": {"path": "config.json", "bytes": config.stat().st_size,
+                             "sha256": digest(config)},
+                    "last_known_good_present": False,
+                }],
+            }
+            (root / "manifest.json").write_text(json.dumps(manifest))
+            (root / "settings.db-wal").write_bytes(b"")
+            shm = bytearray(32768)
+            shm[0:4] = (3_007_000).to_bytes(4, "little")
+            shm[12] = 1
+            shm[48:96] = shm[:48]
+            (root / "settings.db-shm").write_bytes(shm)
+            evidence = Path(directory) / "sidecars.json"
+            accepted = subprocess.run(
+                ["python3", "-c", verifier, str(root), str(evidence)], capture_output=True, text=True
+            )
+            self.assertEqual(accepted.returncode, 0, accepted.stderr)
+            sidecars = json.loads(evidence.read_text())
+            self.assertEqual(sidecars["wal"]["bytes"], 0)
+            self.assertEqual(sidecars["shm"]["maximum_frame"], 0)
+            (root / "settings.db-wal").write_bytes(b"x")
+            rejected_wal = subprocess.run(
+                ["python3", "-c", verifier, str(root), str(evidence)], capture_output=True, text=True
+            )
+            self.assertNotEqual(rejected_wal.returncode, 0)
+            self.assertIn("WAL must be an empty regular file", rejected_wal.stderr)
+            (root / "settings.db-wal").write_bytes(b"")
+            (root / "unknown").write_bytes(b"")
+            rejected_unknown = subprocess.run(
+                ["python3", "-c", verifier, str(root), str(evidence)], capture_output=True, text=True
+            )
+            self.assertNotEqual(rejected_unknown.returncode, 0)
+            self.assertIn("inventory mismatch", rejected_unknown.stderr)
 
     def test_identity_ring_import_is_encrypted_validated_and_atomic(self):
         control = (SCRIPTS / "iphone_wlt_control.sh").read_text()
@@ -188,6 +309,13 @@ class IPhoneWLTStabilityContractTests(unittest.TestCase):
         self.assertIn('"startup_milestones": result.get("startup_milestones")', control)
         self.assertIn("PacketTunnelDiagnostics.startupMilestones()", device_control)
         self.assertIn("request.action == .workload || request.action == .soak", device_control)
+        self.assertIn(
+            '[[ "$action" == "stop" || "$action" == "start" || "$action" == "start-probe" ]]',
+            control,
+        )
+        self.assertIn("retrying delivery once after explicit stop", RUNNER.read_text())
+        self.assertIn("start_probe_can_defer_to_workload", RUNNER.read_text())
+        self.assertIn("traffic_ready", RUNNER.read_text())
         diagnostics = (SCRIPTS.parent / "Library" / "Network" / "PacketTunnelDiagnostics.swift").read_text()
         self.assertIn('milestone = "direct_fallback"', diagnostics)
         self.assertIn("CommandClient(.log, logMaxLines: 3_000)", device_control)
@@ -195,6 +323,37 @@ class IPhoneWLTStabilityContractTests(unittest.TestCase):
         self.assertIn('message.contains("wlt service stats ")', device_control)
         self.assertIn("zeroToleranceCounterNames", device_control)
         self.assertIn('"transport_counters": result.get("transport_counters")', control)
+        self.assertIn('"route_diagnostics": result.get("route_diagnostics")', control)
+        self.assertIn('"route_diagnostics_scope": result.get("route_diagnostics_scope")', control)
+        self.assertIn('case routeDiagnosticsScope = "route_diagnostics_scope"', device_control)
+        self.assertIn('routeDiagnosticsScope: outcome?.routeDiagnosticsScope', device_control)
+        self.assertIn('cleanProfile ? "clean_root_selection" : "leaf_selection"', device_control)
+        self.assertIn('private func loadCleanGroupSelections', device_control)
+        self.assertIn('let expectedTag = "whitelist-exit"', device_control)
+        self.assertIn('let expectedItems = ["ru", "eu"]', device_control)
+        self.assertIn("private func loadRouteDiagnostics", device_control)
+        route_diagnostics = device_control.split(
+            "private func loadRouteDiagnostics", 1
+        )[1].split("private func writeResult", 1)[0]
+        self.assertIn('"instagram-family"', route_diagnostics)
+        self.assertIn('"meta-family"', route_diagnostics)
+        self.assertIn('"tiktok-family"', route_diagnostics)
+        self.assertIn('"youtube-family"', route_diagnostics)
+        self.assertIn('"github-family"', route_diagnostics)
+        self.assertIn('"neutral-example"', route_diagnostics)
+        self.assertIn('"wlt-eu"', route_diagnostics)
+        self.assertIn('"wlt-ru"', route_diagnostics)
+        self.assertIn('"wlt-route-leaf-category=\\(category) "', route_diagnostics)
+        self.assertIn('fields["network"]', route_diagnostics)
+        self.assertIn('fields["attempt"]', route_diagnostics)
+        self.assertIn("fields[name] == nil", route_diagnostics)
+        self.assertIn("allowedFieldNames.contains(name)", route_diagnostics)
+        self.assertIn("fields.count == allowedFieldNames.count", route_diagnostics)
+        self.assertIn('components(separatedBy: "wlt-route-leaf-category=").count == 2', route_diagnostics)
+        self.assertNotIn("uniqueKeysWithValues", route_diagnostics)
+        self.assertNotIn('"wlt-route-category=\\(category)', route_diagnostics)
+        self.assertNotIn('"wlt-route-policy-category=\\(category)', route_diagnostics)
+        self.assertNotIn("metadata.Domain", route_diagnostics)
         self.assertIn('action == "workload"', control)
         self.assertIn("successful WLT workload has non-zero transport counters", control)
         self.assertIn("WLT_CONTROL_MAX_SUCCESSFUL_RECONNECTS", control)
@@ -202,6 +361,11 @@ class IPhoneWLTStabilityContractTests(unittest.TestCase):
         self.assertIn('zero_tolerance = expected_counters - {"reconnects", "reconnect_retries"}', control)
         self.assertIn("successful WLT workload exceeded reconnect allowance", control)
         self.assertIn("successful WLT workload exceeded reconnect retry allowance", control)
+        self.assertIn("Preserve a sanitized result", control)
+        self.assertLess(
+            control.index("print(json.dumps(allowed"),
+            control.index("successful WLT workload has non-zero transport counters"),
+        )
         self.assertIn("PacketTunnelDiagnostics.observeStartupLog(entry.message)", device_control)
         self.assertIn("firstTrafficProbeTimeout: TimeInterval = 60", device_control)
         self.assertIn("firstTrafficRequestTimeout: TimeInterval = 20", device_control)
@@ -216,6 +380,12 @@ class IPhoneWLTStabilityContractTests(unittest.TestCase):
         self.assertNotIn("firstTrafficProbeTimeout", ordinary_probe)
         self.assertIn("timeout: Self.firstTrafficProbeTimeout", start_probe)
         self.assertIn("requestTimeout: Self.firstTrafficRequestTimeout", start_probe)
+        self.assertIn("selectedProfileUsesCleanWLT", start_probe)
+        self.assertIn('try await selectWorkloadRoute("eu")', start_probe)
+        self.assertLess(
+            start_probe.index("selectedProfileUsesCleanWLT"),
+            start_probe.index("probeTraffic("),
+        )
         self.assertNotIn("acceptCurrentSessionTrafficReady", device_control)
         self.assertIn("trafficLogObserver.cancel()", start_probe)
         self.assertIn("requestTimeout: TimeInterval = 10", device_control)
@@ -225,7 +395,13 @@ class IPhoneWLTStabilityContractTests(unittest.TestCase):
         self.assertIn("|workload|network-workload)", control)
         self.assertIn("WLT_CONTROL_WORKLOAD_FILE", control)
         self.assertIn("case .workload:", device_control)
+        network_workload = device_control.split("case .networkWorkload:", 1)[1].split(
+            "private func wltAuthSnapshotURL", 1
+        )[0]
+        self.assertIn("routeDiagnostics: await loadRouteDiagnostics()", network_workload)
         self.assertIn("selectWorkloadRoute(plan.route)", device_control)
+        self.assertIn('route == "eu" || route == "ru"', device_control)
+        self.assertIn('(\"whitelist-exit\", \"ru\")', device_control)
         workload = device_control.split("private func runWorkload", 1)[1].split(
             "private func selectWorkloadRoute", 1
         )[0]
@@ -241,7 +417,7 @@ class IPhoneWLTStabilityContractTests(unittest.TestCase):
         self.assertIn("workloadProbes", device_control)
         self.assertIn("retryable_start_failure", control := RUNNER.read_text())
         self.assertIn('"carrier_start_failed_connect" in milestones', control)
-        self.assertIn("for start_attempt in 1 2", control)
+        self.assertIn('for start_attempt in $(seq 1 "$max_start_attempts")', control)
         self.assertIn("classify_injected_recovery", control)
         self.assertIn("probe_transition_after_host_injection", control)
         self.assertIn("final_probe_status=0", control)
@@ -342,6 +518,26 @@ class IPhoneWLTStabilityContractTests(unittest.TestCase):
         )[1].split("private func writeProtectedAtomically", 1)[0]
         self.assertEqual(merged_contract.count('"prefer_first_available"'), 3)
 
+    def test_clean_group_status_uses_daemon_exposed_root_only(self):
+        device_control = (SCRIPTS.parent / "SFI" / "WLTDeviceControl.swift").read_text()
+        static_contract = device_control.split(
+            "private func selectedProfileUsesCleanWLT", 1
+        )[1].split("private func writeProtectedAtomically", 1)[0]
+        self.assertIn('["ru", "eu"]', static_contract)
+        self.assertIn('["vless-wlt-ru"]', static_contract)
+        self.assertIn('["vless-wlt-eu"]', static_contract)
+
+        runtime_contract = device_control.split(
+            "private func loadCleanGroupSelections", 1
+        )[1].split("private func loadRouteDiagnostics", 1)[0]
+        self.assertIn('let expectedTag = "whitelist-exit"', runtime_contract)
+        self.assertIn('let expectedItems = ["ru", "eu"]', runtime_contract)
+        self.assertIn('group.selected == "eu"', runtime_contract)
+        self.assertIn("if selections.count == 1", runtime_contract)
+        self.assertNotIn('"vless-wlt-ru"', runtime_contract)
+        self.assertNotIn('"vless-wlt-eu"', runtime_contract)
+        self.assertIn('"clean_root_selection"', device_control)
+
     def test_deprecated_note_probe_does_not_surface_command_socket_shutdown(self):
         global_checks = (
             SCRIPTS.parent
@@ -387,10 +583,16 @@ class IPhoneWLTStabilityContractTests(unittest.TestCase):
             elif action == "stop":
                 state = "disconnected"
                 state_path.write_text(state)
+            network_state_path = Path(os.environ["FAKE_NETWORK_STATE"])
+            network_state = (
+                network_state_path.read_text().strip()
+                if network_state_path.exists()
+                else "cellular"
+            )
             network = {
                 "status": "satisfied",
-                "cellular": True,
-                "wifi": False,
+                "cellular": network_state == "cellular",
+                "wifi": network_state == "wifi",
                 "radio_technology": "CTRadioAccessTechnologyLTE",
                 "cellular_service_count": 2,
                 "data_service_id_hash": "fixture",
@@ -410,6 +612,38 @@ class IPhoneWLTStabilityContractTests(unittest.TestCase):
                 "network_loss_observed": None,
                 "network_recovered": None,
             }
+            if (
+                action == "probe"
+                and os.environ.get("FAKE_FAIL_FIRST_PROBE_WITH_RESULT") == "1"
+            ):
+                marker = calls.with_suffix(".first-probe-result-failed")
+                if not marker.exists():
+                    marker.write_text("1")
+                    result.update({
+                        "state": "failed",
+                        "vpn_status": "connected",
+                        "error_domain": "NSURLErrorDomain",
+                        "error_code": -1200,
+                    })
+                    print(json.dumps(result))
+                    raise SystemExit(1)
+            if (
+                action == "probe"
+                and "soak-probe-" in os.environ.get("WLT_CONTROL_ARTIFACT_DIR", "")
+                and os.environ.get("FAKE_FAIL_LTE_RETURN_PROBE_WITH_RESULT") == "1"
+            ):
+                handover = network_state_path.with_suffix(".lte-return")
+                failed = network_state_path.with_suffix(".lte-return-failed")
+                if handover.exists() and not failed.exists():
+                    failed.write_text("1")
+                    result.update({
+                        "state": "failed",
+                        "vpn_status": "connected",
+                        "error_domain": "NSURLErrorDomain",
+                        "error_code": -1001,
+                    })
+                    print(json.dumps(result))
+                    raise SystemExit(1)
             if action == "soak":
                 time.sleep(2)
                 ineffective = os.environ.get("FAKE_INJECTION_INEFFECTIVE") == "1"
@@ -454,6 +688,14 @@ class IPhoneWLTStabilityContractTests(unittest.TestCase):
 
             with Path(os.environ["FAKE_SHORTCUT_CALLS"]).open("a") as handle:
                 handle.write(sys.argv[1] + "\\n")
+            network_state = Path(os.environ["FAKE_NETWORK_STATE"])
+            previous = network_state.read_text().strip() if network_state.exists() else "cellular"
+            if sys.argv[1] == "WLT WiFi":
+                network_state.write_text("wifi")
+            elif sys.argv[1] == "WLT LTE":
+                network_state.write_text("cellular")
+                if previous == "wifi":
+                    network_state.with_suffix(".lte-return").write_text("1")
             """
         ))
         script.chmod(0o755)
@@ -473,11 +715,35 @@ class IPhoneWLTStabilityContractTests(unittest.TestCase):
             "WLT_STABILITY_PROBE_INTERVAL_SECONDS": "2",
             "WLT_STABILITY_LOSS_AFTER_SECONDS": "1",
             "WLT_STABILITY_TRANSPORT_TIMEOUT_SECONDS": "5",
+            "WLT_STABILITY_INITIAL_LTE_SETTLE_SECONDS": "0",
             "FAKE_CONTROL_CALLS": str(root / "control-calls.txt"),
             "FAKE_SHORTCUT_CALLS": str(root / "shortcut-calls.txt"),
             "FAKE_VPN_STATE": str(root / "vpn-state.txt"),
+            "FAKE_NETWORK_STATE": str(root / "network-state.txt"),
         })
         return environment
+
+    def test_initial_lte_settle_is_bounded_and_rechecks_cellular(self):
+        runner = RUNNER.read_text()
+        self.assertIn(
+            'WLT_STABILITY_INITIAL_LTE_SETTLE_SECONDS:-20',
+            runner,
+        )
+        self.assertIn(
+            'initial_lte_settle_seconds <= 120',
+            runner,
+        )
+        settle = runner.split(
+            'allowing cellular routing to settle', 1
+        )[1].split('fi\n\nlog "starting WLT', 1)[0]
+        self.assertIn('sleep "$initial_lte_settle_seconds"', settle)
+        self.assertIn('wait_for_cellular lte-settled-status', settle)
+
+    def test_start_attempts_can_be_limited_to_one_for_diagnostic_runs(self):
+        runner = RUNNER.read_text()
+        self.assertIn('WLT_STABILITY_MAX_START_ATTEMPTS:-2', runner)
+        self.assertIn('max_start_attempts" == "1"', runner)
+        self.assertIn('seq 1 "$max_start_attempts"', runner)
 
     def test_runs_soak_loss_recovery_and_idempotent_stop(self):
         with tempfile.TemporaryDirectory() as temporary:
@@ -552,6 +818,106 @@ class IPhoneWLTStabilityContractTests(unittest.TestCase):
             self.assertGreaterEqual(calls.count("probe"), 5)
             self.assertTrue(payload["cleanup_succeeded"])
 
+    def test_host_observed_soak_proves_wifi_and_lte_handover(self):
+        with tempfile.TemporaryDirectory() as temporary:
+            root = Path(temporary)
+            environment = self.base_environment(root)
+            environment.update({
+                "WLT_STABILITY_ALLOW_SHORT": "1",
+                "WLT_STABILITY_DURATION_SECONDS": "8",
+                "WLT_STABILITY_PROBE_INTERVAL_SECONDS": "2",
+                "WLT_STABILITY_INJECT_LOSS": "0",
+                "WLT_STABILITY_WIFI_HANDOVER_AFTER_SECONDS": "2",
+                "WLT_STABILITY_LTE_RETURN_AFTER_SECONDS": "4",
+                "WLT_STABILITY_RESTORE_WIFI": "0",
+            })
+
+            result = subprocess.run(
+                [str(RUNNER)],
+                env=environment,
+                capture_output=True,
+                text=True,
+                timeout=20,
+            )
+
+            self.assertEqual(result.returncode, 0, result.stderr)
+            payload = json.loads((root / "artifacts" / "result.json").read_text())
+            self.assertEqual(payload["classification"], "success")
+            self.assertEqual(
+                [value["transport"] for value in payload["network_transitions"]],
+                ["wifi", "cellular"],
+            )
+            self.assertEqual(
+                (root / "shortcut-calls.txt").read_text().splitlines(),
+                ["WLT LTE", "WLT WiFi", "WLT LTE"],
+            )
+
+    def test_host_observed_probe_failure_does_not_claim_final_disconnect(self):
+        with tempfile.TemporaryDirectory() as temporary:
+            root = Path(temporary)
+            environment = self.base_environment(root)
+            environment.update({
+                "WLT_STABILITY_ALLOW_SHORT": "1",
+                "WLT_STABILITY_DURATION_SECONDS": "5",
+                "WLT_STABILITY_PROBE_INTERVAL_SECONDS": "2",
+                "WLT_STABILITY_INJECT_LOSS": "0",
+                "WLT_STABILITY_PREPARE_LTE": "0",
+                "WLT_STABILITY_RESTORE_WIFI": "0",
+                "FAKE_FAIL_FIRST_PROBE_WITH_RESULT": "1",
+            })
+
+            result = subprocess.run(
+                [str(RUNNER)],
+                env=environment,
+                capture_output=True,
+                text=True,
+                timeout=15,
+            )
+
+            self.assertEqual(result.returncode, 1, result.stderr)
+            payload = json.loads((root / "artifacts" / "result.json").read_text())
+            self.assertEqual(payload["classification"], "failed")
+            self.assertEqual(payload["failures"], ["unexpected_soak_probe_failure"])
+            self.assertEqual(payload["soak_failures"], 1)
+            self.assertTrue(payload["cleanup_succeeded"])
+
+    def test_planned_handover_transient_preserves_raw_failure_and_bounded_recovery(self):
+        with tempfile.TemporaryDirectory() as temporary:
+            root = Path(temporary)
+            environment = self.base_environment(root)
+            environment.update({
+                "WLT_STABILITY_ALLOW_SHORT": "1",
+                "WLT_STABILITY_DURATION_SECONDS": "8",
+                "WLT_STABILITY_PROBE_INTERVAL_SECONDS": "2",
+                "WLT_STABILITY_INJECT_LOSS": "0",
+                "WLT_STABILITY_WIFI_HANDOVER_AFTER_SECONDS": "2",
+                "WLT_STABILITY_LTE_RETURN_AFTER_SECONDS": "4",
+                "WLT_STABILITY_HANDOVER_RECOVERY_TIMEOUT_SECONDS": "6",
+                "WLT_STABILITY_RESTORE_WIFI": "0",
+                "FAKE_FAIL_LTE_RETURN_PROBE_WITH_RESULT": "1",
+            })
+
+            result = subprocess.run(
+                [str(RUNNER)],
+                env=environment,
+                capture_output=True,
+                text=True,
+                timeout=20,
+            )
+
+            self.assertEqual(result.returncode, 0, result.stderr)
+            payload = json.loads((root / "artifacts" / "result.json").read_text())
+            self.assertEqual(payload["classification"], "success")
+            self.assertEqual(payload["soak_failures"], 1)
+            self.assertEqual(payload["raw_soak_failures"], 1)
+            self.assertEqual(payload["planned_handover_failures"], 1)
+            self.assertEqual(payload["unplanned_soak_failures"], 0)
+            self.assertEqual(len(payload["planned_handover_incidents"]), 1)
+            incident = payload["planned_handover_incidents"][0]
+            self.assertEqual(incident["transport"], "cellular")
+            self.assertLessEqual(incident["recovery_ms"], 6_000)
+            self.assertTrue(payload["cleanup_succeeded"])
+
     def test_ineffective_loss_injection_is_infrastructure(self):
         with tempfile.TemporaryDirectory() as temporary:
             root = Path(temporary)
@@ -620,7 +986,7 @@ class IPhoneWLTStabilityContractTests(unittest.TestCase):
             self.assertNotEqual(result.returncode, 0)
             self.assertEqual(
                 (root / "control-calls.txt").read_text().splitlines(),
-                ["stop", "status", "start-probe", "stop"],
+                ["stop", "status", "start-probe", "stop", "start-probe", "stop"],
             )
             self.assertEqual(
                 (root / "shortcut-calls.txt").read_text().splitlines(),

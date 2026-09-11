@@ -472,7 +472,36 @@ public class ExtensionPlatformInterface: NSObject, LibboxPlatformInterfaceProtoc
   }
 
   public func serviceStop() throws {
-    tunnel.stopService()
+    #if os(iOS) && SFI_DEV
+      // The NetworkExtension stop callback may already own the close while
+      // this synchronous RPC is still the only caller that can keep the
+      // provider alive. Wait for that owner, but never admit a second close.
+      let deadline = Date().addingTimeInterval(19.5)
+      var result: ExtensionProvider.ServiceCloseResult = .inProgress
+      while result == .inProgress && Date() < deadline {
+        result = tunnel.stopService(
+          finalizeJournal: true,
+          journalCloseReason: "app_service_stop"
+        )
+        if result == .inProgress {
+          Thread.sleep(forTimeInterval: 0.01)
+        }
+      }
+      switch result {
+      case .succeeded:
+        return
+      case .failed(let description):
+        throw NSError(
+          domain: "ExtensionServiceClose", code: 1,
+          userInfo: [NSLocalizedDescriptionKey: description])
+      case .inProgress:
+        throw NSError(
+          domain: "ExtensionServiceClose", code: 2,
+          userInfo: [NSLocalizedDescriptionKey: "service close did not complete before deadline"])
+      }
+    #else
+      tunnel.stopService()
+    #endif
   }
 
   public func serviceReload() throws {

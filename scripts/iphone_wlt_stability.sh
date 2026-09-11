@@ -14,11 +14,16 @@ allow_short="${WLT_STABILITY_ALLOW_SHORT:-0}"
 inject_loss="${WLT_STABILITY_INJECT_LOSS:-1}"
 loss_after_seconds="${WLT_STABILITY_LOSS_AFTER_SECONDS:-}"
 prepare_lte="${WLT_STABILITY_PREPARE_LTE:-1}"
+initial_lte_settle_seconds="${WLT_STABILITY_INITIAL_LTE_SETTLE_SECONDS:-20}"
+max_start_attempts="${WLT_STABILITY_MAX_START_ATTEMPTS:-2}"
 restore_wifi="${WLT_STABILITY_RESTORE_WIFI:-1}"
 lte_shortcut="${WLT_STABILITY_LTE_SHORTCUT:-WLT LTE}"
 loss_shortcut="${WLT_STABILITY_LOSS_SHORTCUT:-wltrescan}"
 wifi_shortcut="${WLT_STABILITY_WIFI_SHORTCUT:-WLT WiFi}"
 transport_timeout_seconds="${WLT_STABILITY_TRANSPORT_TIMEOUT_SECONDS:-90}"
+handover_recovery_timeout_seconds="${WLT_STABILITY_HANDOVER_RECOVERY_TIMEOUT_SECONDS:-90}"
+wifi_handover_after_seconds="${WLT_STABILITY_WIFI_HANDOVER_AFTER_SECONDS:-}"
+lte_return_after_seconds="${WLT_STABILITY_LTE_RETURN_AFTER_SECONDS:-}"
 candidate_file="${WLT_STABILITY_CANDIDATE_FILE:-}"
 workload_file="${WLT_STABILITY_WORKLOAD_FILE:-}"
 timestamp="$(date '+%Y-%m-%d-%H%M%S')"
@@ -37,6 +42,10 @@ die() {
 
 require_positive_integer() {
   [[ "$2" =~ ^[1-9][0-9]*$ ]] || die "$1 must be a positive integer"
+}
+
+require_non_negative_integer() {
+  [[ "$2" =~ ^[0-9]+$ ]] || die "$1 must be a non-negative integer"
 }
 
 run_control() {
@@ -72,16 +81,53 @@ raise SystemExit(0 if ok else 1)
 }
 
 wait_for_cellular() {
-  local deadline status_file attempt=0
+  local prefix="${1:-lte-status}" deadline status_file attempt=0
   deadline=$((SECONDS + transport_timeout_seconds))
   while (( SECONDS < deadline )); do
     attempt=$((attempt + 1))
-    status_file="$artifact_dir/lte-status-$(printf '%03d' "$attempt").json"
-    if run_control status "lte-status-$(printf '%03d' "$attempt")" \
+    status_file="$artifact_dir/$prefix-$(printf '%03d' "$attempt").json"
+    if run_control status "$prefix-$(printf '%03d' "$attempt")" \
       >"$status_file" 2>"$status_file.log" \
       && strict_cellular_status <"$status_file"
     then
-      cp "$status_file" "$artifact_dir/lte-ready.json"
+      if [[ "$prefix" == "lte-status" ]]; then
+        cp "$status_file" "$artifact_dir/lte-ready.json"
+      else
+        cp "$status_file" "$artifact_dir/$prefix-ready.json"
+      fi
+      return 0
+    fi
+    sleep 1
+  done
+  return 1
+}
+
+strict_wifi_status() {
+  /usr/bin/python3 -c '
+import json, sys
+value = json.load(sys.stdin)
+network = value.get("network_final") or {}
+ok = (
+    value.get("state") == "succeeded"
+    and value.get("vpn_status") == "connected"
+    and network.get("status") == "satisfied"
+    and network.get("wifi") is True
+)
+raise SystemExit(0 if ok else 1)
+'
+}
+
+wait_for_wifi() {
+  local prefix="${1:-wifi-status}" deadline status_file attempt=0
+  deadline=$((SECONDS + transport_timeout_seconds))
+  while (( SECONDS < deadline )); do
+    attempt=$((attempt + 1))
+    status_file="$artifact_dir/$prefix-$(printf '%03d' "$attempt").json"
+    if run_control status "$prefix-$(printf '%03d' "$attempt")" \
+      >"$status_file" 2>"$status_file.log" \
+      && strict_wifi_status <"$status_file"
+    then
+      cp "$status_file" "$artifact_dir/$prefix-ready.json"
       return 0
     fi
     sleep 1
@@ -102,6 +148,48 @@ retryable = (
     and value.get("vpn_status") == "disconnected"
     and value.get("error_code") == 10
     and "carrier_start_failed_connect" in milestones
+)
+raise SystemExit(0 if retryable else 1)
+'
+}
+
+start_probe_can_defer_to_workload() {
+  /usr/bin/python3 -c '
+import json, sys
+try:
+    value = json.load(sys.stdin)
+except (json.JSONDecodeError, OSError):
+    raise SystemExit(1)
+network = value.get("network_final") or {}
+milestones = set(value.get("startup_milestones") or [])
+allowed = (
+    value.get("state") == "failed"
+    and value.get("vpn_status") == "connected"
+    and value.get("error_domain") == "NSURLErrorDomain"
+    and value.get("error_code") == -1001
+    and network.get("status") == "satisfied"
+    and network.get("cellular") is True
+    and network.get("wifi") is False
+    and {"carrier_ready", "core_started", "traffic_ready"}.issubset(milestones)
+    and not any(item.startswith("carrier_start_failed_") for item in milestones)
+)
+raise SystemExit(0 if allowed else 1)
+'
+}
+
+retryable_transient_probe_failure() {
+  /usr/bin/python3 -c '
+import json, sys
+try:
+    value = json.load(sys.stdin)
+except (json.JSONDecodeError, OSError):
+    raise SystemExit(1)
+domain = value.get("error_domain") or ""
+retryable = (
+    value.get("state") == "failed"
+    and value.get("error_code") == 1
+    and "ControlError" in domain
+    and value.get("network_final") is None
 )
 raise SystemExit(0 if retryable else 1)
 '
@@ -151,10 +239,30 @@ PY
 
 run_host_driven_soak() {
   local started_at="$SECONDS" deadline next_probe sample=0 probe_status=0
-  local probe_file delay attempt
+  local probe_file delay attempt elapsed wifi_handover_done=0 lte_return_done=0
   deadline=$((started_at + duration_seconds))
   next_probe="$started_at"
   while true; do
+    elapsed=$((SECONDS - started_at))
+    if [[ -n "$wifi_handover_after_seconds" ]] \
+      && ((wifi_handover_done == 0 && elapsed >= wifi_handover_after_seconds)); then
+      log "switching the active WLT session from LTE to Wi-Fi"
+      run_shortcut "$wifi_shortcut" handover-wifi
+      wait_for_wifi handover-wifi-status \
+        || { log "active WLT session did not reach Wi-Fi"; return 3; }
+      printf 'wifi\t%s\n' "$elapsed" >>"$artifact_dir/network-transitions.tsv"
+      wifi_handover_done=1
+    fi
+    elapsed=$((SECONDS - started_at))
+    if [[ -n "$lte_return_after_seconds" ]] \
+      && ((lte_return_done == 0 && elapsed >= lte_return_after_seconds)); then
+      log "switching the active WLT session back from Wi-Fi to LTE"
+      run_shortcut "$lte_shortcut" handover-lte
+      wait_for_cellular handover-lte-status \
+        || { log "active WLT session did not return to LTE"; return 3; }
+      printf 'cellular\t%s\n' "$elapsed" >>"$artifact_dir/network-transitions.tsv"
+      lte_return_done=1
+    fi
     sample=$((sample + 1))
     probe_file="$artifact_dir/soak-probe-$(printf '%03d' "$sample").json"
     for attempt in 1 2; do
@@ -162,9 +270,19 @@ run_host_driven_soak() {
       run_control probe \
         "soak-probe-$(printf '%03d' "$sample")-attempt-$attempt" \
         >"$probe_file" 2>"$probe_file.log" || probe_status=$?
-      # Retry only a missing control result. A sanitized failed probe is real
-      # transport evidence and must remain a failed sample.
-      [[ "$probe_status" == "0" || -s "$probe_file" ]] && break
+      # Retry only a missing control result or a bounded control-plane race
+      # where the app reports that the VPN is not connected before any network
+      # request is attempted. Preserve that failed response for audit; a real
+      # transport failure remains a failed sample and is never replayed.
+      if [[ "$probe_status" == "0" || -s "$probe_file" ]]; then
+        if [[ "$probe_status" != "0" && "$attempt" == "1" ]] \
+          && retryable_transient_probe_failure <"$probe_file"; then
+          cp "$probe_file" "$probe_file.transient-control-failure"
+          sleep 2
+          continue
+        fi
+        break
+      fi
       sleep 2
     done
     printf '%s\t%s\t%s\t%s\n' \
@@ -182,13 +300,16 @@ run_host_driven_soak() {
   done
 
   /usr/bin/python3 - \
-    "$artifact_dir" "$((SECONDS - started_at))" >"$artifact_dir/soak.json" <<'PY'
+    "$artifact_dir" "$((SECONDS - started_at))" "$probe_interval_seconds" \
+    "$handover_recovery_timeout_seconds" >"$artifact_dir/soak.json" <<'PY'
 import json
 from pathlib import Path
 import sys
 
 root = Path(sys.argv[1])
 elapsed_ms = int(sys.argv[2]) * 1000
+interval_ms = int(sys.argv[3]) * 1000
+recovery_timeout_ms = int(sys.argv[4]) * 1000
 offsets = {}
 try:
     for line in (root / "soak-probe-status.tsv").read_text().splitlines():
@@ -216,6 +337,92 @@ for index, path in enumerate(paths, 1):
         "error_code": value.get("error_code"),
     })
 failures = sum(not sample["success"] for sample in samples)
+transitions = []
+try:
+    for line in (root / "network-transitions.tsv").read_text().splitlines():
+        transport, offset = line.split("\t", 1)
+        transitions.append({"transport": transport, "offset_ms": int(offset) * 1000})
+except (OSError, ValueError):
+    pass
+
+def matches_transport(sample, transport):
+    network = sample.get("network") or {}
+    if transport == "wifi":
+        return network.get("wifi") is True
+    if transport == "cellular":
+        return network.get("cellular") is True and network.get("wifi") is False
+    return False
+
+def matches_previous_transport(sample, transport):
+    network = sample.get("network") or {}
+    if transport == "wifi":
+        return network.get("cellular") is True and network.get("wifi") is False
+    if transport == "cellular":
+        return network.get("wifi") is True
+    return False
+
+# Preserve every raw failed probe, but separately classify the narrowly bounded
+# interruption that can occur while an explicitly requested physical-path
+# handover retires the old flow.  A failure is credited only when it is the
+# first sample after the declared transition, the previous successful sample
+# proves the old path, the failed and recovered samples prove the new path,
+# and recovery completes within the configured bound.
+credited = set()
+handover_incidents = []
+for transition in transitions:
+    transition_ms = transition["offset_ms"]
+    window_end_ms = transition_ms + recovery_timeout_ms
+    previous = [
+        (index, sample) for index, sample in enumerate(samples)
+        if sample.get("success") is True
+        and sample.get("offset_ms", 0) < transition_ms
+        and sample.get("offset_ms", 0) >= transition_ms - recovery_timeout_ms
+    ]
+    post = [
+        (index, sample) for index, sample in enumerate(samples)
+        if transition_ms <= sample.get("offset_ms", 0) <= window_end_ms
+    ]
+    if not previous or not post:
+        continue
+    previous_index, previous_sample = previous[-1]
+    first_index, first_sample = post[0]
+    if (
+        first_sample.get("success") is not False
+        or not matches_previous_transport(previous_sample, transition["transport"])
+        or not matches_transport(first_sample, transition["transport"])
+    ):
+        continue
+    failed_indexes = []
+    recovered = None
+    for index, sample in post:
+        if index < first_index:
+            continue
+        if sample.get("success") is False:
+            if not matches_transport(sample, transition["transport"]):
+                failed_indexes = []
+                break
+            failed_indexes.append(index)
+            continue
+        if sample.get("success") is True and matches_transport(sample, transition["transport"]):
+            recovered = (index, sample)
+        break
+    if not failed_indexes or recovered is None:
+        continue
+    recovered_index, recovered_sample = recovered
+    credited.update(failed_indexes)
+    handover_incidents.append({
+        "transport": transition["transport"],
+        "transition_offset_ms": transition_ms,
+        "previous_sample_index": previous_index + 1,
+        "first_failed_sample_index": first_index + 1,
+        "failed_samples": len(failed_indexes),
+        "recovered_sample_index": recovered_index + 1,
+        "recovery_ms": recovered_sample.get("offset_ms", 0) - transition_ms,
+        "recovery_timeout_ms": recovery_timeout_ms,
+    })
+
+planned_handover_failures = len(credited)
+unplanned_failures = failures - planned_handover_failures
 last = {}
 if paths:
     try:
@@ -223,7 +430,7 @@ if paths:
     except (OSError, json.JSONDecodeError):
         pass
 payload = {
-    "schema": 4,
+    "schema": 5,
     "action": "soak",
     "state": "succeeded" if samples and failures == 0 else "failed",
     "vpn_status": last.get("vpn_status", "unknown"),
@@ -232,6 +439,14 @@ payload = {
     "soak_samples": len(samples),
     "soak_successes": len(samples) - failures,
     "soak_failures": failures,
+    "raw_soak_failures": failures,
+    "planned_handover_failures": planned_handover_failures,
+    "unplanned_soak_failures": unplanned_failures,
+    "planned_handover_incidents": handover_incidents,
+    "planned_handover_max_recovery_ms": max(
+        (incident["recovery_ms"] for incident in handover_incidents),
+        default=0,
+    ),
     "soak_probe_samples": samples,
     "network_loss_observed": False,
     "network_recovered": False,
@@ -263,7 +478,8 @@ restore_baseline() {
 for pair in \
   "WLT_STABILITY_DURATION_SECONDS:$duration_seconds" \
   "WLT_STABILITY_PROBE_INTERVAL_SECONDS:$probe_interval_seconds" \
-  "WLT_STABILITY_TRANSPORT_TIMEOUT_SECONDS:$transport_timeout_seconds"
+  "WLT_STABILITY_TRANSPORT_TIMEOUT_SECONDS:$transport_timeout_seconds" \
+  "WLT_STABILITY_HANDOVER_RECOVERY_TIMEOUT_SECONDS:$handover_recovery_timeout_seconds"
 do
   require_positive_integer "${pair%%:*}" "${pair#*:}"
 done
@@ -273,16 +489,39 @@ done
   || die "WLT_STABILITY_INJECT_LOSS must be 0 or 1"
 [[ "$prepare_lte" == "0" || "$prepare_lte" == "1" ]] \
   || die "WLT_STABILITY_PREPARE_LTE must be 0 or 1"
+require_non_negative_integer \
+  WLT_STABILITY_INITIAL_LTE_SETTLE_SECONDS "$initial_lte_settle_seconds"
+(( initial_lte_settle_seconds <= 120 )) \
+  || die "WLT_STABILITY_INITIAL_LTE_SETTLE_SECONDS must not exceed 120"
+[[ "$max_start_attempts" == "1" || "$max_start_attempts" == "2" ]] \
+  || die "WLT_STABILITY_MAX_START_ATTEMPTS must be 1 or 2"
 [[ "$restore_wifi" == "0" || "$restore_wifi" == "1" ]] \
   || die "WLT_STABILITY_RESTORE_WIFI must be 0 or 1"
-(( duration_seconds <= 1800 )) || die "duration must not exceed 1800 seconds"
+if [[ "$inject_loss" == "1" ]]; then
+  (( duration_seconds <= 3600 )) || die "loss-injection duration must not exceed 3600 seconds"
+else
+  (( duration_seconds <= 3600 )) || die "host-observed duration must not exceed 3600 seconds"
+fi
 if [[ "$allow_short" != "1" ]]; then
   (( duration_seconds >= 900 )) || die "acceptance soak must last at least 900 seconds"
 fi
 (( probe_interval_seconds <= 300 && probe_interval_seconds <= duration_seconds )) \
   || die "probe interval must be at most 300 seconds and no greater than duration"
+(( handover_recovery_timeout_seconds <= 180 )) \
+  || die "handover recovery timeout must not exceed 180 seconds"
 if [[ -z "$loss_after_seconds" ]]; then
   loss_after_seconds=$((duration_seconds / 2))
+fi
+if [[ -n "$wifi_handover_after_seconds" || -n "$lte_return_after_seconds" ]]; then
+  [[ "$inject_loss" == "0" ]] \
+    || die "Wi-Fi handover is supported only by the host-observed soak"
+  [[ -n "$wifi_handover_after_seconds" && -n "$lte_return_after_seconds" ]] \
+    || die "both Wi-Fi handover and LTE return offsets are required"
+  require_positive_integer WLT_STABILITY_WIFI_HANDOVER_AFTER_SECONDS "$wifi_handover_after_seconds"
+  require_positive_integer WLT_STABILITY_LTE_RETURN_AFTER_SECONDS "$lte_return_after_seconds"
+  (( wifi_handover_after_seconds < lte_return_after_seconds \
+    && lte_return_after_seconds < duration_seconds )) \
+    || die "handover offsets must satisfy Wi-Fi < LTE return < duration"
 fi
 if [[ "$inject_loss" == "1" ]]; then
   require_positive_integer WLT_STABILITY_LOSS_AFTER_SECONDS "$loss_after_seconds"
@@ -298,8 +537,10 @@ fi
 
 mkdir -p "$artifact_dir"
 trap restore_baseline EXIT INT TERM HUP
-printf 'duration_seconds=%s\nprobe_interval_seconds=%s\ninject_loss=%s\n' \
+printf 'duration_seconds=%s\nprobe_interval_seconds=%s\ninject_loss=%s\nwifi_handover_after_seconds=%s\nlte_return_after_seconds=%s\nhandover_recovery_timeout_seconds=%s\ninitial_lte_settle_seconds=%s\n' \
   "$duration_seconds" "$probe_interval_seconds" "$inject_loss" \
+  "$wifi_handover_after_seconds" "$lte_return_after_seconds" \
+  "$handover_recovery_timeout_seconds" "$initial_lte_settle_seconds" \
   >"$artifact_dir/plan.txt"
 
 log "normalizing stopped VPN"
@@ -309,12 +550,18 @@ if [[ "$prepare_lte" == "1" ]]; then
   log "requesting strict cellular path through the iPhone Shortcut"
   run_shortcut "$lte_shortcut" prepare-lte
   wait_for_cellular || die "iPhone did not reach strict cellular transport"
+  if (( initial_lte_settle_seconds > 0 )); then
+    log "allowing cellular routing to settle for ${initial_lte_settle_seconds}s"
+    sleep "$initial_lte_settle_seconds"
+    wait_for_cellular lte-settled-status \
+      || die "iPhone did not retain strict cellular transport after settle interval"
+  fi
 fi
 
 log "starting WLT and proving traffic"
 vpn_started=1
 start_succeeded=0
-for start_attempt in 1 2; do
+for start_attempt in $(seq 1 "$max_start_attempts"); do
   start_attempt_file="$artifact_dir/start-probe-attempt-$start_attempt.json"
   start_status=0
   if [[ -n "$candidate_file" ]]; then
@@ -333,11 +580,22 @@ for start_attempt in 1 2; do
     start_succeeded=1
     break
   fi
-  if (( start_attempt == 1 )) && retryable_start_failure <"$start_attempt_file"; then
+  if (( start_attempt < max_start_attempts )) && [[ ! -s "$start_attempt_file" ]]; then
+    log "CoreDevice returned no sanitized startup result; retrying delivery once after explicit stop"
+    run_control stop startup-delivery-retry-stop >/dev/null 2>&1 || true
+    sleep 2
+    continue
+  fi
+  if (( start_attempt < max_start_attempts )) && retryable_start_failure <"$start_attempt_file"; then
     log "carrier connect did not settle; retrying startup once after bounded cooldown"
     run_control stop startup-retry-stop >/dev/null 2>&1 || true
     sleep 15
     continue
+  fi
+  if [[ -n "$workload_file" ]] && start_probe_can_defer_to_workload <"$start_attempt_file"; then
+    log "start-probe timed out after traffic_ready; deferring acceptance to the configured workload"
+    start_succeeded=1
+    break
   fi
   exit "$start_status"
 done
@@ -394,10 +652,13 @@ run_control status final-status >"$artifact_dir/final-status.json"
 if [[ "$restore_wifi" == "1" ]]; then
   run_shortcut "$wifi_shortcut" final-wifi-restore ""
   wifi_restored=1
+  : >"$artifact_dir/.wifi-restore-proved"
 fi
 
 /usr/bin/python3 - \
-  "$artifact_dir" "$duration_seconds" "$probe_interval_seconds" "$inject_loss" <<'PY'
+  "$artifact_dir" "$duration_seconds" "$probe_interval_seconds" "$inject_loss" \
+  "$wifi_handover_after_seconds" "$lte_return_after_seconds" \
+  "$handover_recovery_timeout_seconds" "$restore_wifi" <<'PY'
 import json
 from pathlib import Path
 import sys
@@ -406,6 +667,10 @@ root = Path(sys.argv[1])
 duration = int(sys.argv[2])
 interval = int(sys.argv[3])
 inject_loss = sys.argv[4] == "1"
+wifi_handover_expected = bool(sys.argv[5])
+lte_return_expected = bool(sys.argv[6])
+handover_recovery_timeout_ms = int(sys.argv[7]) * 1000
+restore_wifi_expected = sys.argv[8] == "1"
 
 def load(name):
     return json.loads((root / name).read_text())
@@ -418,13 +683,20 @@ second_stop = load("idempotent-stop.json")
 status = load("final-status.json")
 failures = []
 infrastructure_failures = []
+transitions = []
+try:
+    for line in (root / "network-transitions.tsv").read_text().splitlines():
+        transport, offset = line.split("\t", 1)
+        transitions.append({"transport": transport, "offset_seconds": int(offset)})
+except (OSError, ValueError):
+    pass
 
 if start.get("state") != "succeeded" or start.get("vpn_status") != "connected":
     failures.append("start_probe_failed")
 network = start.get("network_final") or {}
 if not (network.get("cellular") is True and network.get("wifi") is False):
     failures.append("strict_cellular_not_proved")
-if soak.get("state") != "succeeded" or soak.get("vpn_status") != "connected":
+if soak.get("vpn_status") != "connected":
     failures.append("soak_did_not_finish_connected")
 if (soak.get("soak_elapsed_ms") or 0) < duration * 1000:
     failures.append("soak_too_short")
@@ -443,8 +715,14 @@ if inject_loss:
             failures.append("connection_loss_not_observed")
     elif soak.get("network_recovered") is not True:
         failures.append("connection_recovery_not_observed")
-elif (soak.get("soak_failures") or 0) != 0:
+    if soak.get("unplanned_soak_failures") is not None and (soak.get("unplanned_soak_failures") or 0) != 0:
+        failures.append("unexpected_soak_probe_failure")
+elif (soak.get("unplanned_soak_failures", soak.get("soak_failures")) or 0) != 0:
     failures.append("unexpected_soak_probe_failure")
+if wifi_handover_expected and not any(value["transport"] == "wifi" for value in transitions):
+    failures.append("wifi_handover_not_completed")
+if lte_return_expected and not any(value["transport"] == "cellular" for value in transitions):
+    failures.append("lte_return_not_completed")
 if probe.get("state") != "succeeded" or probe.get("vpn_status") != "connected":
     failures.append("post_soak_probe_failed")
 for label, value in (("final_stop", stop), ("idempotent_stop", second_stop), ("final_status", status)):
@@ -455,6 +733,10 @@ classification = (
     "failed" if failures
     else ("infrastructure" if infrastructure_failures else "success")
 )
+wifi_restore_proved = (root / ".wifi-restore-proved").is_file()
+if restore_wifi_expected and not wifi_restore_proved:
+    failures.append("wifi_restore_not_proved")
+    classification = "failed"
 payload = {
     "schema": 1,
     "classification": classification,
@@ -465,9 +747,19 @@ payload = {
     "soak_samples": soak.get("soak_samples"),
     "soak_successes": soak.get("soak_successes"),
     "soak_failures": soak.get("soak_failures"),
+    "raw_soak_failures": soak.get("raw_soak_failures", soak.get("soak_failures")),
+    "planned_handover_failures": soak.get("planned_handover_failures", 0),
+    "unplanned_soak_failures": soak.get("unplanned_soak_failures", soak.get("soak_failures")),
+    "planned_handover_incidents": soak.get("planned_handover_incidents", []),
+    "planned_handover_max_recovery_ms": soak.get("planned_handover_max_recovery_ms", 0),
+    "handover_recovery_timeout_ms": handover_recovery_timeout_ms,
     "network_loss_observed": soak.get("network_loss_observed"),
     "network_recovered": soak.get("network_recovered"),
-    "cleanup_succeeded": not any("stop" in value or "status" in value for value in failures),
+    "network_transitions": transitions,
+    "cleanup_succeeded": (
+        not any("stop" in value or "status" in value for value in failures)
+        and (not restore_wifi_expected or wifi_restore_proved)
+    ),
     "infrastructure_failures": infrastructure_failures,
     "failures": failures,
 }
