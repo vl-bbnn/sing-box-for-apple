@@ -87,19 +87,25 @@ matches = []
 for device in devices:
     hardware = device.get("hardwareProperties", {})
     connection = device.get("connectionProperties", {})
+    # CoreDevice exposes booted iOS simulators with deviceType=iPhone and a
+    # connected tunnel as well.  They use the host-local `sameMachine`
+    # transport and must never win automatic selection for a physical-device
+    # build/install.
+    is_physical = connection.get("transportType") != "sameMachine"
     platform = str(hardware.get("platform", ""))
     marketing_name = str(hardware.get("marketingName", ""))
     device_type = str(hardware.get("deviceType", ""))
     is_iphone = platform == "iOS" or "iPhone" in marketing_name or "iPhone" in device_type
     if (
         is_iphone
+        and is_physical
         and connection.get("pairingState") == "paired"
         and connection.get("tunnelState") == "connected"
     ):
         matches.append(device)
 if len(matches) != 1:
     raise SystemExit(
-        f"expected exactly one connected paired iOS device, found {len(matches)}; "
+        f"expected exactly one connected paired physical iOS device, found {len(matches)}; "
         "set DEVICE_ID explicitly"
     )
 print(matches[0].get("identifier", ""))
@@ -179,13 +185,15 @@ build_libbox() {
 	local sing_box_build_tags
 	sing_box_build_tags="$(sing_box_build_tags)"
 	# 2b2n:end wlt
-	SING_BOX_REPO="$sing_box_repo" \
-		LIBBOX_VARIANT=dev \
-		LIBBOX_ACTIVATE=0 \
-		LIBBOX_APPLE_PLATFORMS="$libbox_platforms" \
-		SING_BOX_BUILD_TAGS="$sing_box_build_tags" \
-		bash "$repo_root/scripts/build_libbox.sh" "$sing_box_version" \
-		>"$build_dir/build-libbox-iphone.log" 2>&1
+	(
+		cd "$repo_root"
+		SING_BOX_REPO="$sing_box_repo" \
+			LIBBOX_VARIANT=dev \
+			LIBBOX_ACTIVATE=0 \
+			LIBBOX_APPLE_PLATFORMS="$libbox_platforms" \
+			SING_BOX_BUILD_TAGS="$sing_box_build_tags" \
+			bash "$repo_root/scripts/build_libbox.sh" "$sing_box_version"
+	) >"$build_dir/build-libbox-iphone.log" 2>&1
 	VERIFY_LX_LIBBOX="${SING_BOX_LX:-0}" \
 		bash "$repo_root/scripts/verify_wlt_libbox.sh" "$dev_xcframework" \
 		>>"$build_dir/build-libbox-iphone.log" 2>&1 \
