@@ -18,6 +18,9 @@ public enum WhitelistTransportConfig {
     public let peerWriteBuffer: Int
     public let kcpWindow: Int
     public let kcpBuffer: Int
+    public let vlessMuxProtocol: String?
+    public let vlessMuxMaxConnections: Int?
+    public let vlessMuxMinStreams: Int?
 
     enum CodingKeys: String, CodingKey {
       case maxActive = "max_active"
@@ -29,6 +32,9 @@ public enum WhitelistTransportConfig {
       case peerWriteBuffer = "peer_write_buffer"
       case kcpWindow = "kcp_window"
       case kcpBuffer = "kcp_buffer"
+      case vlessMuxProtocol = "vless_mux_protocol"
+      case vlessMuxMaxConnections = "vless_mux_max_connections"
+      case vlessMuxMinStreams = "vless_mux_min_streams"
     }
   }
 
@@ -39,6 +45,7 @@ public enum WhitelistTransportConfig {
     case invalidConfig = 4
     case missingWLTService = 5
     case multipleWLTServices = 6
+    case missingWLTVLESSOutbound = 7
   }
 
   private static let runtimeParameterKeys: Set<String> = [
@@ -53,6 +60,12 @@ public enum WhitelistTransportConfig {
     "kcp_buffer",
   ]
 
+  private static let vlessMuxParameterKeys: Set<String> = [
+    "vless_mux_protocol",
+    "vless_mux_max_connections",
+    "vless_mux_min_streams",
+  ]
+
   public static func decodeRuntimeCandidate(_ data: Data) throws -> RuntimeParameters {
     guard
       let envelope = try JSONSerialization.jsonObject(with: data) as? [String: Any],
@@ -61,7 +74,11 @@ public enum WhitelistTransportConfig {
     else {
       throw RuntimeCandidateError.invalidEnvelope
     }
-    guard Set(parameters.keys) == runtimeParameterKeys else {
+    let parameterKeys = Set(parameters.keys)
+    guard
+      parameterKeys == runtimeParameterKeys
+        || parameterKeys == runtimeParameterKeys.union(vlessMuxParameterKeys)
+    else {
       throw RuntimeCandidateError.invalidSchema
     }
     guard
@@ -88,6 +105,28 @@ public enum WhitelistTransportConfig {
     else {
       throw RuntimeCandidateError.invalidValue
     }
+    let vlessMuxProtocol: String?
+    let vlessMuxMaxConnections: Int?
+    let vlessMuxMinStreams: Int?
+    if parameterKeys.isSuperset(of: vlessMuxParameterKeys) {
+      guard
+        let protocolValue = parameters["vless_mux_protocol"] as? String,
+        ["smux", "yamux", "h2mux"].contains(protocolValue),
+        let maxConnections = strictInteger(parameters["vless_mux_max_connections"]),
+        let minStreams = strictInteger(parameters["vless_mux_min_streams"]),
+        maxConnections > 0,
+        minStreams > 0
+      else {
+        throw RuntimeCandidateError.invalidValue
+      }
+      vlessMuxProtocol = protocolValue
+      vlessMuxMaxConnections = maxConnections
+      vlessMuxMinStreams = minStreams
+    } else {
+      vlessMuxProtocol = nil
+      vlessMuxMaxConnections = nil
+      vlessMuxMinStreams = nil
+    }
     return RuntimeParameters(
       maxActive: maxActive,
       maxOpen: maxOpen,
@@ -97,7 +136,10 @@ public enum WhitelistTransportConfig {
       idleTimeout: idleTimeout,
       peerWriteBuffer: peerWriteBuffer,
       kcpWindow: kcpWindow,
-      kcpBuffer: kcpBuffer
+      kcpBuffer: kcpBuffer,
+      vlessMuxProtocol: vlessMuxProtocol,
+      vlessMuxMaxConnections: vlessMuxMaxConnections,
+      vlessMuxMinStreams: vlessMuxMinStreams
     )
   }
 
@@ -139,6 +181,47 @@ public enum WhitelistTransportConfig {
     service["kcp_buffer"] = parameters.kcpBuffer
     services[index] = service
     dictionary["services"] = services
+    if
+      let protocolValue = parameters.vlessMuxProtocol,
+      let maxConnections = parameters.vlessMuxMaxConnections,
+      let minStreams = parameters.vlessMuxMinStreams
+    {
+      guard var outbounds = dictionary["outbounds"] as? [Any] else {
+        throw RuntimeCandidateError.invalidConfig
+      }
+      let wltTags = Set(outbounds.compactMap { raw -> String? in
+        guard
+          let outbound = raw as? [String: Any],
+          stringValue(outbound["type"])?.lowercased() == "wlt"
+        else {
+          return nil
+        }
+        return stringValue(outbound["tag"])
+      })
+      var modifiedOutbounds = 0
+      for outboundIndex in outbounds.indices {
+        guard
+          var outbound = outbounds[outboundIndex] as? [String: Any],
+          stringValue(outbound["type"])?.lowercased() == "vless",
+          let detour = stringValue(outbound["detour"]),
+          wltTags.contains(detour)
+        else {
+          continue
+        }
+        outbound["multiplex"] = [
+          "enabled": true,
+          "protocol": protocolValue,
+          "max_connections": maxConnections,
+          "min_streams": minStreams,
+        ]
+        outbounds[outboundIndex] = outbound
+        modifiedOutbounds += 1
+      }
+      guard modifiedOutbounds > 0 else {
+        throw RuntimeCandidateError.missingWLTVLESSOutbound
+      }
+      dictionary["outbounds"] = outbounds
+    }
     guard JSONSerialization.isValidJSONObject(dictionary) else {
       throw RuntimeCandidateError.invalidConfig
     }
@@ -351,15 +434,11 @@ public enum WhitelistTransportConfig {
   }
 
   private static func validPositiveDuration(_ value: String) -> Bool {
-    let suffixLength: Int
-    if value.hasSuffix("ms") {
-      suffixLength = 2
-    } else if value.hasSuffix("s") {
-      suffixLength = 1
-    } else {
+    let suffixes = ["ns", "us", "µs", "ms", "s", "m", "h"]
+    guard let suffix = suffixes.first(where: { value.hasSuffix($0) }) else {
       return false
     }
-    let number = value.dropLast(suffixLength)
+    let number = value.dropLast(suffix.count)
     guard !number.isEmpty, let parsed = Double(number) else {
       return false
     }

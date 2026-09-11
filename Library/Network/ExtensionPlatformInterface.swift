@@ -472,7 +472,17 @@ public class ExtensionPlatformInterface: NSObject, LibboxPlatformInterfaceProtoc
   }
 
   public func serviceStop() throws {
-    tunnel.stopService()
+    #if os(iOS) && SFI_DEV
+      let result = tunnel.requestOwnedStopService(operationID: UUID().uuidString.lowercased(), journalCloseReason: "app_service_stop")
+      if let outcome = result.outcome, !outcome.succeeded {
+        throw WLTStopClient.TerminalFailure(reply: result)
+      }
+      // A pending accepted request must not block the libbox command callback
+      // whose service is being closed. The common owner publishes completion.
+      return
+    #else
+      tunnel.stopService()
+    #endif
   }
 
   public func serviceReload() throws {
