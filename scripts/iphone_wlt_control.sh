@@ -5,6 +5,7 @@ umask 077
 
 script_dir="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 repo_root="$(cd "$script_dir/.." && pwd)"
+bounded_runner="$script_dir/run_bounded.py"
 timestamp="$(date '+%Y-%m-%d-%H%M%S')"
 artifact_root="${WLT_TEST_ARTIFACT_ROOT:-$repo_root/.local/wlt-test-artifacts}"
 artifact_dir="${WLT_CONTROL_ARTIFACT_DIR:-$artifact_root/wlt-device-control-$timestamp}"
@@ -13,8 +14,10 @@ launch_timeout_seconds="${WLT_CONTROL_LAUNCH_TIMEOUT_SECONDS:-30}"
 copy_timeout_seconds="${WLT_CONTROL_COPY_TIMEOUT_SECONDS:-30}"
 candidate_file="${WLT_CONTROL_CANDIDATE_FILE:-}"
 workload_file="${WLT_CONTROL_WORKLOAD_FILE:-}"
+explicit_wlt_plan_file="${WLT_CONTROL_EXPLICIT_SAVED_WLT_PLAN_FILE:-}"
 profile_file="${WLT_CONTROL_PROFILE_FILE:-}"
 profile_export_file="${WLT_CONTROL_PROFILE_EXPORT_FILE:-}"
+state_export_dir="${WLT_CONTROL_STATE_EXPORT_DIR:-}"
 identity_ring_dir="${WLT_CONTROL_IDENTITY_RING_DIR:-}"
 soak_seconds="${WLT_CONTROL_SOAK_SECONDS:-1800}"
 soak_interval_seconds="${WLT_CONTROL_SOAK_INTERVAL_SECONDS:-30}"
@@ -37,7 +40,8 @@ device_id() {
     fi
 
     local json_path="$artifact_dir/devices.json"
-    xcrun devicectl list devices --json-output "$json_path" >/dev/null
+    run_bounded "$copy_timeout_seconds" xcrun devicectl list devices \
+        --json-output "$json_path" >/dev/null
     /usr/bin/python3 - "$json_path" <<'PY'
 import json
 import sys
@@ -65,11 +69,46 @@ validate_integer() {
     [[ "$1" =~ ^[1-9][0-9]*$ ]] || die "$2 must be a positive integer"
 }
 
+retryable_coredevice_launch_failure() {
+    /usr/bin/python3 - "$1" <<'PY'
+import json
+import sys
+
+try:
+    value = json.load(open(sys.argv[1]))
+except (OSError, json.JSONDecodeError):
+    raise SystemExit(1)
+error = value.get("error") or {}
+underlying = ((error.get("userInfo") or {}).get("NSUnderlyingError") or {}).get("error") or {}
+retryable = (
+    (value.get("info") or {}).get("outcome") == "failed"
+    and error.get("domain") == "com.apple.dt.CoreDeviceError"
+    and (
+        error.get("code") == 10004
+        or (
+            error.get("code") == 3
+            and underlying.get("domain") == "com.apple.Mercury.error"
+            and underlying.get("code") == 1001
+        )
+    )
+)
+raise SystemExit(0 if retryable else 1)
+PY
+}
+
+# CoreDevice's --timeout is not a host-side guarantee. The helper gives each
+# invocation its own process group and cleans the whole group on timeout or
+# signal without touching unrelated CoreDevice/Xcode processes.
+run_bounded() {
+    local seconds="$1"; shift
+    /usr/bin/python3 "$bounded_runner" "$seconds" -- "$@"
+}
+
 run() {
     local action="${1:-}"
     case "$action" in
-        bootstrap-profile|upsert-profile|export-profile|select-profile|assert-merged-profile|ping|probe|refresh-profile|import-identity-ring|identity-ring-status|arm-identity-ring-fault|start|start-probe|status|group-status|stop|soak|workload|network-workload) ;;
-        *) die "usage: $0 <bootstrap-profile|upsert-profile|export-profile|select-profile|assert-merged-profile|ping|probe|refresh-profile|import-identity-ring|identity-ring-status|arm-identity-ring-fault|start|start-probe|status|group-status|stop|soak|workload|network-workload>" ;;
+        bootstrap-profile|upsert-profile|export-profile|export-state|select-profile|assert-merged-profile|ping|probe|refresh-profile|import-identity-ring|identity-ring-status|arm-identity-ring-fault|start|start-probe|status|group-status|route-diagnostics|stop|soak|workload|network-workload|explicit_saved_WLT_outbound_reachability) ;;
+        *) die "usage: $0 <bootstrap-profile|upsert-profile|export-profile|export-state|select-profile|assert-merged-profile|ping|probe|refresh-profile|import-identity-ring|identity-ring-status|arm-identity-ring-fault|start|start-probe|status|group-status|route-diagnostics|stop|soak|workload|network-workload|explicit_saved_WLT_outbound_reachability>" ;;
     esac
     [[ -n "${WLT_APP_BUNDLE_ID:-}" ]] || die "set WLT_APP_BUNDLE_ID to the installed SFI Dev bundle identifier"
     [[ "$WLT_APP_BUNDLE_ID" =~ ^[A-Za-z0-9.-]+$ ]] || die "WLT_APP_BUNDLE_ID has an invalid format"
@@ -93,8 +132,8 @@ run() {
     if [[ "$action" == "soak" ]]; then
         validate_integer "$soak_seconds" "WLT_CONTROL_SOAK_SECONDS"
         validate_integer "$soak_interval_seconds" "WLT_CONTROL_SOAK_INTERVAL_SECONDS"
-        (( soak_seconds >= 5 && soak_seconds <= 1800 )) \
-            || die "WLT_CONTROL_SOAK_SECONDS must be between 5 and 1800"
+        (( soak_seconds >= 5 && soak_seconds <= 3600 )) \
+            || die "WLT_CONTROL_SOAK_SECONDS must be between 5 and 3600"
         (( soak_interval_seconds <= 300 && soak_interval_seconds <= soak_seconds )) \
             || die "WLT_CONTROL_SOAK_INTERVAL_SECONDS must be at most 300 and no greater than soak duration"
         if (( timeout_seconds <= soak_seconds )); then
@@ -111,7 +150,7 @@ import sys
 
 path = sys.argv[1]
 value = json.load(open(path))
-keys = {
+runtime_keys = {
     "max_active",
     "max_open",
     "dns_open_reserve",
@@ -122,15 +161,120 @@ keys = {
     "kcp_window",
     "kcp_buffer",
 }
+mux_keys = {
+    "vless_mux_protocol",
+    "vless_mux_max_connections",
+    "vless_mux_min_streams",
+}
 if not isinstance(value, dict) or set(value) != {"parameters"}:
     raise SystemExit("candidate must contain only the parameters object")
 parameters = value["parameters"]
-if not isinstance(parameters, dict) or set(parameters) != keys:
+parameter_keys = set(parameters) if isinstance(parameters, dict) else set()
+if parameter_keys not in (runtime_keys, runtime_keys | mux_keys):
     raise SystemExit("candidate parameters must contain the exact runtime schema")
+if parameter_keys == runtime_keys | mux_keys:
+    protocol = parameters["vless_mux_protocol"]
+    max_connections = parameters["vless_mux_max_connections"]
+    min_streams = parameters["vless_mux_min_streams"]
+    if protocol not in {"smux", "yamux", "h2mux"}:
+        raise SystemExit("candidate VLESS mux protocol is invalid")
+    if (
+        isinstance(max_connections, bool)
+        or not isinstance(max_connections, int)
+        or max_connections <= 0
+        or isinstance(min_streams, bool)
+        or not isinstance(min_streams, int)
+        or min_streams <= 0
+    ):
+        raise SystemExit("candidate VLESS mux limits must be positive integers")
 PY
     fi
 
-    if [[ -n "$workload_file" ]]; then
+    if [[ -n "$explicit_wlt_plan_file" ]]; then
+        [[ "$action" == "explicit_saved_WLT_outbound_reachability" ]] \
+            || die "WLT_CONTROL_EXPLICIT_SAVED_WLT_PLAN_FILE is valid only for explicit_saved_WLT_outbound_reachability"
+        [[ -z "$workload_file" ]] || die "explicit WLT plan and native workload plan are mutually exclusive"
+        [[ -f "$explicit_wlt_plan_file" ]] || die "missing explicit WLT plan file"
+        /usr/bin/python3 - "$explicit_wlt_plan_file" <<'PY'
+import ipaddress
+import json
+import re
+import sys
+
+value = json.load(open(sys.argv[1]))
+if not isinstance(value, dict) or set(value) != {"schema", "scope", "requests"}:
+    raise SystemExit("explicit WLT plan schema mismatch")
+if value["schema"] != 1 or value["scope"] != "explicit_saved_WLT_outbound_reachability":
+    raise SystemExit("explicit WLT plan scope mismatch")
+requests = value["requests"]
+if not isinstance(requests, list) or len(requests) != 3:
+    raise SystemExit("explicit WLT plan requires DNS, 204, and 1 MiB requests")
+if [item.get("kind") for item in requests if isinstance(item, dict)] != ["dns", "https", "https"]:
+    raise SystemExit("explicit WLT request order mismatch")
+common = {"schema", "probe_id", "kind", "group_tag", "outbound_tag", "wlt_tag", "timeout_ms"}
+ids = set()
+for index, request in enumerate(requests):
+    if not isinstance(request, dict) or request.get("schema") != 1:
+        raise SystemExit("explicit WLT request schema mismatch")
+    probe_id = request.get("probe_id")
+    timeout = request.get("timeout_ms")
+    if (not isinstance(probe_id, str)
+            or re.fullmatch(r"[A-Za-z0-9][A-Za-z0-9._-]{0,63}", probe_id) is None
+            or probe_id in ids or isinstance(timeout, bool) or not isinstance(timeout, int)
+            or not 1 <= timeout <= 90000):
+        raise SystemExit("explicit WLT request identity or timeout mismatch")
+    ids.add(probe_id)
+    if index == 0:
+        if set(request) != common | {"server", "query_name"}:
+            raise SystemExit("explicit DNS request schema mismatch")
+        if (request.get("group_tag"), request.get("outbound_tag"), request.get("wlt_tag")) != (
+            "ru_or_wlt-ru", "vless-wlt-ru", "wlt-ru"
+        ):
+            raise SystemExit("explicit DNS saved graph mismatch")
+        server = request.get("server")
+        match = re.fullmatch(r"(?:\[([^]]+)\]|([^:]+)):([0-9]{1,5})", server or "")
+        if not match:
+            raise SystemExit("explicit DNS server must be a literal IP:port")
+        try:
+            ipaddress.ip_address(match.group(1) or match.group(2))
+        except ValueError as error:
+            raise SystemExit("explicit DNS server must be literal") from error
+        if not 1 <= int(match.group(3)) <= 65535:
+            raise SystemExit("explicit DNS port mismatch")
+        query = request.get("query_name")
+        if (not isinstance(query, str) or len(query) > 253
+                or re.fullmatch(r"[A-Za-z0-9.-]+", query) is None
+                or not query.lower().endswith(".vercel.app")):
+            raise SystemExit("explicit DNS query mismatch")
+    else:
+        if set(request) != common | {"url", "expected_status", "expected_bytes", "max_read_bytes"}:
+            raise SystemExit("explicit HTTPS request schema mismatch")
+        if (request.get("group_tag"), request.get("outbound_tag"), request.get("wlt_tag")) != (
+            "eu_or_wlt-eu", "vless-wlt-eu", "wlt-eu"
+        ):
+            raise SystemExit("explicit HTTPS saved graph mismatch")
+        if index == 1:
+            expected = ("https://cp.cloudflare.com/generate_204", 204, 0, 1)
+            actual = (request.get("url"), request.get("expected_status"),
+                      request.get("expected_bytes"), request.get("max_read_bytes"))
+            if actual != expected:
+                raise SystemExit("explicit 204 contract mismatch")
+        else:
+            if re.fullmatch(
+                r"https://speed\.cloudflare\.com/__down\?bytes=1048576&seed=[A-Za-z0-9._-]{1,64}",
+                request.get("url") or "",
+            ) is None:
+                raise SystemExit("explicit 1 MiB URL mismatch")
+            if (request.get("expected_status"), request.get("expected_bytes"),
+                    request.get("max_read_bytes")) != (200, 1048576, 1048577):
+                raise SystemExit("explicit 1 MiB byte contract mismatch")
+PY
+        workload_file="$explicit_wlt_plan_file"
+    elif [[ "$action" == "explicit_saved_WLT_outbound_reachability" ]]; then
+        die "WLT_CONTROL_EXPLICIT_SAVED_WLT_PLAN_FILE is required for explicit_saved_WLT_outbound_reachability"
+    fi
+
+    if [[ -n "$workload_file" && "$action" != "explicit_saved_WLT_outbound_reachability" ]]; then
         [[ "$action" == "workload" || "$action" == "network-workload" ]] \
             || die "WLT_CONTROL_WORKLOAD_FILE is valid only for workload/network-workload"
         [[ -f "$workload_file" ]] || die "missing workload file: $workload_file"
@@ -149,8 +293,8 @@ if (
     or workload_keys not in (required_workload, required_workload | {"select_route"})
 ):
     raise SystemExit("workload must contain schema, route, probes, and optional select_route")
-if value["schema"] != 1 or value["route"] != "eu":
-    raise SystemExit("workload must use schema 1 and the eu route")
+if value["schema"] != 1 or value["route"] not in {"eu", "ru"}:
+    raise SystemExit("workload must use schema 1 and a supported ru/eu route")
 if "select_route" in value and not isinstance(value["select_route"], bool):
     raise SystemExit("workload select_route must be boolean")
 probes = value["probes"]
@@ -217,6 +361,15 @@ PY
     elif [[ -n "$profile_export_file" ]]; then
         die "WLT_CONTROL_PROFILE_EXPORT_FILE is valid only for export-profile"
     fi
+    if [[ "$action" == "export-state" ]]; then
+        [[ -n "$state_export_dir" ]] || die "WLT_CONTROL_STATE_EXPORT_DIR is required for export-state"
+        [[ ! -e "$state_export_dir" && ! -L "$state_export_dir" ]] \
+            || die "WLT_CONTROL_STATE_EXPORT_DIR must not exist"
+        [[ -n "${WLT_APP_GROUP_ID:-}" && "$WLT_APP_GROUP_ID" =~ ^[A-Za-z0-9.-]+$ ]] \
+            || die "WLT_APP_GROUP_ID is required for export-state"
+    elif [[ -n "$state_export_dir" || -n "${WLT_APP_GROUP_ID:-}" ]]; then
+        die "state export variables are valid only for export-state"
+    fi
     if [[ -n "$identity_ring_dir" ]]; then
         [[ "$action" == "import-identity-ring" ]] \
             || die "WLT_CONTROL_IDENTITY_RING_DIR is valid only for import-identity-ring"
@@ -262,7 +415,7 @@ PY
     fi
 
     mkdir -p "$artifact_dir"
-    local device request_id result_name remote_result remote_candidate remote_workload remote_profile remote_profile_export remote_identity_active remote_identity_reserve remote_identity_key local_result deadline copy_log payload_url
+    local device request_id result_name remote_result remote_candidate remote_workload remote_profile remote_profile_export remote_state_export remote_identity_active remote_identity_reserve remote_identity_key local_result deadline copy_log payload_url
     device="$(device_id)"
     request_id="$(uuidgen | tr '[:upper:]' '[:lower:]')"
     result_name="$request_id.json"
@@ -271,6 +424,7 @@ PY
     remote_workload="Library/Caches/wlt-test-workload-$result_name"
     remote_profile="Library/Caches/wlt-test-profile-$result_name"
     remote_profile_export="Library/Caches/wlt-test-profile-export-$result_name"
+    remote_state_export="Library/Caches/wlt-test-state-export-$request_id"
     remote_identity_active="Library/Caches/wlt-test-identity-ring-${request_id}-active.aesgcm"
     remote_identity_reserve="Library/Caches/wlt-test-identity-ring-${request_id}-reserve.aesgcm"
     remote_identity_key="Library/Caches/wlt-test-identity-ring-${request_id}-key.base64"
@@ -289,7 +443,7 @@ PY
 
     if [[ -n "$candidate_file" ]]; then
         log "copying validated runtime parameters to the Dev app container"
-        xcrun devicectl device copy to \
+        run_bounded "$copy_timeout_seconds" xcrun devicectl device copy to \
             --device "$device" \
             --domain-type appDataContainer \
             --domain-identifier "$WLT_APP_BUNDLE_ID" \
@@ -302,8 +456,8 @@ PY
     fi
 
     if [[ -n "$workload_file" ]]; then
-        log "copying validated EU workload plan to the Dev app container"
-        xcrun devicectl device copy to \
+        log "copying validated workload or explicit WLT plan to the Dev app container"
+        run_bounded "$copy_timeout_seconds" xcrun devicectl device copy to \
             --device "$device" \
             --domain-type appDataContainer \
             --domain-identifier "$WLT_APP_BUNDLE_ID" \
@@ -317,7 +471,7 @@ PY
 
     if [[ -n "$profile_file" ]]; then
         log "copying validated profile bootstrap plan to the Dev app container"
-        xcrun devicectl device copy to \
+        run_bounded "$copy_timeout_seconds" xcrun devicectl device copy to \
             --device "$device" \
             --domain-type appDataContainer \
             --domain-identifier "$WLT_APP_BUNDLE_ID" \
@@ -347,7 +501,7 @@ PY
                     identity_destination="$remote_identity_key"
                     ;;
             esac
-            if ! xcrun devicectl device copy to \
+            if ! run_bounded "$copy_timeout_seconds" xcrun devicectl device copy to \
                 --device "$device" \
                 --domain-type appDataContainer \
                 --domain-identifier "$WLT_APP_BUNDLE_ID" \
@@ -373,37 +527,45 @@ PY
         payload_url="$payload_url&duration=$soak_seconds&interval=$soak_interval_seconds"
     fi
     log "sending $action through CoreDevice (no XCTest/UI Automation)"
-    if [[ "$action" == "stop" ]]; then
-        if ! xcrun devicectl device process launch \
-            --device "$device" \
-            --terminate-existing \
-            --payload-url "$payload_url" \
-            --activate \
-            --timeout "$launch_timeout_seconds" \
-            --json-output "$artifact_dir/launch.json" \
-            "$WLT_APP_BUNDLE_ID" >"$artifact_dir/launch.log" 2>&1
-        then
-            cleanup_identity_transfer \
-                || die "CoreDevice launch failed and identity transfer cleanup could not be proven"
-            die "CoreDevice launch failed; identity transfer cleanup succeeded"
+    local launch_attempt launch_succeeded=0
+    local -a launch_arguments=(
+        xcrun devicectl device process launch
+        --device "$device"
+    )
+    if [[ "$action" == "stop" || "$action" == "start" || "$action" == "start-probe" ]]; then
+        launch_arguments+=(--terminate-existing)
+    fi
+    launch_arguments+=(
+        --payload-url "$payload_url"
+        --activate
+        --timeout "$launch_timeout_seconds"
+        --json-output "$artifact_dir/launch.json"
+        "$WLT_APP_BUNDLE_ID"
+    )
+    for launch_attempt in 1 2; do
+        if run_bounded "$launch_timeout_seconds" "${launch_arguments[@]}" \
+            >"$artifact_dir/launch.log" 2>&1; then
+            launch_succeeded=1
+            break
         fi
-    else
-        if ! xcrun devicectl device process launch \
-            --device "$device" \
-            --payload-url "$payload_url" \
-            --activate \
-            --timeout "$launch_timeout_seconds" \
-            --json-output "$artifact_dir/launch.json" \
-            "$WLT_APP_BUNDLE_ID" >"$artifact_dir/launch.log" 2>&1
-        then
-            cleanup_identity_transfer \
-                || die "CoreDevice launch failed and identity transfer cleanup could not be proven"
-            die "CoreDevice launch failed; identity transfer cleanup succeeded"
+        if ((launch_attempt == 1)) \
+            && retryable_coredevice_launch_failure "$artifact_dir/launch.json"; then
+            cp "$artifact_dir/launch.json" "$artifact_dir/launch-attempt-1.json"
+            cp "$artifact_dir/launch.log" "$artifact_dir/launch-attempt-1.log"
+            log "CoreDevice remote XPC connection was invalidated before launch; retrying once"
+            sleep 2
+            continue
         fi
+        break
+    done
+    if ((launch_succeeded == 0)); then
+        cleanup_identity_transfer \
+            || die "CoreDevice launch failed and identity transfer cleanup could not be proven"
+        die "CoreDevice launch failed; identity transfer cleanup succeeded"
     fi
 
     while (( SECONDS < deadline )); do
-        if xcrun devicectl device copy from \
+        if run_bounded 7 xcrun devicectl device copy from \
             --device "$device" \
             --domain-type appDataContainer \
             --domain-identifier "$WLT_APP_BUNDLE_ID" \
@@ -422,7 +584,7 @@ PY
     fi
 
     if [[ "$action" == "export-profile" ]]; then
-        xcrun devicectl device copy from \
+        run_bounded "$copy_timeout_seconds" xcrun devicectl device copy from \
             --device "$device" \
             --domain-type appDataContainer \
             --domain-identifier "$WLT_APP_BUNDLE_ID" \
@@ -433,12 +595,139 @@ PY
             || die "profile export copy failed; see $artifact_dir/profile-export-copy.log"
         chmod 600 "$profile_export_file"
     fi
-
-    /usr/bin/python3 - "$local_result" "$request_id" "$action" "$candidate_file" "$max_successful_reconnects" "$max_reconnect_retries" <<'PY'
+    if [[ "$action" == "export-state" ]]; then
+        run_bounded "$copy_timeout_seconds" xcrun devicectl device copy from \
+            --device "$device" \
+            --domain-type appGroupDataContainer \
+            --domain-identifier "$WLT_APP_GROUP_ID" \
+            --source "$remote_state_export" \
+            --destination "$state_export_dir" \
+            --timeout "$copy_timeout_seconds" \
+            >"$artifact_dir/state-export-copy.log" 2>&1 \
+            || die "state export copy failed; see $artifact_dir/state-export-copy.log"
+        /usr/bin/python3 - "$state_export_dir" "$artifact_dir/state-export-sidecars.json" <<'PY'
+import hashlib
 import json
+import os
+from pathlib import Path, PurePosixPath
+import re
+import sqlite3
+import stat
 import sys
 
-path, request_id, action, candidate_path, max_successful_reconnects_raw, max_reconnect_retries_raw = sys.argv[1:]
+root = Path(sys.argv[1])
+sidecar_evidence_path = Path(sys.argv[2])
+if root.is_symlink() or not root.is_dir():
+    raise SystemExit("state export is not a regular directory")
+actual = set()
+for item in root.rglob("*"):
+    metadata = item.lstat()
+    if stat.S_ISLNK(metadata.st_mode) or not (stat.S_ISDIR(metadata.st_mode) or stat.S_ISREG(metadata.st_mode)):
+        raise SystemExit("state export contains an unsafe entry")
+    if metadata.st_uid != os.getuid() or (stat.S_ISREG(metadata.st_mode) and metadata.st_nlink != 1):
+        raise SystemExit("state export contains unsafe ownership or links")
+    relative = item.relative_to(root).as_posix()
+    if any(part in {"", ".", ".."} for part in PurePosixPath(relative).parts):
+        raise SystemExit("state export contains an unsafe path")
+    item.chmod(0o700 if stat.S_ISDIR(metadata.st_mode) else 0o600)
+    if stat.S_ISREG(metadata.st_mode):
+        actual.add(relative)
+manifest_path = root / "manifest.json"
+manifest = json.loads(manifest_path.read_text())
+if not isinstance(manifest, dict) or set(manifest) != {"schema", "database", "profiles"} or manifest["schema"] != 1:
+    raise SystemExit("state export manifest schema mismatch")
+expected = {"manifest.json"}
+def verify_file(record):
+    if not isinstance(record, dict) or set(record) != {"path", "bytes", "sha256"}:
+        raise SystemExit("state export file record mismatch")
+    relative = record["path"]
+    if not isinstance(relative, str) or PurePosixPath(relative).is_absolute() or ".." in PurePosixPath(relative).parts:
+        raise SystemExit("state export file path mismatch")
+    path = root / relative
+    if (isinstance(record["bytes"], bool) or not isinstance(record["bytes"], int)
+            or record["bytes"] < 0 or not isinstance(record["sha256"], str)
+            or re.fullmatch(r"[0-9a-f]{64}", record["sha256"]) is None
+            or not path.is_file() or path.is_symlink() or path.stat().st_size != record["bytes"]):
+        raise SystemExit("state export file size mismatch")
+    digest = hashlib.sha256(path.read_bytes()).hexdigest()
+    if digest != record["sha256"]:
+        raise SystemExit("state export file digest mismatch")
+    expected.add(relative)
+verify_file(manifest["database"])
+database_relative = manifest["database"]["path"]
+sidecar_evidence = {}
+wal_relative = database_relative + "-wal"
+shm_relative = database_relative + "-shm"
+wal_path = root / wal_relative
+shm_path = root / shm_relative
+if wal_path.exists() or wal_path.is_symlink():
+    if wal_path.is_symlink() or not wal_path.is_file() or wal_path.stat().st_size != 0:
+        raise SystemExit("state export WAL must be an empty regular file")
+    expected.add(wal_relative)
+    sidecar_evidence["wal"] = {"path": wal_relative, "bytes": 0,
+                                "sha256": hashlib.sha256(wal_path.read_bytes()).hexdigest()}
+if shm_path.exists() or shm_path.is_symlink():
+    if shm_path.is_symlink() or not shm_path.is_file() or shm_path.stat().st_size != 32768:
+        raise SystemExit("state export SHM size mismatch")
+    shm = shm_path.read_bytes()
+    version = int.from_bytes(shm[0:4], "little")
+    maximum_frame = int.from_bytes(shm[16:20], "little")
+    if version != 3_007_000 or shm[12] != 1 or maximum_frame != 0 or shm[:48] != shm[48:96]:
+        raise SystemExit("state export SHM format mismatch")
+    expected.add(shm_relative)
+    sidecar_evidence["shm"] = {"path": shm_relative, "bytes": len(shm),
+                                "sha256": hashlib.sha256(shm).hexdigest(),
+                                "wal_index_version": version, "maximum_frame": maximum_frame}
+source_paths = []
+if not isinstance(manifest["profiles"], list) or not 1 <= len(manifest["profiles"]) <= 64:
+    raise SystemExit("state export profile count mismatch")
+for profile in manifest["profiles"]:
+    allowed = {"database_path", "source_relative_path", "main", "last_known_good_present", "last_known_good"}
+    required = {"database_path", "source_relative_path", "main", "last_known_good_present"}
+    if not isinstance(profile, dict) or not set(profile).issubset(allowed) or not required.issubset(profile):
+        raise SystemExit("state export profile record mismatch")
+    database_path = profile["database_path"]
+    if (not isinstance(database_path, str) or not database_path
+            or any(ord(character) < 32 or ord(character) == 127 for character in database_path)):
+        raise SystemExit("state export database path mismatch")
+    source = profile["source_relative_path"]
+    if (not isinstance(source, str) or PurePosixPath(source).is_absolute()
+            or ".." in PurePosixPath(source).parts
+            or any(ord(character) < 32 or ord(character) == 127 for character in source)):
+        raise SystemExit("state export source path mismatch")
+    source_paths.append(source)
+    verify_file(profile["main"])
+    present = profile["last_known_good_present"]
+    if not isinstance(present, bool) or present != ("last_known_good" in profile):
+        raise SystemExit("state export LKG presence mismatch")
+    if present:
+        verify_file(profile["last_known_good"])
+if actual != expected or not source_paths or len(source_paths) != len(set(source_paths)):
+    raise SystemExit("state export inventory mismatch")
+database_uri = (root / manifest["database"]["path"]).resolve().as_uri() + "?mode=ro&immutable=1"
+connection = sqlite3.connect(database_uri, uri=True)
+try:
+    if connection.execute("PRAGMA integrity_check").fetchall() != [("ok",)]:
+        raise SystemExit("state export database integrity failure")
+    database_paths = [row[0] for row in connection.execute("SELECT path FROM profiles ORDER BY id")]
+finally:
+    connection.close()
+manifest_database_paths = [profile["database_path"] for profile in manifest["profiles"]]
+if database_paths != manifest_database_paths:
+    raise SystemExit("state export profile binding mismatch")
+root.chmod(0o700)
+sidecar_evidence_path.write_text(json.dumps(sidecar_evidence, sort_keys=True) + "\n")
+sidecar_evidence_path.chmod(0o600)
+PY
+    fi
+
+    /usr/bin/python3 - "$local_result" "$request_id" "$action" "$candidate_file" "$max_successful_reconnects" "$max_reconnect_retries" "$explicit_wlt_plan_file" <<'PY'
+import hashlib
+import json
+import re
+import sys
+
+path, request_id, action, candidate_path, max_successful_reconnects_raw, max_reconnect_retries_raw, explicit_plan_path = sys.argv[1:]
 max_successful_reconnects = int(max_successful_reconnects_raw)
 max_reconnect_retries = int(max_reconnect_retries_raw)
 result = json.load(open(path))
@@ -469,7 +758,10 @@ allowed = {
     "runtime_parameters": result.get("runtime_parameters"),
     "workload_route": result.get("workload_route"),
     "workload_probes": result.get("workload_probes"),
+    "explicit_saved_WLT_outbound_reachability": result.get("explicit_saved_WLT_outbound_reachability"),
     "group_selections": result.get("group_selections"),
+    "route_diagnostics": result.get("route_diagnostics"),
+    "route_diagnostics_scope": result.get("route_diagnostics_scope"),
     "transport_counters": result.get("transport_counters"),
     "identity_ring": result.get("identity_ring"),
     "identity_ring_import": result.get("identity_ring_import"),
@@ -478,6 +770,101 @@ allowed = {
     "error_domain": result.get("error_domain"),
     "error_code": result.get("error_code"),
 }
+# Preserve a sanitized result even when a fail-closed evidence contract below
+# rejects it.  Callers can then distinguish transport counters, workload
+# failure, and infrastructure failure without reading private app-container
+# artifacts.
+print(json.dumps(allowed, sort_keys=True, separators=(",", ":")), flush=True)
+if action == "explicit_saved_WLT_outbound_reachability":
+    plan = json.load(open(explicit_plan_path))
+    requests = plan["requests"]
+    probes = result.get("explicit_saved_WLT_outbound_reachability")
+    if not isinstance(probes, list) or not 1 <= len(probes) <= len(requests):
+        raise SystemExit("explicit WLT result count mismatch")
+    statuses = [probe.get("status") if isinstance(probe, dict) else None for probe in probes]
+    if (
+        any(status != "success" for status in statuses[:-1])
+        or (len(probes) < len(requests) and statuses[-1] != "failed")
+        or (statuses[-1] not in {"success", "failed"})
+    ):
+        raise SystemExit("explicit WLT partial result order mismatch")
+    all_succeeded = len(probes) == len(requests) and all(
+        status == "success" for status in statuses
+    )
+    if (result.get("state") == "succeeded") != all_succeeded:
+        raise SystemExit("explicit WLT action state mismatch")
+    common = {
+        "schema", "scope", "probe_id", "kind", "status", "error_code", "group_tag",
+        "outbound_tag", "wlt_tag", "network", "attempt", "fallback_attempted",
+        "selection_touched", "profile_touched", "instance_current", "duration_ms",
+        "request_sha256",
+    }
+    for request, probe in zip(requests, probes):
+        specific = (
+            {"dns_rcode", "dns_answer_count", "dns_question_sha256", "dns_server_sha256"}
+            if request["kind"] == "dns"
+            else {"http_status", "bytes_read", "destination_sha256"}
+        )
+        request_bytes = json.dumps(request, sort_keys=True, separators=(",", ":")).encode()
+        status = probe.get("status") if isinstance(probe, dict) else None
+        error_code = probe.get("error_code") if isinstance(probe, dict) else None
+        duration_ms = probe.get("duration_ms") if isinstance(probe, dict) else None
+        valid = (
+            isinstance(probe, dict)
+            and set(probe) == common | specific
+            and probe.get("schema") == 1
+            and probe.get("scope") == "explicit_saved_WLT_outbound_reachability"
+            and probe.get("probe_id") == request["probe_id"]
+            and probe.get("kind") == request["kind"]
+            and status in {"success", "failed"}
+            and isinstance(error_code, str)
+            and re.fullmatch(r"[a-z0-9_]{0,64}", error_code) is not None
+            and ((status == "success" and error_code == "")
+                 or (status == "failed" and error_code != ""))
+            and probe.get("group_tag") == request["group_tag"]
+            and probe.get("outbound_tag") == request["outbound_tag"]
+            and probe.get("wlt_tag") == request["wlt_tag"]
+            and probe.get("network") == "tcp"
+            and probe.get("attempt") == "primary"
+            and probe.get("fallback_attempted") is False
+            and probe.get("selection_touched") is False
+            and probe.get("profile_touched") is False
+            and type(probe.get("instance_current")) is bool
+            and (status != "success" or probe["instance_current"] is True)
+            and type(duration_ms) is int
+            and duration_ms >= 0
+            and (status != "success" or duration_ms <= request["timeout_ms"])
+            and probe.get("request_sha256") == hashlib.sha256(request_bytes).hexdigest()
+        )
+        if not valid:
+            raise SystemExit("explicit WLT common result mismatch")
+        if request["kind"] == "dns":
+            expected_question = request["query_name"].lower().rstrip(".").encode()
+            if (
+                type(probe.get("dns_rcode")) is not int
+                or not -1 <= probe["dns_rcode"] <= 15
+                or type(probe.get("dns_answer_count")) is not int
+                or probe["dns_answer_count"] < 0
+                or probe.get("dns_question_sha256") != hashlib.sha256(expected_question).hexdigest()
+                or probe.get("dns_server_sha256") != hashlib.sha256(request["server"].encode()).hexdigest()
+                or (status == "success" and (
+                    probe["dns_rcode"] != 0 or probe["dns_answer_count"] < 1
+                ))
+            ):
+                raise SystemExit("explicit WLT DNS result mismatch")
+        else:
+            if (
+                type(probe.get("http_status")) is not int
+                or probe["http_status"] < 0
+                or type(probe.get("bytes_read")) is not int
+                or not 0 <= probe["bytes_read"] <= request["max_read_bytes"]
+                or probe.get("destination_sha256") != hashlib.sha256(request["url"].encode()).hexdigest()
+                or (status == "success" and (
+                    probe["http_status"] != request["expected_status"]
+                    or probe["bytes_read"] != request["expected_bytes"]
+                ))
+            ):
+                raise SystemExit("explicit WLT HTTPS result mismatch")
 if candidate_path and result.get("state") == "succeeded":
     expected = json.load(open(candidate_path))["parameters"]
     if result.get("runtime_parameters") != expected:
@@ -503,6 +890,9 @@ if action == "import-identity-ring" and result.get("state") == "succeeded":
         or ring.get("bootstrap_consumed")
     ):
         raise SystemExit("identity ring import left stale state")
+if action == "export-state" and result.get("state") == "succeeded":
+    if result.get("vpn_status") != "disconnected":
+        raise SystemExit("state export did not prove disconnected VPN")
 if action in {"start-probe", "soak"} and result.get("state") == "succeeded":
     milestones = set(result.get("startup_milestones") or [])
     required = {"carrier_ready", "traffic_ready"}
@@ -540,7 +930,6 @@ if action == "workload" and result.get("state") == "succeeded":
         raise SystemExit("successful WLT workload exceeded reconnect allowance")
     if counters["reconnect_retries"] > max_reconnect_retries:
         raise SystemExit("successful WLT workload exceeded reconnect retry allowance")
-print(json.dumps(allowed, sort_keys=True, separators=(",", ":")))
 if result.get("state") != "succeeded":
     raise SystemExit(1)
 PY
