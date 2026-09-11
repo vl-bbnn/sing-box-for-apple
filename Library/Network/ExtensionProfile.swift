@@ -9,6 +9,302 @@ import os
 
 private let logger = Logger(category: "ExtensionProfile")
 
+#if os(iOS) && SFI_DEV
+  // The service-close result belongs to the stop transaction. OS cleanup must
+  // still run on RPC failure, but disconnection cannot erase that failure.
+  @MainActor
+  enum WLTStopTransaction {
+    struct Failure: Error { let primary: Error?; let receiptStages: [String] }
+    static func perform(prepare: () async throws -> Void,
+      closeService: (_ bind: @MainActor (WLTStopReply) throws -> Void) async throws -> Void,
+      stopTunnel: () -> Void, record: @escaping (WLTStopStage, WLTStopReply?) -> Bool) async throws {
+      var body: Result<Void, Error>
+      var receiptFailures: [String] = []
+      var canonical: WLTStopReply?
+      func receipt(_ stage: WLTStopStage) {
+        if !record(stage, canonical) { receiptFailures.append(stage.rawValue) }
+      }
+      func bind(_ reply: WLTStopReply) throws {
+        if let canonical {
+          guard canonical.lifecycle == reply.lifecycle, canonical.operationID == reply.operationID else {
+            throw CocoaError(.coderInvalidValue)
+          }
+          return
+        }
+        canonical = WLTStopReply(lifecycle: reply.lifecycle, operationID: reply.operationID, outcome: nil)
+        // Evidence failure is retained, but must not cancel the accepted owner
+        // or suppress the safe OS cleanup at the end of this transaction.
+        receipt(.appOwnerBound)
+      }
+      receipt(.appPrepareEnter)
+      do {
+        try await prepare()
+        receipt(.appPrepareOK)
+        receipt(.appRPCEnter)
+        do {
+          try await closeService(bind)
+          guard canonical != nil else { throw CocoaError(.coderInvalidValue) }
+          receipt(.appRPCOK); body = .success(())
+        } catch { receipt(.appRPCError); body = .failure(error) }
+      } catch {
+        receipt(.appPrepareError)
+        body = .failure(error)
+      }
+      receipt(.appOSStopEnter); stopTunnel(); receipt(.appOSStopReturn)
+      if !receiptFailures.isEmpty {
+        let primary: Error?; if case .failure(let error) = body { primary = error } else { primary = nil }
+        throw Failure(primary: primary, receiptStages: receiptFailures)
+      }
+      try body.get()
+    }
+  }
+
+  enum ExtensionDiagnosticMessage {
+    private static let magic = Data("SFI_DEV_DIAGNOSTIC\0".utf8)
+    private static let maximumMessageBytes = 32 * 1024
+
+    struct Request: Codable {
+      let version: Int
+      let operation: String
+      let requestJSON: String
+
+      enum CodingKeys: String, CodingKey {
+        case version, operation
+        case requestJSON = "request_json"
+      }
+    }
+
+    struct Response: Codable {
+      let version: Int
+      let status: String
+      let resultJSON: String?
+      let errorCode: String
+
+      enum CodingKeys: String, CodingKey {
+        case version, status
+        case resultJSON = "result_json"
+        case errorCode = "error_code"
+      }
+    }
+
+    static func isDiagnostic(_ data: Data) -> Bool {
+      data.starts(with: magic)
+    }
+
+    static func encodeProbeRequest(_ requestJSON: String) throws -> Data {
+      try encode(
+        Request(
+          version: 1,
+          operation: "probe_wlt_outbound",
+          requestJSON: requestJSON
+        ))
+    }
+
+    static func encodeStopRequest(_ operationID: String) throws -> Data {
+      guard UUID(uuidString: operationID) != nil else { throw CocoaError(.coderInvalidValue) }
+      return try encode(Request(version: 1, operation: "close_wlt_service", requestJSON: operationID))
+    }
+
+    struct StopKey: Codable { let lifecycle: UInt64; let operationID: String }
+
+    static func encodeStopStatusRequest(_ reply: WLTStopReply) throws -> Data {
+      let key = StopKey(lifecycle: reply.lifecycle, operationID: reply.operationID)
+      let data = try JSONEncoder().encode(key)
+      guard UUID(uuidString: key.operationID) != nil, let payload = String(data: data, encoding: .utf8) else {
+        throw CocoaError(.coderInvalidValue)
+      }
+      return try encode(Request(version: 1, operation: "poll_wlt_service_close", requestJSON: payload))
+    }
+
+    static func decodeStopKey(_ payload: String) throws -> StopKey {
+      guard let data = payload.data(using: .utf8),
+        let row = try JSONSerialization.jsonObject(with: data) as? [String: Any],
+        Set(row.keys) == Set(["lifecycle", "operationID"]) else { throw CocoaError(.coderInvalidValue) }
+      let key = try JSONDecoder().decode(StopKey.self, from: data)
+      guard UUID(uuidString: key.operationID) != nil else { throw CocoaError(.coderInvalidValue) }
+      return key
+    }
+
+    // RPC delivery success is distinct from terminal shutdown success. Pending
+    // and failed terminal outcomes retain the same canonical lifecycle identity.
+    static func encodeStopReply(_ reply: WLTStopReply) throws -> Data {
+      guard UUID(uuidString: reply.operationID) != nil else { throw CocoaError(.coderInvalidValue) }
+      let data = try JSONEncoder().encode(reply)
+      guard let payload = String(data: data, encoding: .utf8) else { throw CocoaError(.coderInvalidValue) }
+      return try encodeResponse(Response(version: 1, status: "success", resultJSON: payload, errorCode: ""))
+    }
+
+    static func decodeStopReply(_ response: Response) throws -> WLTStopReply {
+      guard response.version == 1, response.status == "success", response.errorCode.isEmpty,
+        let payload = response.resultJSON, let data = payload.data(using: .utf8),
+        data.count <= 16 * 1024,
+        let row = try JSONSerialization.jsonObject(with: data) as? [String: Any],
+        Set(row.keys).isSubset(of: ["lifecycle", "operationID", "outcome"]),
+        Set(["lifecycle", "operationID"]).isSubset(of: Set(row.keys)) else {
+        throw CocoaError(.coderInvalidValue)
+      }
+      let reply = try JSONDecoder().decode(WLTStopReply.self, from: data)
+      guard UUID(uuidString: reply.operationID) != nil else { throw CocoaError(.coderInvalidValue) }
+      return reply
+    }
+
+    static func decodeRequest(_ data: Data) throws -> Request {
+      let payload = try payload(data)
+      guard
+        let object = try JSONSerialization.jsonObject(with: payload) as? [String: Any],
+        Set(object.keys) == Set(["version", "operation", "request_json"])
+      else {
+        throw CocoaError(.coderInvalidValue)
+      }
+      let request: Request = try decode(data)
+      guard
+        request.version == 1,
+        (request.operation == "probe_wlt_outbound"
+          || (request.operation == "close_wlt_service" && UUID(uuidString: request.requestJSON) != nil)
+          || (request.operation == "poll_wlt_service_close" && (try? decodeStopKey(request.requestJSON)) != nil)),
+        !request.requestJSON.isEmpty,
+        request.requestJSON.utf8.count <= 16 * 1024
+      else {
+        throw CocoaError(.coderInvalidValue)
+      }
+      return request
+    }
+
+    static func encodeResponse(_ response: Response) throws -> Data {
+      try encode(response)
+    }
+
+    static func decodeResponse(_ data: Data) throws -> Response {
+      let responsePayload = try payload(data)
+      guard
+        let object = try JSONSerialization.jsonObject(with: responsePayload) as? [String: Any],
+        Set(object.keys).isSubset(of: Set(["version", "status", "result_json", "error_code"])),
+        Set(["version", "status", "error_code"]).isSubset(of: Set(object.keys))
+      else {
+        throw CocoaError(.coderInvalidValue)
+      }
+      let response: Response = try decode(data)
+      guard
+        response.version == 1,
+        ["success", "failed"].contains(response.status),
+        response.errorCode.count <= 64,
+        response.resultJSON?.utf8.count ?? 0 <= 16 * 1024,
+        (response.status == "success" && response.errorCode.isEmpty
+          && response.resultJSON != nil)
+          || (response.status == "failed" && !response.errorCode.isEmpty
+            && response.resultJSON == nil)
+      else {
+        throw CocoaError(.coderInvalidValue)
+      }
+      return response
+    }
+
+    private static func encode<T: Encodable>(_ value: T) throws -> Data {
+      let encoder = JSONEncoder()
+      encoder.outputFormatting = [.sortedKeys]
+      let payload = try encoder.encode(value)
+      guard payload.count + magic.count <= maximumMessageBytes else {
+        throw CocoaError(.coderInvalidValue)
+      }
+      return magic + payload
+    }
+
+    private static func decode<T: Decodable>(_ data: Data) throws -> T {
+      try JSONDecoder().decode(T.self, from: payload(data))
+    }
+
+    private static func payload(_ data: Data) throws -> Data {
+      guard isDiagnostic(data), data.count <= maximumMessageBytes else {
+        throw CocoaError(.coderInvalidValue)
+      }
+      return Data(data.dropFirst(magic.count))
+    }
+  }
+
+  // Cancellation can precede continuation installation. Retain the first result
+  // and deliver it exactly once even in that race; late callbacks are inert.
+  final class ExtensionDiagnosticResponseWaiter: @unchecked Sendable {
+    private let lock = NSLock()
+    private var continuation: CheckedContinuation<Data?, Error>?
+    private var result: Result<Data?, Error>?
+
+    @discardableResult
+    func install(_ continuation: CheckedContinuation<Data?, Error>) -> Bool {
+      lock.lock()
+      if let result {
+        lock.unlock()
+        continuation.resume(with: result)
+        return false
+      }
+      self.continuation = continuation
+      lock.unlock()
+      return true
+    }
+
+    func resume(_ result: Result<Data?, Error>) {
+      lock.lock()
+      guard self.result == nil else { lock.unlock(); return }
+      self.result = result
+      let pending = continuation
+      continuation = nil
+      lock.unlock()
+      pending?.resume(with: result)
+    }
+
+    @MainActor
+    static func receive(timeoutMillis: Int, send: (@escaping (Data?) -> Void) throws -> Void) async throws -> Data? {
+      guard (1...95_000).contains(timeoutMillis) else { throw CocoaError(.coderInvalidValue) }
+      let waiter = ExtensionDiagnosticResponseWaiter()
+      let result = try await withTaskCancellationHandler(operation: {
+        try Task.checkCancellation()
+        return try await withCheckedThrowingContinuation { (continuation: CheckedContinuation<Data?, Error>) in
+          guard waiter.install(continuation) else { return }
+          DispatchQueue.global(qos: .utility).asyncAfter(deadline: .now() + .milliseconds(timeoutMillis)) {
+            waiter.resume(.failure(NSError(domain: "ExtensionDiagnosticMessage", code: -6)))
+          }
+          do { try send { waiter.resume(.success($0)) } }
+          catch { waiter.resume(.failure(error)) }
+        }
+      }, onCancel: { waiter.resume(.failure(CancellationError())) })
+      try Task.checkCancellation()
+      return result
+    }
+  }
+
+  @MainActor
+  enum WLTStopClient {
+    struct TerminalFailure: Error { let reply: WLTStopReply }
+    static func close(operationID: String, timeout: TimeInterval,
+      observeOwner: @MainActor (WLTStopReply) throws -> Void = { _ in },
+      send: (Data, Int) async throws -> ExtensionDiagnosticMessage.Response) async throws -> WLTStopReply {
+      let request = try ExtensionDiagnosticMessage.encodeStopRequest(operationID)
+      let started = DispatchTime.now().uptimeNanoseconds
+      let duration = UInt64(max(0, timeout) * 1_000_000_000)
+      var canonical: WLTStopReply?
+      let terminal = try await WLTStopPolling.wait(timeout: timeout) {
+        let elapsed = DispatchTime.now().uptimeNanoseconds - started
+        guard elapsed < duration else { throw WLTStopWaitError.deadline }
+        let budget = max(1, min(2_000, Int((duration - elapsed) / 1_000_000)))
+        let message = try canonical.map { try ExtensionDiagnosticMessage.encodeStopStatusRequest($0) } ?? request
+        let reply = try ExtensionDiagnosticMessage.decodeStopReply(try await send(message, budget))
+        if let canonical {
+          guard reply.lifecycle == canonical.lifecycle, reply.operationID == canonical.operationID else {
+            throw CocoaError(.coderInvalidValue)
+          }
+        } else {
+          // The OS can own the stop before the app's first request arrives.
+          canonical = reply
+          try observeOwner(reply)
+        }
+        return reply
+      }
+      guard terminal.outcome?.succeeded == true else { throw TerminalFailure(reply: terminal) }
+      return terminal
+    }
+  }
+
+#endif
+
 @MainActor
 public class ExtensionProfile: ObservableObject {
   public static let controlKind = AppConfiguration.widgetControlKind
@@ -273,6 +569,55 @@ public class ExtensionProfile: ObservableObject {
     }
   }
 
+  #if os(iOS) && SFI_DEV
+    public func probeWltOutbound(
+      _ requestJSON: String,
+      timeoutMillis: Int
+    ) async throws -> String {
+      guard !isMock, let session = connection as? NETunnelProviderSession else {
+        throw NSError(
+          domain: "ExtensionDiagnosticMessage", code: -1,
+          userInfo: [NSLocalizedDescriptionKey: "Tunnel session unavailable"])
+      }
+      guard status == .connected else {
+        throw NSError(
+          domain: "ExtensionDiagnosticMessage", code: -2,
+          userInfo: [NSLocalizedDescriptionKey: "Tunnel is not connected"])
+      }
+      guard (1...95_000).contains(timeoutMillis) else {
+        throw NSError(
+          domain: "ExtensionDiagnosticMessage", code: -5,
+          userInfo: [NSLocalizedDescriptionKey: "Diagnostic timeout invalid"])
+      }
+      let message = try ExtensionDiagnosticMessage.encodeProbeRequest(requestJSON)
+      return try await sendDiagnosticMessage(message, session: session, timeoutMillis: timeoutMillis)
+    }
+
+    private func sendDiagnosticMessage(
+      _ message: Data, session: NETunnelProviderSession, timeoutMillis: Int
+    ) async throws -> String {
+      let response = try await sendDiagnosticResponse(message, session: session, timeoutMillis: timeoutMillis)
+      guard response.status == "success", response.errorCode.isEmpty,
+        let resultJSON = response.resultJSON
+      else {
+        throw NSError(
+          domain: "ExtensionDiagnosticMessage", code: -4,
+          userInfo: [NSLocalizedDescriptionKey: response.errorCode])
+      }
+      return resultJSON
+    }
+
+    private func sendDiagnosticResponse(
+      _ message: Data, session: NETunnelProviderSession, timeoutMillis: Int
+    ) async throws -> ExtensionDiagnosticMessage.Response {
+      let responseData = try await ExtensionDiagnosticResponseWaiter.receive(timeoutMillis: timeoutMillis) { callback in
+        try session.sendProviderMessage(message, responseHandler: callback)
+      }
+      guard let responseData else { throw NSError(domain: "ExtensionDiagnosticMessage", code: -3) }
+      return try ExtensionDiagnosticMessage.decodeResponse(responseData)
+    }
+  #endif
+
   private func prepareStartOptions(
     configContentTransform: ((String) throws -> String)? = nil
   ) async throws -> [String: NSObject] {
@@ -371,23 +716,49 @@ public class ExtensionProfile: ObservableObject {
       return
     }
     guard let manager else { return }
-    if manager.isOnDemandEnabled {
-      if let proto = manager.protocolConfiguration as? NETunnelProviderProtocol {
-        var config = proto.providerConfiguration ?? [:]
-        config["wasOnDemandEnabled"] = true
-        proto.providerConfiguration = config
-      }
-      manager.isOnDemandEnabled = false
-      try await manager.saveToPreferences()
-    }
-    manager.connection.stopVPNTunnel()
-    Task.detached(priority: .utility) {
-      do {
-        try LibboxNewStandaloneCommandClient()!.serviceClose()
-      } catch {
-        logger.debug("serviceClose error: \(error.localizedDescription)")
+    func prepareStop() async throws {
+      if manager.isOnDemandEnabled {
+        if let proto = manager.protocolConfiguration as? NETunnelProviderProtocol {
+          var config = proto.providerConfiguration ?? [:]
+          config["wasOnDemandEnabled"] = true
+          proto.providerConfiguration = config
+        }
+        manager.isOnDemandEnabled = false
+        try await manager.saveToPreferences()
       }
     }
+    #if os(iOS) && SFI_DEV
+      // Finish the journal-owning service close while the packet tunnel still
+      // has ordinary runtime, before NetworkExtension begins its stop grace.
+      let stopOperationID = UUID().uuidString.lowercased()
+      try await WLTStopTransaction.perform(
+        prepare: { try await prepareStop() },
+        closeService: { bind in
+          guard let session = manager.connection as? NETunnelProviderSession else {
+            throw NSError(domain: "ExtensionServiceClose", code: 3)
+          }
+          _ = try await WLTStopClient.close(operationID: stopOperationID, timeout: 20, observeOwner: bind) { message, budget in
+            try await sendDiagnosticResponse(message, session: session, timeoutMillis: budget)
+          }
+        },
+        stopTunnel: { manager.connection.stopVPNTunnel() },
+        record: { stage, canonical in
+          PacketTunnelDiagnostics.appendStopStage(stage.rawValue, operationID: stopOperationID,
+            requestID: stopOperationID, canonicalOperationID: canonical?.operationID,
+            lifecycle: canonical?.lifecycle)
+        }
+      )
+    #else
+      try await prepareStop()
+      manager.connection.stopVPNTunnel()
+      Task.detached(priority: .utility) {
+        do {
+          try LibboxNewStandaloneCommandClient()!.serviceClose()
+        } catch {
+          logger.debug("serviceClose error: \(error.localizedDescription)")
+        }
+      }
+    #endif
     #if os(macOS)
       await WhitelistTransportManager.shared.stop()
     #endif

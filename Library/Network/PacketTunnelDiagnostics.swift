@@ -97,6 +97,168 @@ public enum PacketTunnelDiagnostics {
     "direct_fallback",
   ]
 
+  #if os(iOS) && SFI_DEV
+    private static let stopStages = Set(WLTStopStage.allCases.map(\.rawValue))
+    private static let stopReceiptMaxBytes = 1024 * 1024
+
+    // Separate process-owned files avoid cross-process append/rotation races.
+    // No core logger, platform callback, or service lock is used in this path.
+    // This is deliberately a bounded receipt vocabulary: it must never retain
+    // exception descriptions, configurations, endpoints, or request payloads.
+    private static func stopReceiptDisposition(_ stage: String) -> (String, String, Bool, String, String) {
+      if stage == "app_prepare_error" {
+        return ("failed", "app", true, "invalid_state", "prepare_failed")
+      }
+      if stage == "app_rpc_return_error" {
+        return ("failed", "app", true, "service_unavailable", "close_rpc_failed")
+      }
+      if stage == "provider_core_absent" {
+        return ("failed", "provider", true, "service_unavailable", "command_server_absent")
+      }
+      if stage == "provider_close_already_error" || stage == "provider_journal_failure_recorded" {
+        return ("failed", "provider", true, "core_close_failed", "prior_close_failed")
+      }
+      if stage == "provider_close_wait_timeout" {
+        return ("failed", "provider", true, "timeout", "close_wait_timeout")
+      }
+      if stage.hasSuffix("_error") {
+        let journal = stage.contains("journal")
+        return ("failed", "provider", true,
+                journal ? "journal_finalize_failed" : "core_close_failed",
+                journal ? "journal_finalize_failed" : "core_close_failed")
+      }
+      if stage == "provider_close_busy" {
+        return ("waiting", "provider", false, "none", "none")
+      }
+      if stage.hasSuffix("_enter") || stage == "app_prepare_enter" {
+        return ("started", stage.hasPrefix("app_") ? "app" : "provider", false, "none", "none")
+      }
+      return ("succeeded", stage.hasPrefix("app_") ? "app" : "provider", false, "none", "none")
+    }
+
+    // Each retained segment starts on a JSON record and carries its sequence
+    // origin. Whole-segment archives preserve evidence and allow recovery after
+    // a process exits between rename and creation of the next active file.
+    private static func stopReceiptPosition(_ url: URL) throws -> (next: Int, origin: Int, count: Int) {
+      let text = try String(contentsOf: url, encoding: .utf8)
+      guard text.isEmpty || text.hasSuffix("\n") else { throw NSError(domain: "WLTStopReceipt", code: 1) }
+      let records = text.split(separator: "\n", omittingEmptySubsequences: false).dropLast()
+      var origin: Int?, expected: Int?
+      for line in records {
+        guard let data = line.data(using: .utf8),
+          let row = try JSONSerialization.jsonObject(with: data) as? [String: Any],
+          let sequence = row["sequence"] as? Int, sequence > 0, sequence < Int.max,
+          let id = row["operation_id"] as? String, UUID(uuidString: id) != nil else {
+          throw NSError(domain: "WLTStopReceipt", code: 1)
+        }
+        if origin == nil {
+          origin = row["sequence_origin"] as? Int ?? 1
+          expected = origin
+        }
+        guard sequence == expected, (row["sequence_origin"] as? Int ?? 1) == origin else {
+          throw NSError(domain: "WLTStopReceipt", code: 1)
+        }
+        expected = sequence + 1
+      }
+      return (expected ?? 1, origin ?? 1, records.count)
+    }
+
+    private static func stopReceiptNextSegment(_ url: URL) throws -> Int {
+      let prefix = url.deletingPathExtension().lastPathComponent + ".archive."
+      let files = try FileManager.default.contentsOfDirectory(at: url.deletingLastPathComponent(), includingPropertiesForKeys: nil)
+        .filter { $0.lastPathComponent.hasPrefix(prefix) && $0.pathExtension == "jsonl" }
+        .sorted { $0.lastPathComponent < $1.lastPathComponent }
+      var next = 1
+      for file in files {
+        let position = try stopReceiptPosition(file)
+        let suffix = String(file.lastPathComponent.dropFirst(prefix.count))
+        let parts = suffix.split(separator: ".")
+        guard parts.count == 3, parts[0].count == 20,
+          let lastSequence = Int(parts[0]), UUID(uuidString: String(parts[1])) != nil,
+          parts[2] == "jsonl", position.count > 0,
+          position.origin == next, position.next - 1 == lastSequence else {
+          throw NSError(domain: "WLTStopReceipt", code: 1)
+        }
+        next = position.next
+      }
+      return next
+    }
+
+    @discardableResult
+    public static func appendStopStage(_ stage: String, operationID: String,
+      requestID: String? = nil, canonicalOperationID: String? = nil, lifecycle: UInt64? = nil) -> Bool {
+      let requestID = requestID ?? operationID
+      guard stopStages.contains(stage), UUID(uuidString: operationID) != nil,
+        UUID(uuidString: requestID) != nil,
+        (canonicalOperationID == nil) == (lifecycle == nil),
+        canonicalOperationID.map({ UUID(uuidString: $0) != nil }) ?? true else { return false }
+      let owner = stage.hasPrefix("app_") ? "app" : "provider"
+      guard owner == "app" || (requestID == operationID && canonicalOperationID == operationID && lifecycle != nil),
+        owner != "app" || requestID == operationID,
+        !["app_owner_bound", "app_rpc_return_ok"].contains(stage) || canonicalOperationID != nil else { return false }
+      let url = FilePath.cacheDirectory.appendingPathComponent("wlt-stop-\(owner).jsonl")
+      return queue.sync {
+        do {
+          let disposition = stopReceiptDisposition(stage)
+          try FileManager.default.createDirectory(at: url.deletingLastPathComponent(), withIntermediateDirectories: true,
+                                                  attributes: [.posixPermissions: 0o700])
+          let archiveNext = try stopReceiptNextSegment(url)
+          var position: (next: Int, origin: Int, count: Int)
+          if FileManager.default.fileExists(atPath: url.path) {
+            position = try stopReceiptPosition(url)
+            if position.count == 0 {
+              // A process may exit after creating the new active file, before
+              // its first append. Empty active state inherits the archive tail.
+              position = (archiveNext, archiveNext, 0)
+            }
+            guard position.origin == archiveNext else { throw NSError(domain: "WLTStopReceipt", code: 1) }
+            let bytes = try FileManager.default.attributesOfItem(atPath: url.path)[.size] as? NSNumber
+            if (bytes?.intValue ?? 0) >= stopReceiptMaxBytes {
+              let name = url.deletingPathExtension().lastPathComponent + ".archive."
+                + String(format: "%020lld", Int64(position.next - 1)) + "." + UUID().uuidString.lowercased() + ".jsonl"
+              try FileManager.default.moveItem(at: url, to: url.deletingLastPathComponent().appendingPathComponent(name))
+              position.origin = position.next
+            }
+          } else {
+            position = (archiveNext, archiveNext, 0)
+          }
+          let entry: [String: Any] = [
+            "schema": 2, "sequence": position.next, "sequence_origin": position.origin, "stage": stage,
+            "request_id": requestID,
+            "canonical_operation_id": canonicalOperationID as Any? ?? NSNull(),
+            "lifecycle": lifecycle.map { NSNumber(value: $0) } as Any? ?? NSNull(),
+            "operation_id": operationID, "ownership": disposition.1, "outcome": disposition.0,
+            "cleanup_required": disposition.2,
+            "error": ["class": disposition.3, "code": disposition.4, "retryable": false],
+            "wall_unix_ms": Int64(Date().timeIntervalSince1970 * 1000),
+            "monotonic_ns": DispatchTime.now().uptimeNanoseconds,
+          ]
+          var data = try JSONSerialization.data(withJSONObject: entry, options: [.sortedKeys])
+          data.append(10)
+          if !FileManager.default.fileExists(atPath: url.path) {
+            try Data().write(to: url, options: .atomic)
+            try FileManager.default.setAttributes([.posixPermissions: 0o600], ofItemAtPath: url.path)
+          }
+          let handle = try FileHandle(forWritingTo: url)
+          do {
+            try handle.seekToEnd()
+            try handle.write(contentsOf: data)
+            try handle.synchronize()
+            try handle.close()
+          } catch {
+            try? handle.close()
+            throw error
+          }
+          return true
+        } catch {
+          // A failed write is explicit incomplete terminal evidence. Callers that
+          // need a close verdict must convert this false result into failure.
+          return false
+        }
+      }
+    }
+  #endif
+
   public static func append(_ message: String) {
     append(message, to: fileURL, maxBytes: maxBytes)
   }

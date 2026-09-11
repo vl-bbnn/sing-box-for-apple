@@ -12,7 +12,14 @@ import os.log
   import CoreLocation
 #endif
 
+
 open class ExtensionProvider: NEPacketTunnelProvider {
+  enum ServiceCloseResult: Equatable {
+    case succeeded
+    case failed(String)
+    case inProgress
+  }
+
   private static let logger = Logger(category: "ExtensionProvider")
   private static let defaultLogMaxLines = 100_000
   private static let whitelistTransportLogMaxLines = 3_000
@@ -29,12 +36,74 @@ open class ExtensionProvider: NEPacketTunnelProvider {
   private static let whitelistTransportMemoryRecoverySkipLogInterval: TimeInterval = 30
   private let lifecycleStateLock = NSLock()
   private var stopTunnelGeneration: UInt64 = 0
+  #if os(iOS) && SFI_DEV
+    private let serviceLifecycleInitLock = NSLock()
+    private var serviceLifecycleStorage: WLTStopOrchestrator?
+    private var serviceLifecycle: WLTStopOrchestrator {
+      serviceLifecycleInitLock.lock()
+      defer { serviceLifecycleInitLock.unlock() }
+      if let serviceLifecycleStorage { return serviceLifecycleStorage }
+      let lifecycle = WLTStopOrchestrator(dependencies: .init(
+      retainOwner: { [weak self] in self },
+      closeCore: { [weak self] in
+        guard let self else { throw NSError(domain: "WLTStop", code: 1) }
+        guard let server = self.commandServer else {
+          // Failed startup can stop before creating a core. An existing
+          // lifetime journal, however, requires an actual close proof.
+          guard self.wltCoreLifetimeJournal == nil else { throw NSError(domain: "WLTStop", code: 1) }
+          return
+        }
+        try server.closeService()
+      },
+      closeJournal: { [weak self] coreClosed, reason in
+        guard let self else { throw NSError(domain: "WLTStop", code: 1) }
+        if let journal = self.wltCoreLifetimeJournal {
+          // A closed core retires this journal even when evidence persistence
+          // fails. Keep its disk evidence and old outcome; never attach it to
+          // the next lifecycle. A failed core still owns its journal/resources.
+          defer { if coreClosed { self.wltCoreLifetimeJournal = nil } }
+          if coreClosed {
+            try journal.didCloseService(reason: reason, finalizeSession: true, terminalObserversConfirmed: true)
+          } else {
+            try journal.didFailToCloseService(reason: reason, errorDescription: "core_close_failed", finalizeSession: true)
+          }
+        }
+      },
+      closeSidecar: { [weak self] in
+        guard let self, self.stopWhitelistTransport() else { throw NSError(domain: "WLTStop", code: 2) }
+      },
+      resetPlatform: { [weak self] in
+        guard let self else { throw NSError(domain: "WLTStop", code: 1) }
+        self.platformInterface.reset()
+      },
+      closeServer: { [weak self] in
+        guard let self else { throw NSError(domain: "WLTStop", code: 1) }
+        self.commandServer?.close()
+        self.commandServer = nil
+      },
+      finishDiagnostics: { [weak self] in
+        guard let self else { throw NSError(domain: "WLTStop", code: 1) }
+        self.stopDiagnosticsHeartbeat()
+        self.endDiagnosticsSession("owned stop completed")
+      },
+      record: { stage, operationID, lifecycle in
+        PacketTunnelDiagnostics.appendStopStage(stage.rawValue, operationID: operationID,
+          requestID: operationID, canonicalOperationID: operationID, lifecycle: lifecycle)
+      }
+    ))
+      serviceLifecycleStorage = lifecycle
+      return lifecycle
+    }
+  #endif
 
   public private(set) var commandServer: LibboxCommandServer?
   private lazy var platformInterface = ExtensionPlatformInterface(self)
   public var tunnelOptions: [String: NSObject]?
   private var startOptionsURL: URL?
   private var whitelistTransportProfileIsCore = false
+  #if os(iOS) && SFI_DEV
+    private var wltCoreLifetimeJournal: WLTCoreLifetimeJournal?
+  #endif
   #if os(iOS)
     private var diagnosticsMemoryPressure: DispatchSourceMemoryPressure?
   #endif
@@ -127,19 +196,35 @@ open class ExtensionProvider: NEPacketTunnelProvider {
   #endif
 
   override open func startTunnel(options startOptions: [String: NSObject]?) async throws {
+    #if os(iOS) && SFI_DEV
+      // Admission precedes diagnostics; a rejected concurrent start cannot
+      // replace or end the running lifecycle's diagnostic session.
+      let lifecycleToken = try serviceLifecycle.beginTunnelStart(commandServerAbsent: commandServer == nil)
+      defer { serviceLifecycle.finishTransition(lifecycleToken) }
+    #endif
     beginDiagnosticsSession()
     PacketTunnelDiagnostics.appendStartupMilestone("extension_started")
     recordLifecycleEvent("(packet-tunnel): startTunnel entered")
     do {
-      try await startTunnelImpl(options: startOptions)
+      #if os(iOS) && SFI_DEV
+        try await startTunnelImpl(options: startOptions, lifecycleToken: lifecycleToken)
+      #else
+        try await startTunnelImpl(options: startOptions)
+      #endif
     } catch {
       recordLifecycleEvent("(packet-tunnel): startTunnel failed: \(error.localizedDescription)")
-      endDiagnosticsSession("startTunnel failed")
+      #if os(iOS) && SFI_DEV
+        // The deferred transition release allows the same owner to clean up
+        // partial startup, including a stop racing the startup failure.
+        _ = requestOwnedStopService(operationID: UUID().uuidString.lowercased(), journalCloseReason: "start_failed")
+      #else
+        endDiagnosticsSession("startTunnel failed")
+      #endif
       throw error
     }
   }
 
-  private func startTunnelImpl(options startOptions: [String: NSObject]?) async throws {
+  private func startTunnelImpl(options startOptions: [String: NSObject]?, lifecycleToken: UInt64? = nil) async throws {
     let startupStartedAt = Date()
     let startStopGeneration = currentStopTunnelGeneration()
     let basePath: String
@@ -299,12 +384,20 @@ open class ExtensionProvider: NEPacketTunnelProvider {
     #endif
     do {
       stageStartedAt = Date()
-      try throwIfStopTunnelRequested(since: startStopGeneration)
+      #if os(iOS) && SFI_DEV
+        try throwIfStopTunnelRequested(since: startStopGeneration, lifecycleToken: lifecycleToken)
+      #else
+        try throwIfStopTunnelRequested(since: startStopGeneration)
+      #endif
       recordNetworkPathSnapshot(stage: "before-start-service")
       writeLifecycleMessage("(packet-tunnel): starting sing-box service")
       PacketTunnelDiagnostics.appendStartupMilestone("core_starting")
-      try await startService()
-      try throwIfStopTunnelRequested(since: startStopGeneration)
+      try await startService(expectedStopGeneration: startStopGeneration)
+      #if os(iOS) && SFI_DEV
+        try throwIfStopTunnelRequested(since: startStopGeneration, lifecycleToken: lifecycleToken)
+      #else
+        try throwIfStopTunnelRequested(since: startStopGeneration)
+      #endif
       writeLifecycleMessage(
         "(packet-tunnel): sing-box service started elapsed=\(formatDuration(Date().timeIntervalSince(stageStartedAt))) memory=\(PacketTunnelDiagnostics.residentMemoryDescription())")
       PacketTunnelDiagnostics.appendStartupMilestone("core_started")
@@ -824,16 +917,41 @@ open class ExtensionProvider: NEPacketTunnelProvider {
     lifecycleStateLock.unlock()
   }
 
-  private func throwIfStopTunnelRequested(since generation: UInt64) throws {
-    if currentStopTunnelGeneration() != generation {
-      throw ExtensionStartupError("(packet-tunnel) error: start service canceled by stopTunnel")
-    }
+  private func throwIfStopTunnelRequested(since generation: UInt64, lifecycleToken: UInt64? = nil) throws {
+    #if os(iOS) && SFI_DEV
+      if currentStopTunnelGeneration() != generation {
+        throw ExtensionStartupError("(packet-tunnel) error: start service canceled by stopTunnel")
+      }
+      do {
+        guard let lifecycleToken else { throw WLTStopOrchestrator.AdmissionError.stopRequested }
+        try serviceLifecycle.throwIfStopRequested(lifecycleToken)
+      } catch {
+        throw ExtensionStartupError("(packet-tunnel) error: start service canceled by stop intent")
+      }
+    #else
+      if currentStopTunnelGeneration() != generation {
+        throw ExtensionStartupError("(packet-tunnel) error: start service canceled by stopTunnel")
+      }
+    #endif
   }
 
-  private func startService() async throws {
+  #if os(iOS) && SFI_DEV
+    private func beginReloadTransition() throws -> UInt64 {
+      do {
+        return try serviceLifecycle.beginReload()
+      } catch {
+        throw ExtensionStartupError("(packet-tunnel) error: reload rejected during terminal stop")
+      }
+    }
+  #endif
+
+  private func startService(expectedStopGeneration: UInt64) async throws {
     guard var configContent = tunnelOptions?["configContent"] as? String else {
       throw ExtensionStartupError("(packet-tunnel) error: missing configContent in tunnel options")
     }
+    #if os(iOS) && SFI_DEV
+      var preparedJournalGeneration: WLTCoreLifetimeJournal.PreparedGeneration?
+    #endif
     #if SFI_DEV
       if whitelistTransportProfileIsCore {
         let snapshotFile = FilePath.cacheDirectory
@@ -849,6 +967,24 @@ open class ExtensionProvider: NEPacketTunnelProvider {
           writeLifecycleMessage("(packet-tunnel): core whitelist transport auth snapshot cache configured")
           configContent = injectedConfig
         }
+        #if os(iOS)
+          if wltCoreLifetimeJournal == nil {
+            let journalRoot = FilePath.cacheDirectory
+              .appendingPathComponent("WLT", isDirectory: true)
+              .appendingPathComponent("LifetimeJournals", isDirectory: true)
+            try? WLTCoreLifetimeJournal.enforceRetention(
+              in: journalRoot,
+              keepingLatestSealedSessions: 4
+            )
+            wltCoreLifetimeJournal = try WLTCoreLifetimeJournal(rootDirectory: journalRoot)
+          }
+          guard let journal = wltCoreLifetimeJournal else {
+            throw ExtensionStartupError("(packet-tunnel) error: create WLT lifetime journal")
+          }
+          let prepared = try journal.prepareGeneration(configContent: configContent)
+          preparedJournalGeneration = prepared
+          configContent = prepared.configContent
+        #endif
       }
     #endif
 
@@ -856,9 +992,26 @@ open class ExtensionProvider: NEPacketTunnelProvider {
     do {
       try commandServer!.startOrReloadService(configContent, options: options)
     } catch {
+      #if os(iOS) && SFI_DEV
+        if let preparedJournalGeneration {
+          try? wltCoreLifetimeJournal?.didFailToStartGeneration(
+            preparedJournalGeneration,
+            errorDescription: error.localizedDescription
+          )
+        }
+      #endif
       throw ExtensionStartupError(
         "(packet-tunnel) error: start service: \(error.localizedDescription)")
     }
+    #if os(iOS) && SFI_DEV
+      if let preparedJournalGeneration {
+        // r2 propagates the prior Instance.Close result before it starts this generation.
+        try? wltCoreLifetimeJournal?.didStartGeneration(
+          preparedJournalGeneration,
+          previousGenerationCloseConfirmed: true
+        )
+      }
+    #endif
     #if os(macOS)
       if !Variant.useSystemExtension, commandServer!.needWIFIState() {
         locationManager = CLLocationManager()
@@ -881,23 +1034,38 @@ open class ExtensionProvider: NEPacketTunnelProvider {
 
   #endif
 
-  func stopService() {
+  // Non-diagnostic platforms retain their existing synchronous service close.
+  #if !(os(iOS) && SFI_DEV)
+  @discardableResult
+  func stopService() -> ServiceCloseResult {
     do {
       try commandServer?.closeService()
-    } catch {
-      let description = error.localizedDescription
-      if !description.localizedCaseInsensitiveContains("invalid argument") {
-        writeLifecycleMessage("(packet-tunnel) stop service: \(description)")
-      }
-    }
-    #if os(iOS) && SFI_DEV
-      stopWhitelistTransport()
-    #endif
-    platformInterface.reset()
+      platformInterface.reset()
+      return .succeeded
+    } catch { return .failed(error.localizedDescription) }
   }
+  #endif
 
   func reloadService() async throws {
+    try await reloadServiceWithOptions(nil)
+  }
+
+  // One admission covers option persistence/mutation and the complete reload.
+  // A rejected app request cannot alter the running or next-start config.
+  private func reloadServiceWithOptions(_ options: [String: NSObject]?) async throws {
     let reloadStartedAt = Date()
+    let reloadStopGeneration = currentStopTunnelGeneration()
+    #if os(iOS) && SFI_DEV
+      let lifecycleToken = try beginReloadTransition()
+      defer { serviceLifecycle.finishTransition(lifecycleToken) }
+      try throwIfStopTunnelRequested(since: reloadStopGeneration, lifecycleToken: lifecycleToken)
+    #else
+      try throwIfStopTunnelRequested(since: reloadStopGeneration)
+    #endif
+    if let options {
+      try persistStartOptions(options)
+      applyStartOptions(options)
+    }
     writeLifecycleMessage("(packet-tunnel) reloading service")
     reasserting = true
     defer {
@@ -915,18 +1083,48 @@ open class ExtensionProvider: NEPacketTunnelProvider {
       }
     #endif
     let singBoxStartedAt = Date()
+    #if os(iOS) && SFI_DEV
+      try throwIfStopTunnelRequested(since: reloadStopGeneration, lifecycleToken: lifecycleToken)
+    #else
+      try throwIfStopTunnelRequested(since: reloadStopGeneration)
+    #endif
     writeLifecycleMessage("(packet-tunnel): starting sing-box service")
-    try await startService()
+    try await startService(expectedStopGeneration: reloadStopGeneration)
+    #if os(iOS) && SFI_DEV
+      try throwIfStopTunnelRequested(since: reloadStopGeneration, lifecycleToken: lifecycleToken)
+    #else
+      try throwIfStopTunnelRequested(since: reloadStopGeneration)
+    #endif
     writeLifecycleMessage(
       "(packet-tunnel): sing-box service started elapsed=\(formatDuration(Date().timeIntervalSince(singBoxStartedAt))) reloadTotal=\(formatDuration(Date().timeIntervalSince(reloadStartedAt))) memory=\(PacketTunnelDiagnostics.residentMemoryDescription())")
   }
 
+  #if os(iOS) && SFI_DEV
+    func requestOwnedStopService(operationID: String, journalCloseReason: String) -> WLTStopReply {
+      serviceLifecycle.request(operationID: operationID, reason: journalCloseReason)
+    }
+
+    func lookupOwnedStopService(lifecycle: UInt64, operationID: String) -> WLTStopReply? {
+      serviceLifecycle.lookup(lifecycle: lifecycle, operationID: operationID)
+    }
+
+    func waitOwnedStopService(_ reply: WLTStopReply, timeout: TimeInterval = 20) async throws -> WLTStopReply {
+      try await serviceLifecycle.wait(for: reply, timeout: timeout)
+    }
+  #endif
+
   override open func stopTunnel(with reason: NEProviderStopReason) async {
-    let reasonDescription = stopReasonDescription(reason)
-    markStopTunnelRequested()
-    writeLifecycleMessage("(packet-tunnel) stopping, reason: \(reasonDescription)")
-    stopDiagnosticsHeartbeat()
-    stopService()
+    #if os(iOS) && SFI_DEV
+      let reply = requestOwnedStopService(operationID: UUID().uuidString.lowercased(), journalCloseReason: "tunnel_stop_\(stopReasonDescription(reason))")
+      // Deadline/cancellation ends only this waiter. The owner completes server
+      // and diagnostic teardown even when this callback has already returned.
+      do { _ = try await waitOwnedStopService(reply) }
+      catch { return }
+    #else
+      let reasonDescription = stopReasonDescription(reason)
+      markStopTunnelRequested()
+      stopDiagnosticsHeartbeat()
+      stopService()
     if let server = commandServer {
       try? await Task.sleep(nanoseconds: 100 * NSEC_PER_MSEC)
       server.close()
@@ -955,19 +1153,81 @@ open class ExtensionProvider: NEPacketTunnelProvider {
       }
     #endif
     endDiagnosticsSession("stopTunnel completed reason=\(reasonDescription)")
+    #endif
   }
 
   override open func handleAppMessage(_ messageData: Data) async -> Data? {
+    #if os(iOS) && SFI_DEV
+      if ExtensionDiagnosticMessage.isDiagnostic(messageData) {
+        return handleDiagnosticMessage(messageData)
+      }
+    #endif
     do {
       let options = try ExtensionStartOptions.decode(messageData)
-      applyStartOptions(options)
-      try persistStartOptions(options)
-      try await reloadService()
+      try await reloadServiceWithOptions(options)
       return nil
     } catch {
       return error.localizedDescription.data(using: .utf8)
     }
   }
+
+  #if os(iOS) && SFI_DEV
+    private func handleDiagnosticMessage(_ messageData: Data) -> Data? {
+      let request: ExtensionDiagnosticMessage.Request
+      do {
+        request = try ExtensionDiagnosticMessage.decodeRequest(messageData)
+      } catch {
+        return try? ExtensionDiagnosticMessage.encodeResponse(
+          ExtensionDiagnosticMessage.Response(
+            version: 1, status: "failed", resultJSON: nil,
+            errorCode: "invalid_diagnostic_envelope"))
+      }
+      if request.operation == "poll_wlt_service_close" {
+        guard let key = try? ExtensionDiagnosticMessage.decodeStopKey(request.requestJSON),
+          let reply = lookupOwnedStopService(lifecycle: key.lifecycle, operationID: key.operationID) else {
+          return try? ExtensionDiagnosticMessage.encodeResponse(
+            ExtensionDiagnosticMessage.Response(version: 1, status: "failed", resultJSON: nil, errorCode: "service_close_unknown_operation"))
+        }
+        return try? ExtensionDiagnosticMessage.encodeStopReply(reply)
+      }
+      if request.operation == "close_wlt_service" {
+        let reply = requestOwnedStopService(operationID: request.requestJSON, journalCloseReason: "app_provider_message_stop")
+        return try? ExtensionDiagnosticMessage.encodeStopReply(reply)
+
+      }
+      guard let commandServer else {
+        return try? ExtensionDiagnosticMessage.encodeResponse(
+          ExtensionDiagnosticMessage.Response(
+            version: 1, status: "failed", resultJSON: nil,
+            errorCode: "command_server_unavailable"))
+      }
+      let response: ExtensionDiagnosticMessage.Response
+      do {
+        var probeError: NSError?
+        let resultJSON = commandServer.probeWltOutbound(
+          request.requestJSON, error: &probeError)
+        if let probeError {
+          throw probeError
+        }
+        guard resultJSON.utf8.count <= 16 * 1024 else {
+          response = ExtensionDiagnosticMessage.Response(
+            version: 1, status: "failed", resultJSON: nil,
+            errorCode: "result_too_large")
+          return try? ExtensionDiagnosticMessage.encodeResponse(response)
+        }
+        response = ExtensionDiagnosticMessage.Response(
+          version: 1, status: "success", resultJSON: resultJSON,
+          errorCode: "")
+      } catch {
+        // Core probe errors are deliberately collapsed to a bounded code.
+        // The core result carries its own sanitized network failure details.
+        response = ExtensionDiagnosticMessage.Response(
+          version: 1, status: "failed", resultJSON: nil,
+          errorCode: "probe_rejected")
+      }
+      return try? ExtensionDiagnosticMessage.encodeResponse(response)
+    }
+  #endif
 
   override open func sleep() async {
     writeLifecycleMessage("(packet-tunnel): sleep")
@@ -1026,7 +1286,7 @@ open class ExtensionProvider: NEPacketTunnelProvider {
 
   #if os(iOS) && SFI_DEV
     private func startWhitelistTransportIfNeeded(_ options: [String: NSObject]) throws {
-      stopWhitelistTransport()
+      try WLTSidecarReplacement.perform(close: { stopWhitelistTransport() }, start: {
       let enabled = (options["whitelistTransportEnabled"] as? NSNumber)?.boolValue ?? false
       guard enabled else {
         return
@@ -1102,21 +1362,25 @@ open class ExtensionProvider: NEPacketTunnelProvider {
       }
       writeLifecycleMessage(
         "(packet-tunnel): whitelist transport started elapsed=\(formatDuration(Date().timeIntervalSince(transportStartedAt))) memory=\(PacketTunnelDiagnostics.residentMemoryDescription())")
+      })
     }
 
-    private func stopWhitelistTransport() {
+    @discardableResult
+    private func stopWhitelistTransport() -> Bool {
       guard let client = whitelistTransportClient else {
-        return
+        return true
       }
       let transportStoppedAt = Date()
       do {
         try client.close()
       } catch {
         writeLifecycleMessage("(packet-tunnel) stop whitelist transport: \(error.localizedDescription)")
+        return false
       }
       whitelistTransportClient = nil
       writeLifecycleMessage(
         "(packet-tunnel): whitelist transport stopped elapsed=\(formatDuration(Date().timeIntervalSince(transportStoppedAt))) memory=\(PacketTunnelDiagnostics.residentMemoryDescription())")
+      return true
     }
 
     private func sanitizeWhitelistTransportSOCKS(_ socks: String) -> String {
