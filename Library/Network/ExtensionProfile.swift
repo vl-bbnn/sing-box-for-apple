@@ -9,91 +9,42 @@ import os
 
 private let logger = Logger(category: "ExtensionProfile")
 
-@MainActor
-public class ExtensionProfile: ObservableObject {
-  public static let controlKind = AppConfiguration.widgetControlKind
+#if os(iOS) && SFI_DEV
+  // The service-close result belongs to the stop transaction. OS cleanup must
+  // still run on RPC failure, but disconnection cannot erase that failure.
+  @MainActor
+  enum WLTStopTransaction {
+    enum ReceiptFailure: Error { case persistence }
 
-  private let manager: NEVPNManager?
-  private var connection: NEVPNConnection?
-  private var observer: Any?
-  private let isMock: Bool
-
-  @Published public var status: NEVPNStatus
-  @Published public var connectedDate: Date?
-
-  public init(_ manager: NEVPNManager) {
-    self.manager = manager
-    connection = manager.connection
-    status = manager.connection.status
-    connectedDate = manager.connection.connectedDate
-    isMock = false
-  }
-
-  private init(mockStatus: NEVPNStatus, mockConnectedDate: Date?) {
-    manager = nil
-    connection = nil
-    status = mockStatus
-    connectedDate = mockConnectedDate
-    isMock = true
-  }
-
-  private static var _mock: ExtensionProfile?
-
-  public static var mock: ExtensionProfile {
-    if _mock == nil {
-      _mock = ExtensionProfile(
-        mockStatus: .connected, mockConnectedDate: Date().addingTimeInterval(-3600))
-    }
-    return _mock!
-  }
-
-  public func register() {
-    guard !isMock, let manager else { return }
-    observer = NotificationCenter.default.addObserver(
-      forName: NSNotification.Name.NEVPNStatusDidChange,
-      object: manager.connection,
-      queue: nil
-    ) { [weak self] notification in
-      guard let connection = notification.object as? NEVPNConnection else {
-        return
+    static func perform(
+      prepare: () async throws -> Void,
+      closeService: () async throws -> Void,
+      stopTunnel: () -> Void,
+      record: (String) -> Bool
+    ) async throws {
+      var body: Result<Void, Error>
+      var receiptsComplete = true
+      func receipt(_ stage: String) { receiptsComplete = record(stage) && receiptsComplete }
+      receipt("app_prepare_enter")
+      do {
+        try await prepare()
+        receipt("app_prepare_ok")
+        receipt("app_rpc_enter")
+        try await closeService()
+        receipt("app_rpc_ok")
+        body = .success(())
+      } catch {
+        receipt("app_rpc_error")
+        body = .failure(error)
       }
-      Task { @MainActor in
-        guard let self else {
-          return
-        }
-        self.connection = connection
-        self.status = connection.status
-        self.connectedDate = connection.connectedDate
-        #if os(macOS)
-          if connection.status == .disconnected || connection.status == .invalid {
-            await WhitelistTransportManager.shared.stop()
-          }
-        #endif
-        #if os(iOS)
-          if #available(iOS 16.0, *) {
-            if connection.status == .connected || connection.status == .disconnected {
-              Self.signalFileProviderChanges()
-            }
-          }
-        #endif
-      }
+      // OS cleanup is unconditional, including prepare failure and cancellation.
+      receipt("app_os_stop_enter")
+      stopTunnel()
+      receipt("app_os_stop_return")
+      guard receiptsComplete else { throw ReceiptFailure.persistence }
+      try body.get()
     }
   }
-
-  #if os(iOS)
-    @available(iOS 16.0, *)
-    private static func signalFileProviderChanges() {
-      Task.detached {
-        guard
-          let domain = try? await NSFileProviderManager.domains()
-            .first(where: { $0.identifier.rawValue == AppConfiguration.fileProviderDomainID }),
-          let manager = NSFileProviderManager(for: domain)
-        else {
-          return
-        }
-        try? await manager.signalEnumerator(for: .workingSet)
-      }
-    }
   #endif
 
   deinit {
@@ -273,6 +224,71 @@ public class ExtensionProfile: ObservableObject {
     }
   }
 
+  #if os(iOS) && SFI_DEV
+    public func probeWltOutbound(
+      _ requestJSON: String,
+      timeoutMillis: Int
+    ) async throws -> String {
+      guard !isMock, let session = connection as? NETunnelProviderSession else {
+        throw NSError(
+          domain: "ExtensionDiagnosticMessage", code: -1,
+          userInfo: [NSLocalizedDescriptionKey: "Tunnel session unavailable"])
+      }
+      guard status == .connected else {
+        throw NSError(
+          domain: "ExtensionDiagnosticMessage", code: -2,
+          userInfo: [NSLocalizedDescriptionKey: "Tunnel is not connected"])
+      }
+      guard (1...95_000).contains(timeoutMillis) else {
+        throw NSError(
+          domain: "ExtensionDiagnosticMessage", code: -5,
+          userInfo: [NSLocalizedDescriptionKey: "Diagnostic timeout invalid"])
+      }
+      let message = try ExtensionDiagnosticMessage.encodeProbeRequest(requestJSON)
+      return try await sendDiagnosticMessage(message, session: session, timeoutMillis: timeoutMillis)
+    }
+
+    private func sendDiagnosticMessage(
+      _ message: Data, session: NETunnelProviderSession, timeoutMillis: Int
+    ) async throws -> String {
+      let waiter = ExtensionDiagnosticResponseWaiter()
+      let responseData = try await withCheckedThrowingContinuation {
+        (continuation: CheckedContinuation<Data?, Error>) in
+        waiter.install(continuation)
+        DispatchQueue.global(qos: .utility).asyncAfter(
+          deadline: .now() + .milliseconds(timeoutMillis)
+        ) {
+          waiter.resume(
+            .failure(
+              NSError(
+                domain: "ExtensionDiagnosticMessage", code: -6,
+                userInfo: [NSLocalizedDescriptionKey: "Diagnostic response timeout"])))
+        }
+        do {
+          try session.sendProviderMessage(message) { response in
+            waiter.resume(.success(response))
+          }
+        } catch {
+          waiter.resume(.failure(error))
+        }
+      }
+      guard let responseData else {
+        throw NSError(
+          domain: "ExtensionDiagnosticMessage", code: -3,
+          userInfo: [NSLocalizedDescriptionKey: "Diagnostic response unavailable"])
+      }
+      let response = try ExtensionDiagnosticMessage.decodeResponse(responseData)
+      guard response.status == "success", response.errorCode.isEmpty,
+        let resultJSON = response.resultJSON
+      else {
+        throw NSError(
+          domain: "ExtensionDiagnosticMessage", code: -4,
+          userInfo: [NSLocalizedDescriptionKey: response.errorCode])
+      }
+      return resultJSON
+    }
+  #endif
+
   private func prepareStartOptions(
     configContentTransform: ((String) throws -> String)? = nil
   ) async throws -> [String: NSObject] {
@@ -371,23 +387,47 @@ public class ExtensionProfile: ObservableObject {
       return
     }
     guard let manager else { return }
-    if manager.isOnDemandEnabled {
-      if let proto = manager.protocolConfiguration as? NETunnelProviderProtocol {
-        var config = proto.providerConfiguration ?? [:]
-        config["wasOnDemandEnabled"] = true
-        proto.providerConfiguration = config
-      }
-      manager.isOnDemandEnabled = false
-      try await manager.saveToPreferences()
-    }
-    manager.connection.stopVPNTunnel()
-    Task.detached(priority: .utility) {
-      do {
-        try LibboxNewStandaloneCommandClient()!.serviceClose()
-      } catch {
-        logger.debug("serviceClose error: \(error.localizedDescription)")
+    func prepareStop() async throws {
+      if manager.isOnDemandEnabled {
+        if let proto = manager.protocolConfiguration as? NETunnelProviderProtocol {
+          var config = proto.providerConfiguration ?? [:]
+          config["wasOnDemandEnabled"] = true
+          proto.providerConfiguration = config
+        }
+        manager.isOnDemandEnabled = false
+        try await manager.saveToPreferences()
       }
     }
+    #if os(iOS) && SFI_DEV
+      // Finish the journal-owning service close while the packet tunnel still
+      // has ordinary runtime, before NetworkExtension begins its stop grace.
+      let stopOperationID = UUID().uuidString.lowercased()
+      try await WLTStopTransaction.perform(
+        prepare: { try await prepareStop() },
+        closeService: {
+          guard let session = manager.connection as? NETunnelProviderSession else {
+            throw NSError(domain: "ExtensionServiceClose", code: 3)
+          }
+          let message = try ExtensionDiagnosticMessage.encodeStopRequest(stopOperationID)
+          let reply = try await sendDiagnosticMessage(message, session: session, timeoutMillis: 20_000)
+          guard reply == stopOperationID else {
+            throw NSError(domain: "ExtensionServiceClose", code: 4)
+          }
+        },
+        stopTunnel: { manager.connection.stopVPNTunnel() },
+        record: { PacketTunnelDiagnostics.appendStopStage($0, operationID: stopOperationID) }
+      )
+    #else
+      try await prepareStop()
+      manager.connection.stopVPNTunnel()
+      Task.detached(priority: .utility) {
+        do {
+          try LibboxNewStandaloneCommandClient()!.serviceClose()
+        } catch {
+          logger.debug("serviceClose error: \(error.localizedDescription)")
+        }
+      }
+    #endif
     #if os(macOS)
       await WhitelistTransportManager.shared.stop()
     #endif

@@ -1,7 +1,36 @@
 import Foundation
 import GRDB
 
+public enum ProfileBackupError: Error {
+    case concurrentProfileChange
+    case integrityCheckFailed
+}
+
 public enum ProfileManager {
+    /// Creates a self-contained SQLite snapshot without checkpointing or
+    /// otherwise modifying the live database. The returned paths are read from
+    /// the snapshot and are safe to use as its profile/config binding.
+    public nonisolated static func backupProfileDatabase(to destination: URL) async throws -> [String] {
+        let before = try await Database.sharedWriter.read { db in
+            return try String.fetchAll(db, sql: "SELECT path FROM profiles ORDER BY id")
+        }
+        let backup = try DatabaseQueue(path: destination.path)
+        try Database.sharedWriter.backup(to: backup)
+        let captured = try await backup.read { db in
+            guard try String.fetchOne(db, sql: "PRAGMA integrity_check") == "ok" else {
+                throw ProfileBackupError.integrityCheckFailed
+            }
+            return try String.fetchAll(db, sql: "SELECT path FROM profiles ORDER BY id")
+        }
+        let after = try await Database.sharedWriter.read { db in
+            try String.fetchAll(db, sql: "SELECT path FROM profiles ORDER BY id")
+        }
+        guard before == captured, captured == after else {
+            throw ProfileBackupError.concurrentProfileChange
+        }
+        return captured
+    }
+
     public nonisolated static func create(_ profile: Profile) async throws {
         profile.order = try await nextOrder()
         try await Database.sharedWriter.write { db in
