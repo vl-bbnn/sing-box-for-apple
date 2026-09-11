@@ -1,6 +1,7 @@
 #!/usr/bin/env bash
 
 set -euo pipefail
+umask 077
 
 shortcut_name="${1:-}"
 artifact_dir="${WLT_SHORTCUT_ARTIFACT_DIR:?WLT_SHORTCUT_ARTIFACT_DIR is required}"
@@ -8,6 +9,11 @@ device_id="${DEVICE_ID:?DEVICE_ID is required}"
 resume_bundle_id="${WLT_SHORTCUT_RESUME_BUNDLE_ID:-}"
 warmup_seconds="${WLT_IOS_SHORTCUT_WARMUP_SECONDS:-2}"
 xcrun_bin="${XCRUN:-xcrun}"
+bounded_runner="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)/run_bounded.py"
+
+run_coredevice() {
+  /usr/bin/python3 "$bounded_runner" 40 -- "$xcrun_bin" "$@"
+}
 
 [[ -n "$shortcut_name" && ${#shortcut_name} -le 128 ]] \
   || { echo "shortcut name must contain 1-128 characters" >&2; exit 2; }
@@ -29,7 +35,7 @@ PY
 
 warm_status=1
 for warm_attempt in 1 2; do
-  if "$xcrun_bin" devicectl device process launch \
+  if run_coredevice devicectl device process launch \
     --device "$device_id" \
     --terminate-existing \
     com.apple.shortcuts \
@@ -50,7 +56,7 @@ if (( warmup_seconds > 0 )); then
   sleep "$warmup_seconds"
 fi
 
-"$xcrun_bin" devicectl device process launch \
+run_coredevice devicectl device process launch \
   --device "$device_id" \
   --payload-url "shortcuts://run-shortcut?name=$encoded_name" \
   com.apple.shortcuts \
@@ -62,7 +68,7 @@ if [[ -n "$resume_bundle_id" ]]; then
   sleep 1
   resume_status=1
   for resume_attempt in 1 2; do
-    if "$xcrun_bin" devicectl device process launch \
+    if run_coredevice devicectl device process launch \
       --device "$device_id" \
       --timeout 30 \
       --json-output "$artifact_dir/resume-$resume_attempt.json" \
