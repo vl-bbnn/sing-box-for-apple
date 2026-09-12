@@ -532,9 +532,9 @@ PY
         xcrun devicectl device process launch
         --device "$device"
     )
-    if [[ "$action" == "stop" || "$action" == "start" || "$action" == "start-probe" ]]; then
-        launch_arguments+=(--terminate-existing)
-    fi
+    # Keep every control URL on the existing Dev app instance. CoreDevice
+    # `--terminate-existing` kills the coordinator before the URL reaches the
+    # provider, racing NetworkExtension teardown and leaving WLT journals open.
     launch_arguments+=(
         --payload-url "$payload_url"
         --activate

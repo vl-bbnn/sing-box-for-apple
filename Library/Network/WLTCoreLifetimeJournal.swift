@@ -404,7 +404,10 @@ public final class WLTCoreLifetimeJournal {
       throw JournalError.loggingDisabled
     }
     log["output"] = outputFile.path
-    log["output_max_bytes"] = NSNumber(value: maximumBytes)
+    // Libbox's config schema has no portable `log.output_max_bytes` field.
+    // Enforce the generation limit in this journal when sealing instead of
+    // injecting an unknown key that makes the whole service fail to decode.
+    _ = maximumBytes
     log["timestamp"] = true
     dictionary["log"] = log
     guard JSONSerialization.isValidJSONObject(dictionary) else {

@@ -36,9 +36,9 @@ run do not repeatedly launch through a locked screen. The runner restores
 stopped VPN plus the `WLT WiFi` Shortcut on exit and never disables a cellular
 plan or changes the selected data SIM.
 
-Stop control relaunches the Dev container app with `--terminate-existing` before
-asking Network Extension to disconnect, so a stuck or suspended previous control
-task cannot suppress emergency cleanup.
+Stop control sends the URL to the existing Dev container app instance. It
+deliberately does not use `--terminate-existing`: terminating the app first can
+race NetworkExtension teardown and leave the WLT lifetime journal open.
 
 For a supervised short mechanism smoke only, set
 `WLT_STABILITY_ALLOW_SHORT=1`, `WLT_STABILITY_DURATION_SECONDS`, and

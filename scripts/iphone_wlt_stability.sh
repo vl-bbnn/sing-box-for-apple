@@ -568,11 +568,11 @@ for start_attempt in $(seq 1 "$max_start_attempts"); do
     run_control start-probe "start-probe-attempt-$start_attempt" \
       env \
         WLT_CONTROL_CANDIDATE_FILE="$candidate_file" \
-        WLT_CONTROL_TIMEOUT_SECONDS=120 \
+        WLT_CONTROL_TIMEOUT_SECONDS=300 \
       >"$start_attempt_file" || start_status=$?
   else
     run_control start-probe "start-probe-attempt-$start_attempt" \
-      env WLT_CONTROL_TIMEOUT_SECONDS=120 \
+      env WLT_CONTROL_TIMEOUT_SECONDS=300 \
       >"$start_attempt_file" || start_status=$?
   fi
   cp "$start_attempt_file" "$artifact_dir/start-probe.json"
@@ -582,13 +582,15 @@ for start_attempt in $(seq 1 "$max_start_attempts"); do
   fi
   if (( start_attempt < max_start_attempts )) && [[ ! -s "$start_attempt_file" ]]; then
     log "CoreDevice returned no sanitized startup result; retrying delivery once after explicit stop"
-    run_control stop startup-delivery-retry-stop >/dev/null 2>&1 || true
+    run_control stop startup-delivery-retry-stop >/dev/null 2>&1 \
+      || die "startup retry stop did not prove cleanup"
     sleep 2
     continue
   fi
   if (( start_attempt < max_start_attempts )) && retryable_start_failure <"$start_attempt_file"; then
     log "carrier connect did not settle; retrying startup once after bounded cooldown"
-    run_control stop startup-retry-stop >/dev/null 2>&1 || true
+    run_control stop startup-retry-stop >/dev/null 2>&1 \
+      || die "startup retry stop did not prove cleanup"
     sleep 15
     continue
   fi

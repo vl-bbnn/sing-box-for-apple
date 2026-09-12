@@ -82,6 +82,47 @@ class IPhoneWLTStabilityContractTests(unittest.TestCase):
         self.assertIn("autoUpdate: false", bootstrap)
         self.assertNotIn("profile.url", control)
 
+    def test_stop_delivery_preserves_running_app(self):
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            calls = root / "calls.jsonl"
+            fake_xcrun = root / "xcrun"
+            fake_xcrun.write_text("#!/usr/bin/env python3\n" + textwrap.dedent('''
+                import json, os, sys
+                from pathlib import Path
+                args = sys.argv[1:]
+                with open(os.environ["FAKE_XCRUN_CALLS"], "a") as stream:
+                    stream.write(json.dumps(args) + "\\n")
+                if "launch" in args:
+                    Path(args[args.index("--json-output") + 1]).write_text(
+                        json.dumps({"info": {"outcome": "success"}}))
+                elif "copy" in args and "from" in args:
+                    request = Path(args[args.index("--source") + 1]).stem
+                    Path(args[args.index("--destination") + 1]).write_text(json.dumps({
+                        "schema": 7, "request_id": request, "action": "stop",
+                        "state": "succeeded", "vpn_status": "disconnected"}))
+                else:
+                    raise SystemExit(2)
+            '''))
+            fake_xcrun.chmod(0o755)
+            environment = dict(os.environ, PATH=str(root) + os.pathsep + os.environ["PATH"],
+                               DEVICE_ID="fixture-device", WLT_APP_BUNDLE_ID="example.dev",
+                               WLT_CONTROL_ARTIFACT_DIR=str(root / "artifacts"),
+                               FAKE_XCRUN_CALLS=str(calls))
+            result = subprocess.run([str(SCRIPTS / "iphone_wlt_control.sh"), "stop"],
+                                    env=environment, capture_output=True, text=True, timeout=15)
+            self.assertEqual(result.returncode, 0, result.stderr)
+            launches = [json.loads(line) for line in calls.read_text().splitlines()
+                        if "launch" in json.loads(line)]
+            self.assertEqual(len(launches), 1)
+            self.assertNotIn("--terminate-existing", launches[0])
+            self.assertIn("--payload-url", launches[0])
+
+    def test_startup_retry_has_budget_and_requires_cleanup(self):
+        runner = (SCRIPTS / "iphone_wlt_stability.sh").read_text()
+        self.assertIn("WLT_CONTROL_TIMEOUT_SECONDS=300", runner)
+        self.assertIn('|| die "startup retry stop did not prove cleanup"', runner)
+
     def test_state_export_is_bounded_consistent_and_private(self):
         control = (SCRIPTS / "iphone_wlt_control.sh").read_text()
         device_control = (SCRIPTS.parent / "SFI" / "WLTDeviceControl.swift").read_text()
@@ -310,9 +351,10 @@ class IPhoneWLTStabilityContractTests(unittest.TestCase):
         self.assertIn("PacketTunnelDiagnostics.startupMilestones()", device_control)
         self.assertIn("request.action == .workload || request.action == .soak", device_control)
         self.assertIn(
-            '[[ "$action" == "stop" || "$action" == "start" || "$action" == "start-probe" ]]',
+            '# Keep every control URL on the existing Dev app instance.',
             control,
         )
+        self.assertNotIn('launch_arguments+=(--terminate-existing)', control)
         self.assertIn("retrying delivery once after explicit stop", RUNNER.read_text())
         self.assertIn("start_probe_can_defer_to_workload", RUNNER.read_text())
         self.assertIn("traffic_ready", RUNNER.read_text())
