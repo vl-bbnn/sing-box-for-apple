@@ -309,6 +309,20 @@ public class ExtensionPlatformInterface: NSObject, LibboxPlatformInterfaceProtoc
   private func onUpdateDefaultInterface(
     _ listener: LibboxInterfaceUpdateListenerProtocol, _ path: Network.NWPath
   ) {
+    #if SFI_DEV
+      let entered = WLTDefaultInterfaceSelection.uptimeNanos()
+      let defaultInterface = activeDefaultInterface(path)
+      let selectedIndex = defaultInterface.map { Int32($0.index) } ?? -1
+      let listenerEntered = WLTDefaultInterfaceSelection.uptimeNanos()
+      listener.updateDefaultInterface(
+        defaultInterface?.name ?? "", interfaceIndex: selectedIndex,
+        isExpensive: path.isExpensive, isConstrained: path.isConstrained)
+      let returned = WLTDefaultInterfaceSelection.uptimeNanos()
+      // Snapshot before calling Go and write only after cancellation/refresh.
+      // No names, addresses or profile data are needed to order these events.
+      writeLog(
+        "wlt path producer status=\(path.status) wifi=\(path.usesInterfaceType(.wifi)) cellular=\(path.usesInterfaceType(.cellular)) index=\(selectedIndex) entry_uptime_ns=\(entered) listener_uptime_ns=\(listenerEntered) return_uptime_ns=\(returned)")
+    #else
     guard path.status != .unsatisfied,
       let defaultInterface = activeDefaultInterface(path)
     else {
@@ -319,9 +333,17 @@ public class ExtensionPlatformInterface: NSObject, LibboxPlatformInterfaceProtoc
     listener.updateDefaultInterface(
       defaultInterface.name, interfaceIndex: Int32(defaultInterface.index),
       isExpensive: path.isExpensive, isConstrained: path.isConstrained)
+    #endif
   }
 
   private func activeDefaultInterface(_ path: Network.NWPath) -> Network.NWInterface? {
+    #if SFI_DEV
+      let types: [Network.NWInterface.InterfaceType] = [.wiredEthernet, .wifi, .cellular]
+      guard let offset = WLTDefaultInterfaceSelection.offset(
+        status: path.status, available: path.availableInterfaces.map(\.type),
+        used: types.filter { type in path.usesInterfaceType(type) }) else { return nil }
+      return path.availableInterfaces[offset]
+    #else
     // availableInterfaces is not ordered by route preference. In particular,
     // after Wi-Fi/cellular handover it may still list the old interface first,
     // which prevents libbox from observing the interface change and closing
@@ -338,6 +360,7 @@ public class ExtensionPlatformInterface: NSObject, LibboxPlatformInterfaceProtoc
     return path.availableInterfaces.first(where: {
       $0.type != .other && $0.type != .loopback
     }) ?? path.availableInterfaces.first
+    #endif
   }
 
   public func closeDefaultInterfaceMonitor(_: LibboxInterfaceUpdateListenerProtocol?) throws {
