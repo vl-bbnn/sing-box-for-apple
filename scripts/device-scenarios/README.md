@@ -31,14 +31,18 @@ acceptance default keeps one WLT session active for 30 minutes, probes every 30
 seconds, invokes the device-side `wltrescan` Shortcut halfway through, requires
 the app to observe both loss and recovery, proves traffic again, and checks both
 normal and idempotent VPN stop. The Dev app disables the idle timer while a
-start or soak control action is active, so a slow carrier bootstrap and the long
-run do not repeatedly launch through a locked screen. The runner restores
+start, stop, or soak control action is active, so a slow carrier bootstrap and
+the long run do not repeatedly launch through a locked screen. The runner restores
 stopped VPN plus the `WLT WiFi` Shortcut on exit and never disables a cellular
 plan or changes the selected data SIM.
 
 Stop control sends the URL to the existing Dev container app instance. It
 deliberately does not use `--terminate-existing`: terminating the app first can
 race NetworkExtension teardown and leave the WLT lifetime journal open.
+The host stop deadline defaults to 240 seconds to cover delivery, core close,
+OS disconnection, and result collection. `WLT_CONTROL_TIMEOUT_SECONDS` overrides
+that host deadline. A completed stop still needs full terminal cleanup evidence;
+this larger diagnostic budget does not make slow cleanup meet a latency target.
 
 For a supervised short mechanism smoke only, set
 `WLT_STABILITY_ALLOW_SHORT=1`, `WLT_STABILITY_DURATION_SECONDS`, and

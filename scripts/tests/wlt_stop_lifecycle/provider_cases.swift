@@ -116,11 +116,16 @@ func until(_ condition:()->Bool) async throws {
     require(error.primary is CancellationError && error.receiptStages==[WLTStopStage.appRPCError.rawValue] && osStops==1,"transaction masked cancellation")
   }
   let tf=Fixture(),transactionProvider=ExtensionProvider(tf)
+  tf.gates["core"]=DispatchSemaphore(value:0)
   try await transactionProvider.startTunnel(options:nil)
   let transactionID=id()
-  try await WLTStopTransaction.perform(prepare:{},closeService:{bind in _ = try await WLTStopClient.close(operationID:transactionID,timeout:1,observeOwner:bind){data,_ in try ExtensionDiagnosticMessage.decodeResponse(transactionProvider.wire(data)!)}},stopTunnel:{osStops+=1},record:{stage,canonical in PacketTunnelDiagnostics.appendStopStage(stage.rawValue,operationID:transactionID,canonicalOperationID:canonical?.operationID,lifecycle:canonical?.lifecycle)})
+  // Exceed the former 20s app deadline. Use the actual app callsite budget;
+  // OS teardown must wait for the delayed owner's terminal cleanup proof.
+  let releaseCore=tf.gates["core"]!
+  DispatchQueue.global().asyncAfter(deadline:.now()+21){releaseCore.signal()}
+  try await WLTStopTransaction.perform(prepare:{},closeService:{bind in _ = try await WLTStopClient.close(operationID:transactionID,timeout:productionAppStopTimeout,observeOwner:bind){data,_ in try ExtensionDiagnosticMessage.decodeResponse(transactionProvider.wire(data)!)}},stopTunnel:{require(tf.count("diagnosticsEnd")==1,"OS stop preceded terminal core cleanup");osStops+=1},record:{stage,canonical in PacketTunnelDiagnostics.appendStopStage(stage.rawValue,operationID:transactionID,canonicalOperationID:canonical?.operationID,lifecycle:canonical?.lifecycle)})
   require(osStops==2 && tf.count("diagnosticsEnd")==1,"successful app transaction incomplete")
-  print("PASS actual app transaction success and combined cancellation/receipt failure")
+  print("PASS actual app transaction beyond former 20s deadline and combined cancellation/receipt failure")
   // Actual cancellation helper retains early completion and ignores late RPC.
   let early=ExtensionDiagnosticResponseWaiter();early.resume(.failure(CancellationError()))
   do{let _:Data?=try await withCheckedThrowingContinuation{_ = early.install($0)};fatalError("early cancellation lost")}catch is CancellationError{}

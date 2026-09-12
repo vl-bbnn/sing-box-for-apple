@@ -118,6 +118,11 @@ run() {
     elif [[ -n "${WLT_CONTROL_PROFILE_NAME:-}" ]]; then
         die "WLT_CONTROL_PROFILE_NAME is valid only for select-profile"
     fi
+    # Stop waits for the core owner before requesting OS disconnection.
+    # Include room for CoreDevice delivery and result collection as well.
+    if [[ "$action" == "stop" ]]; then
+        timeout_seconds="${WLT_CONTROL_TIMEOUT_SECONDS:-240}"
+    fi
     validate_integer "$timeout_seconds" "WLT_CONTROL_TIMEOUT_SECONDS"
     validate_integer "$launch_timeout_seconds" "WLT_CONTROL_LAUNCH_TIMEOUT_SECONDS"
     validate_integer "$copy_timeout_seconds" "WLT_CONTROL_COPY_TIMEOUT_SECONDS"

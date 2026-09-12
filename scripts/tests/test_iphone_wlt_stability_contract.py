@@ -123,6 +123,13 @@ class IPhoneWLTStabilityContractTests(unittest.TestCase):
         self.assertIn("WLT_CONTROL_TIMEOUT_SECONDS=300", runner)
         self.assertIn('|| die "startup retry stop did not prove cleanup"', runner)
 
+    def test_stop_budget_preserves_unattended_control(self):
+        control = (SCRIPTS / "iphone_wlt_control.sh").read_text()
+        device_control = (SCRIPTS.parent / "SFI/WLTDeviceControl.swift").read_text()
+        self.assertIn('timeout_seconds="${WLT_CONTROL_TIMEOUT_SECONDS:-240}"', control)
+        awake_cases = device_control.split('let keepsDeviceAwake = switch request.action {', 1)[1].split('default:', 1)[0]
+        self.assertIn('.stop', awake_cases)
+
     def test_state_export_is_bounded_consistent_and_private(self):
         control = (SCRIPTS / "iphone_wlt_control.sh").read_text()
         device_control = (SCRIPTS.parent / "SFI" / "WLTDeviceControl.swift").read_text()

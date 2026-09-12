@@ -20,7 +20,11 @@ def method(source, signature):
 
 class ProviderIntegration(unittest.TestCase):
     def test_actual_provider_entrypoints_protocol_waiter_and_receipts(self):
-        profile=(SRC/'ExtensionProfile.swift').read_text().split('@MainActor\npublic class ExtensionProfile:')[0]
+        profile_source=(SRC/'ExtensionProfile.swift').read_text()
+        app_stop=method(profile_source,'  public func stop(')
+        app_timeout=re.search(r'WLTStopClient\.close\(operationID: stopOperationID, timeout: ([0-9]+)',app_stop)
+        self.assertIsNotNone(app_timeout, 'bind delayed-close test to the actual app stop timeout')
+        profile=profile_source.split('@MainActor\npublic class ExtensionProfile:')[0]
         profile='\n'.join(line for line in profile.splitlines() if not line.startswith('import ') and 'import FileProvider' not in line and 'private let logger' not in line)
         provider=(SRC/'ExtensionProvider.swift').read_text()
         lifecycle=provider[provider.index('    private let serviceLifecycleInitLock'):provider.index('\n  #endif',provider.index('    private let serviceLifecycleInitLock'))]
@@ -37,6 +41,7 @@ class ProviderIntegration(unittest.TestCase):
         end=diagnostics.index('\n  #endif',begin)
         receipts=diagnostics[begin:end]
         source='import Foundation\n'+(SRC/'WLTStopOrchestrator.swift').read_text()+'\n'+profile+'\n'
+        source+='let productionAppStopTimeout: TimeInterval = '+app_timeout.group(1)+'\n'
         source+='''
 public enum NEProviderStopReason { case userInitiated }
 open class NEPacketTunnelProvider {

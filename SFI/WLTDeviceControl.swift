@@ -732,7 +732,7 @@ actor WLTDeviceControl {
         isRunning = true
         defer { isRunning = false }
         let keepsDeviceAwake = switch request.action {
-        case .bootstrapProfile, .upsertProfile, .start, .startProbe, .soak, .workload,
+        case .bootstrapProfile, .upsertProfile, .start, .startProbe, .stop, .soak, .workload,
              .networkWorkload, .explicitSavedWLTOutboundReachability:
             true
         default:

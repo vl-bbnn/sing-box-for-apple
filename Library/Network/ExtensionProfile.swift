@@ -737,7 +737,9 @@ public class ExtensionProfile: ObservableObject {
           guard let session = manager.connection as? NETunnelProviderSession else {
             throw NSError(domain: "ExtensionServiceClose", code: 3)
           }
-          _ = try await WLTStopClient.close(operationID: stopOperationID, timeout: 20, observeOwner: bind) { message, budget in
+          // A normal LTE session may need about a minute to flush mux and
+          // journal state; keep the app-side waiter bounded above that time.
+          _ = try await WLTStopClient.close(operationID: stopOperationID, timeout: 120, observeOwner: bind) { message, budget in
             try await sendDiagnosticResponse(message, session: session, timeoutMillis: budget)
           }
         },
