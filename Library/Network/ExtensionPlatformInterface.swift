@@ -320,8 +320,9 @@ public class ExtensionPlatformInterface: NSObject, LibboxPlatformInterfaceProtoc
       let returned = WLTDefaultInterfaceSelection.uptimeNanos()
       // Snapshot before calling Go and write only after cancellation/refresh.
       // No names, addresses or profile data are needed to order these events.
-      writeLog(
-        "wlt path producer status=\(path.status) wifi=\(path.usesInterfaceType(.wifi)) cellular=\(path.usesInterfaceType(.cellular)) index=\(selectedIndex) entry_uptime_ns=\(entered) listener_uptime_ns=\(listenerEntered) return_uptime_ns=\(returned)")
+      let record = "wlt path producer status=\(path.status) wifi=\(path.usesInterfaceType(.wifi)) cellular=\(path.usesInterfaceType(.cellular)) index=\(selectedIndex) entry_uptime_ns=\(entered) listener_uptime_ns=\(listenerEntered) return_uptime_ns=\(returned)"
+      PacketTunnelDiagnostics.append(record)
+      writeLog(record)
     #else
     guard path.status != .unsatisfied,
       let defaultInterface = activeDefaultInterface(path)
