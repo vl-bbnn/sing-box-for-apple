@@ -285,6 +285,9 @@ public class ExtensionPlatformInterface: NSObject, LibboxPlatformInterfaceProtoc
   }
 
   private var nwMonitor: NWPathMonitor?
+  #if SFI_DEV
+    private var wltWifiPathObserver: NWPathMonitor?
+  #endif
 
   public func startDefaultInterfaceMonitor(_ listener: LibboxInterfaceUpdateListenerProtocol?)
     throws
@@ -294,6 +297,18 @@ public class ExtensionPlatformInterface: NSObject, LibboxPlatformInterfaceProtoc
     }
     let monitor = NWPathMonitor()
     nwMonitor = monitor
+    #if SFI_DEV
+      // Observation only: establish whether a per-underlay signal precedes the
+      // default-path callback before giving it authority over WLT lifecycle.
+      let wifiObserver = NWPathMonitor(requiredInterfaceType: .wifi)
+      wltWifiPathObserver = wifiObserver
+      wifiObserver.pathUpdateHandler = { path in
+        let entered = WLTDefaultInterfaceSelection.uptimeNanos()
+        PacketTunnelDiagnostics.append(
+          "wlt wifi observer status=\(path.status) used=\(path.usesInterfaceType(.wifi)) entry_uptime_ns=\(entered)")
+      }
+      wifiObserver.start(queue: DispatchQueue(label: "WLT.WifiPathObservation", qos: .userInitiated))
+    #endif
     let semaphore = DispatchSemaphore(value: 0)
     monitor.pathUpdateHandler = { path in
       self.onUpdateDefaultInterface(listener, path)
@@ -365,6 +380,10 @@ public class ExtensionPlatformInterface: NSObject, LibboxPlatformInterfaceProtoc
   }
 
   public func closeDefaultInterfaceMonitor(_: LibboxInterfaceUpdateListenerProtocol?) throws {
+    #if SFI_DEV
+      wltWifiPathObserver?.cancel()
+      wltWifiPathObserver = nil
+    #endif
     nwMonitor?.cancel()
     nwMonitor = nil
   }
