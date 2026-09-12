@@ -779,7 +779,12 @@ if action == "explicit_saved_WLT_outbound_reachability":
     plan = json.load(open(explicit_plan_path))
     requests = plan["requests"]
     probes = result.get("explicit_saved_WLT_outbound_reachability")
-    if not isinstance(probes, list) or not 1 <= len(probes) <= len(requests):
+    if not isinstance(probes, list):
+        code = result.get("error_code")
+        raise SystemExit(
+            f"explicit WLT action returned no probe results (error_code={code!r})"
+        )
+    if not 1 <= len(probes) <= len(requests):
         raise SystemExit("explicit WLT result count mismatch")
     statuses = [probe.get("status") if isinstance(probe, dict) else None for probe in probes]
     if (
