@@ -461,13 +461,57 @@ PY
 
 restore_baseline() {
   local status=$?
+  local stop_status=0 wifi_status=0 verify_status=0
   trap - EXIT INT TERM HUP
   if [[ "$vpn_started" == "1" ]]; then
-    run_control stop emergency-stop >/dev/null 2>&1 || true
+    run_control stop emergency-stop >"$artifact_dir/emergency-stop.json" \
+      2>"$artifact_dir/emergency-stop.stderr" || stop_status=$?
     vpn_started=0
   fi
   if [[ "$restore_wifi" == "1" && "$wifi_restored" != "1" ]]; then
-    run_shortcut "$wifi_shortcut" emergency-wifi-restore "" >/dev/null 2>&1 || true
+    run_shortcut "$wifi_shortcut" emergency-wifi-restore "" \
+      >"$artifact_dir/emergency-wifi-restore.stdout" \
+      2>"$artifact_dir/emergency-wifi-restore.stderr" || wifi_status=$?
+  fi
+  if [[ ! -s "$artifact_dir/result.json" ]]; then
+    run_control status emergency-final-status >"$artifact_dir/emergency-final-status.json" \
+      2>"$artifact_dir/emergency-final-status.stderr" || verify_status=$?
+    /usr/bin/python3 - "$artifact_dir" "$status" "$stop_status" "$wifi_status" \
+      "$verify_status" "$restore_wifi" <<'PY'
+import json
+from pathlib import Path
+import sys
+
+root = Path(sys.argv[1])
+exit_code, stop_code, wifi_code, verify_code = map(int, sys.argv[2:6])
+try:
+    final = json.loads((root / "emergency-final-status.json").read_text())
+except (OSError, ValueError):
+    final = {}
+network = final.get("network_final") or {}
+cleanup = (
+    stop_code == wifi_code == verify_code == 0
+    and final.get("state") == "succeeded"
+    and final.get("vpn_status") == "disconnected"
+    and (sys.argv[6] != "1" or (
+        network.get("status") == "satisfied" and network.get("wifi") is True
+    ))
+)
+result = {
+    "schema": 1, "classification": "failed", "qualification": False,
+    "runner_exit_code": exit_code,
+    "failures": ["runner_aborted_before_scenario_completed"],
+    "cleanup_succeeded": cleanup,
+    "emergency_stop_exit_code": stop_code,
+    "emergency_wifi_exit_code": wifi_code,
+    "emergency_status_exit_code": verify_code,
+}
+temporary = root / "result.json.tmp"
+temporary.write_text(json.dumps(result, indent=2, sort_keys=True) + "\n")
+temporary.replace(root / "result.json")
+PY
+    # An incomplete scenario can never become successful through cleanup.
+    (( status != 0 )) || status=1
   fi
   exit "$status"
 }

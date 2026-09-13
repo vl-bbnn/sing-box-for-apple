@@ -1044,12 +1044,54 @@ class IPhoneWLTStabilityContractTests(unittest.TestCase):
             self.assertNotEqual(result.returncode, 0)
             self.assertEqual(
                 (root / "control-calls.txt").read_text().splitlines(),
-                ["stop", "status", "start-probe", "stop", "start-probe", "stop"],
+                ["stop", "status", "start-probe", "stop", "start-probe", "stop", "status"],
             )
             self.assertEqual(
                 (root / "shortcut-calls.txt").read_text().splitlines(),
                 ["WLT LTE", "WLT WiFi"],
             )
+            payload = json.loads((root / "artifacts/result.json").read_text())
+            self.assertEqual(payload["classification"], "failed")
+            self.assertTrue(payload["cleanup_succeeded"])
+            self.assertTrue((root / "artifacts/emergency-stop.json").is_file())
+
+    def test_aborted_handover_retains_stop_receipt_and_checks_cleanup(self):
+        for stop_fails in (False, True):
+            with self.subTest(stop_fails=stop_fails), tempfile.TemporaryDirectory() as temporary:
+                root = Path(temporary)
+                environment = self.base_environment(root)
+                environment.update({
+                    "WLT_STABILITY_ALLOW_SHORT": "1",
+                    "WLT_STABILITY_DURATION_SECONDS": "5",
+                    "WLT_STABILITY_PROBE_INTERVAL_SECONDS": "1",
+                    "WLT_STABILITY_INJECT_LOSS": "0",
+                    "WLT_STABILITY_WIFI_HANDOVER_AFTER_SECONDS": "1",
+                    "WLT_STABILITY_LTE_RETURN_AFTER_SECONDS": "3",
+                    "WLT_STABILITY_TRANSPORT_TIMEOUT_SECONDS": "1",
+                })
+                control = Path(environment["WLT_STABILITY_CONTROL_SCRIPT"])
+                source = control.read_text()
+                # Force the Wi-Fi status failure at the command boundary; all
+                # other device responses still execute the normal fixture.
+                source = source.replace(
+                    'action = sys.argv[1]',
+                    'action = sys.argv[1]\n'
+                    'if "handover-wifi-status" in os.environ.get("WLT_CONTROL_ARTIFACT_DIR", ""):\n'
+                    '    print(json.dumps({"state": "succeeded", "vpn_status": "connected", "network_final": {"status": "satisfied", "wifi": False, "cellular": True}}))\n'
+                    '    raise SystemExit(0)\n'
+                    + ('if "emergency-stop" in os.environ.get("WLT_CONTROL_ARTIFACT_DIR", ""):\n'
+                       '    raise SystemExit(7)\n' if stop_fails else ''),
+                )
+                control.write_text(source)
+                result = subprocess.run([str(RUNNER)], env=environment, capture_output=True,
+                                        text=True, timeout=15)
+                self.assertEqual(result.returncode, 3, result.stderr)
+                payload = json.loads((root / "artifacts/result.json").read_text())
+                self.assertEqual(payload["classification"], "failed")
+                self.assertFalse(payload["qualification"])
+                self.assertEqual(payload["cleanup_succeeded"], not stop_fails)
+                self.assertEqual(payload["emergency_stop_exit_code"], 7 if stop_fails else 0)
+                self.assertTrue((root / "artifacts/emergency-final-status.json").is_file())
 
 
 if __name__ == "__main__":
