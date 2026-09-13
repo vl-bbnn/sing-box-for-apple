@@ -67,10 +67,9 @@ def classify(raw, timing, duration_ms, interval_ms, recovery_ms=90000):
             offset = integer(sample.get("offset_ms"), "sample_offset")
             probe_elapsed = integer(sample.get("elapsed_ms"), "sample_elapsed")
             # A radio outage can make the 12s HTTPS probe consume its timeout
-            # plus CoreDevice/result-copy overhead.  Keep a hard upper bound,
-            # while allowing the bounded loss window to be classified as one
-            # planned incident instead of an unplanned probe failure.
-            if probe_elapsed > 30000:
+            # plus CoreDevice/result-copy overhead. Keep the measured request timeout
+            # as a hard upper bound so delayed host delivery cannot be accepted.
+            if probe_elapsed > 15000:
                 raise ValueError("probe_duration_exceeds_budget")
             if index == 0 and offset > 1000:
                 raise ValueError("initial_probe_missing")
