@@ -30,6 +30,10 @@ timestamp="$(date '+%Y-%m-%d-%H%M%S')"
 artifact_dir="${WLT_STABILITY_ARTIFACT_DIR:-$repo_root/.local/wlt-stability-$timestamp}"
 vpn_started=0
 wifi_restored=0
+soak_pid=""
+# The ownership guard validates this live coordinator and its ancestry before
+# admitting its concurrent response-reader and radio-shortcut children.
+export WLT_OWNERSHIP_SESSION_PID="${WLT_OWNERSHIP_SESSION_PID:-$$}"
 
 log() {
   printf '[wlt-stability] %s\n' "$*" >&2
@@ -463,6 +467,14 @@ restore_baseline() {
   local status=$?
   local stop_status=0 wifi_status=0 verify_status=0
   trap - EXIT INT TERM HUP
+  if [[ -n "$soak_pid" ]]; then
+    # The app serializes control requests. Joining the bounded soak reader
+    # prevents cleanup from racing a still-active app request or orphaning it.
+    local soak_join_status=0
+    wait "$soak_pid" || soak_join_status=$?
+    printf '%s\n' "$soak_join_status" >"$artifact_dir/emergency-soak-exit.txt"
+    soak_pid=""
+  fi
   if [[ "$vpn_started" == "1" ]]; then
     run_control stop emergency-stop >"$artifact_dir/emergency-stop.json" \
       2>"$artifact_dir/emergency-stop.stderr" || stop_status=$?
@@ -680,6 +692,7 @@ else
   run_shortcut "$loss_shortcut" connection-loss
   soak_status=0
   wait "$soak_pid" || soak_status=$?
+  soak_pid=""
   (( soak_status == 0 )) || die "soak control action failed; see $artifact_dir/soak.log"
   classify_injected_recovery "$artifact_dir/soak.json"
 fi

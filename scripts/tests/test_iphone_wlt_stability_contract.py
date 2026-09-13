@@ -844,6 +844,34 @@ class IPhoneWLTStabilityContractTests(unittest.TestCase):
                 "probe_transition_after_host_injection",
             )
 
+    def test_failed_radio_command_joins_active_soak_before_cleanup(self):
+        with tempfile.TemporaryDirectory() as temporary:
+            root = Path(temporary)
+            environment = self.base_environment(root)
+            environment["WLT_STABILITY_ALLOW_SHORT"] = "1"
+            control = Path(environment["WLT_STABILITY_CONTROL_SCRIPT"])
+            source = control.read_text().replace(
+                'action = sys.argv[1]',
+                'action = sys.argv[1]\n'
+                'pending = Path(os.environ["FAKE_VPN_STATE"] + ".soaking")\n'
+                'if action in ("stop", "status") and pending.exists():\n'
+                '    raise SystemExit(9)',
+            ).replace('time.sleep(2)', 'pending.touch()\n    time.sleep(4)\n    pending.unlink()')
+            control.write_text(source)
+            shortcut = Path(environment["WLT_STABILITY_SHORTCUT_SCRIPT"])
+            shortcut.write_text(shortcut.read_text().replace(
+                'network_state = Path',
+                'if sys.argv[1] == "wltrescan":\n    raise SystemExit(3)\nnetwork_state = Path',
+            ))
+            result = subprocess.run([str(RUNNER)], env=environment, capture_output=True,
+                                    text=True, timeout=15)
+            self.assertEqual(result.returncode, 3, result.stderr)
+            payload = json.loads((root / "artifacts/result.json").read_text())
+            self.assertEqual(payload["classification"], "failed")
+            self.assertTrue(payload["cleanup_succeeded"])
+            self.assertEqual((root / "artifacts/emergency-soak-exit.txt").read_text().strip(), "0")
+            self.assertFalse((root / "vpn-state.txt.soaking").exists())
+
     def test_no_loss_soak_uses_bounded_host_probes(self):
         with tempfile.TemporaryDirectory() as temporary:
             root = Path(temporary)
