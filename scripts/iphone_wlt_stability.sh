@@ -19,6 +19,8 @@ max_start_attempts="${WLT_STABILITY_MAX_START_ATTEMPTS:-2}"
 restore_wifi="${WLT_STABILITY_RESTORE_WIFI:-1}"
 lte_shortcut="${WLT_STABILITY_LTE_SHORTCUT:-WLT LTE}"
 loss_shortcut="${WLT_STABILITY_LOSS_SHORTCUT:-wltrescan}"
+recovery_shortcut="${WLT_STABILITY_RECOVERY_SHORTCUT:-}"
+recovery_delay_seconds="${WLT_STABILITY_RECOVERY_DELAY_SECONDS:-5}"
 wifi_shortcut="${WLT_STABILITY_WIFI_SHORTCUT:-WLT WiFi}"
 transport_timeout_seconds="${WLT_STABILITY_TRANSPORT_TIMEOUT_SECONDS:-90}"
 cleanup_timeout_seconds="${WLT_STABILITY_CLEANUP_TIMEOUT_SECONDS:-90}"
@@ -569,6 +571,18 @@ require_non_negative_integer \
   WLT_STABILITY_INITIAL_LTE_SETTLE_SECONDS "$initial_lte_settle_seconds"
 (( initial_lte_settle_seconds <= 120 )) \
   || die "WLT_STABILITY_INITIAL_LTE_SETTLE_SECONDS must not exceed 120"
+[[ "$recovery_delay_seconds" =~ ^[0-9]+$ ]] \
+  || die "WLT_STABILITY_RECOVERY_DELAY_SECONDS must be a non-negative integer"
+(( recovery_delay_seconds <= 30 )) \
+  || die "WLT_STABILITY_RECOVERY_DELAY_SECONDS must not exceed 30"
+if [[ -n "$recovery_shortcut" ]]; then
+  [[ "$inject_loss" == "1" ]] \
+    || die "WLT_STABILITY_RECOVERY_SHORTCUT requires loss injection"
+  [[ "$recovery_shortcut" != *$'\n'* && "$recovery_shortcut" != *$'\r'* ]] \
+    || die "WLT_STABILITY_RECOVERY_SHORTCUT must not contain line breaks"
+  (( ${#recovery_shortcut} <= 128 )) \
+    || die "WLT_STABILITY_RECOVERY_SHORTCUT must not exceed 128 characters"
+fi
 [[ "$max_start_attempts" == "1" || "$max_start_attempts" == "2" ]] \
   || die "WLT_STABILITY_MAX_START_ATTEMPTS must be 1 or 2"
 [[ "$restore_wifi" == "0" || "$restore_wifi" == "1" ]] \
@@ -717,6 +731,12 @@ else
   stamp_radio_timing injection_start
   injection_status=0
   run_shortcut "$loss_shortcut" connection-loss || injection_status=$?
+  if (( injection_status == 0 )) && [[ -n "$recovery_shortcut" ]]; then
+    if (( recovery_delay_seconds > 0 )); then
+      sleep "$recovery_delay_seconds"
+    fi
+    run_shortcut "$recovery_shortcut" connection-recovery || injection_status=$?
+  fi
   stamp_radio_timing injection_end --exit-code "$injection_status"
   (( injection_status == 0 )) || exit "$injection_status"
   soak_status=0
