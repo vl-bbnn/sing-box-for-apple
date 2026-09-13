@@ -21,6 +21,7 @@ lte_shortcut="${WLT_STABILITY_LTE_SHORTCUT:-WLT LTE}"
 loss_shortcut="${WLT_STABILITY_LOSS_SHORTCUT:-wltrescan}"
 wifi_shortcut="${WLT_STABILITY_WIFI_SHORTCUT:-WLT WiFi}"
 transport_timeout_seconds="${WLT_STABILITY_TRANSPORT_TIMEOUT_SECONDS:-90}"
+cleanup_timeout_seconds="${WLT_STABILITY_CLEANUP_TIMEOUT_SECONDS:-90}"
 handover_recovery_timeout_seconds="${WLT_STABILITY_HANDOVER_RECOVERY_TIMEOUT_SECONDS:-90}"
 wifi_handover_after_seconds="${WLT_STABILITY_WIFI_HANDOVER_AFTER_SECONDS:-}"
 lte_return_after_seconds="${WLT_STABILITY_LTE_RETURN_AFTER_SECONDS:-}"
@@ -135,6 +136,53 @@ wait_for_wifi() {
       return 0
     fi
     sleep 1
+  done
+  return 1
+}
+
+strict_baseline_status() {
+  /usr/bin/python3 -c '
+import json, sys
+try:
+    value = json.load(sys.stdin)
+except (ValueError, OSError):
+    raise SystemExit(1)
+network = value.get("network_final") or {}
+ok = (
+    value.get("state") == "succeeded"
+    and value.get("vpn_status") == "disconnected"
+    and (sys.argv[1] != "1" or (
+        network.get("status") == "satisfied" and network.get("wifi") is True
+    ))
+)
+raise SystemExit(0 if ok else 1)
+' "$restore_wifi"
+}
+
+wait_for_baseline() {
+  local prefix="$1" deadline remaining status_file attempt=0
+  rm -f "$artifact_dir/.wifi-restore-proved"
+  deadline=$((SECONDS + cleanup_timeout_seconds))
+  while (( SECONDS < deadline )); do
+    attempt=$((attempt + 1))
+    remaining=$((deadline - SECONDS))
+    status_file="$artifact_dir/$prefix-$(printf '%03d' "$attempt").json"
+    # The control helper has several per-operation budgets. Bound the whole
+    # status request as well, so a stalled helper cannot outlive cleanup.
+    if run_control status "$prefix-$(printf '%03d' "$attempt")" \
+      /usr/bin/python3 "$script_dir/run_bounded.py" "$remaining" -- \
+      >"$status_file" 2>"$status_file.stderr" \
+      && strict_baseline_status <"$status_file"
+    then
+      cp "$status_file" "$artifact_dir/$prefix.json"
+      if [[ "$restore_wifi" == "1" ]]; then
+        wifi_restored=1
+        : >"$artifact_dir/.wifi-restore-proved"
+      fi
+      return 0
+    fi
+    cp "$status_file" "$artifact_dir/$prefix.json"
+    (( SECONDS >= deadline )) || sleep 1
   done
   return 1
 }
@@ -486,8 +534,7 @@ restore_baseline() {
       2>"$artifact_dir/emergency-wifi-restore.stderr" || wifi_status=$?
   fi
   if [[ ! -s "$artifact_dir/result.json" ]]; then
-    run_control status emergency-final-status >"$artifact_dir/emergency-final-status.json" \
-      2>"$artifact_dir/emergency-final-status.stderr" || verify_status=$?
+    wait_for_baseline emergency-final-status || verify_status=$?
     /usr/bin/python3 - "$artifact_dir" "$status" "$stop_status" "$wifi_status" \
       "$verify_status" "$restore_wifi" <<'PY'
 import json
@@ -535,6 +582,7 @@ for pair in \
   "WLT_STABILITY_DURATION_SECONDS:$duration_seconds" \
   "WLT_STABILITY_PROBE_INTERVAL_SECONDS:$probe_interval_seconds" \
   "WLT_STABILITY_TRANSPORT_TIMEOUT_SECONDS:$transport_timeout_seconds" \
+  "WLT_STABILITY_CLEANUP_TIMEOUT_SECONDS:$cleanup_timeout_seconds" \
   "WLT_STABILITY_HANDOVER_RECOVERY_TIMEOUT_SECONDS:$handover_recovery_timeout_seconds"
 do
   require_positive_integer "${pair%%:*}" "${pair#*:}"
@@ -563,6 +611,8 @@ if [[ "$allow_short" != "1" ]]; then
 fi
 (( probe_interval_seconds <= 300 && probe_interval_seconds <= duration_seconds )) \
   || die "probe interval must be at most 300 seconds and no greater than duration"
+(( cleanup_timeout_seconds <= 300 )) \
+  || die "cleanup timeout must not exceed 300 seconds"
 (( handover_recovery_timeout_seconds <= 180 )) \
   || die "handover recovery timeout must not exceed 180 seconds"
 if [[ -z "$loss_after_seconds" ]]; then
@@ -706,18 +756,19 @@ log "stopping WLT and checking idempotent cleanup"
 run_control stop final-stop >"$artifact_dir/final-stop.json"
 vpn_started=0
 run_control stop idempotent-stop >"$artifact_dir/idempotent-stop.json"
-run_control status final-status >"$artifact_dir/final-status.json"
-
 if [[ "$restore_wifi" == "1" ]]; then
   run_shortcut "$wifi_shortcut" final-wifi-restore ""
-  wifi_restored=1
-  : >"$artifact_dir/.wifi-restore-proved"
 fi
+# Shortcut completion only confirms delivery. Prove the resulting transport
+# and VPN state together before recording a successful cleanup.
+baseline_status=0
+wait_for_baseline final-status || baseline_status=$?
+(( baseline_status == 0 )) || log "stopped VPN and restored transport were not proved"
 
 /usr/bin/python3 - \
   "$artifact_dir" "$duration_seconds" "$probe_interval_seconds" "$inject_loss" \
   "$wifi_handover_after_seconds" "$lte_return_after_seconds" \
-  "$handover_recovery_timeout_seconds" "$restore_wifi" <<'PY'
+  "$handover_recovery_timeout_seconds" "$restore_wifi" "$baseline_status" <<'PY'
 import json
 from pathlib import Path
 import sys
@@ -730,6 +781,7 @@ wifi_handover_expected = bool(sys.argv[5])
 lte_return_expected = bool(sys.argv[6])
 handover_recovery_timeout_ms = int(sys.argv[7]) * 1000
 restore_wifi_expected = sys.argv[8] == "1"
+baseline_status_proved = sys.argv[9] == "0"
 
 def load(name):
     return json.loads((root / name).read_text())
@@ -788,11 +840,20 @@ for label, value in (("final_stop", stop), ("idempotent_stop", second_stop), ("f
     if value.get("state") != "succeeded" or value.get("vpn_status") != "disconnected":
         failures.append(f"{label}_failed")
 
+if not baseline_status_proved:
+    failures.append("baseline_status_not_proved")
 classification = (
     "failed" if failures
     else ("infrastructure" if infrastructure_failures else "success")
 )
-wifi_restore_proved = (root / ".wifi-restore-proved").is_file()
+final_network = status.get("network_final") or {}
+wifi_restore_proved = (
+    baseline_status_proved
+    and status.get("state") == "succeeded"
+    and status.get("vpn_status") == "disconnected"
+    and final_network.get("status") == "satisfied"
+    and final_network.get("wifi") is True
+)
 if restore_wifi_expected and not wifi_restore_proved:
     failures.append("wifi_restore_not_proved")
     classification = "failed"

@@ -3,6 +3,7 @@ import hashlib
 import os
 from pathlib import Path
 import subprocess
+import time
 import sqlite3
 import tempfile
 import textwrap
@@ -647,6 +648,13 @@ class IPhoneWLTStabilityContractTests(unittest.TestCase):
                 if network_state_path.exists()
                 else "cellular"
             )
+            if action == "status" and network_state == "wifi-pending":
+                marker = network_state_path.with_suffix(".wifi-polls")
+                count = int(marker.read_text()) + 1 if marker.exists() else 1
+                marker.write_text(str(count))
+                if count >= int(os.environ.get("FAKE_WIFI_STATUS_DELAY", "1")):
+                    network_state = "wifi"
+                    network_state_path.write_text(network_state)
             network = {
                 "status": "satisfied",
                 "cellular": network_state == "cellular",
@@ -749,7 +757,9 @@ class IPhoneWLTStabilityContractTests(unittest.TestCase):
             network_state = Path(os.environ["FAKE_NETWORK_STATE"])
             previous = network_state.read_text().strip() if network_state.exists() else "cellular"
             if sys.argv[1] == "WLT WiFi":
-                network_state.write_text("wifi")
+                network_state.write_text(
+                    "wifi-pending" if os.environ.get("FAKE_WIFI_STATUS_DELAY") else "wifi"
+                )
             elif sys.argv[1] == "WLT LTE":
                 network_state.write_text("cellular")
                 if previous == "wifi":
@@ -773,6 +783,7 @@ class IPhoneWLTStabilityContractTests(unittest.TestCase):
             "WLT_STABILITY_PROBE_INTERVAL_SECONDS": "2",
             "WLT_STABILITY_LOSS_AFTER_SECONDS": "1",
             "WLT_STABILITY_TRANSPORT_TIMEOUT_SECONDS": "5",
+            "WLT_STABILITY_CLEANUP_TIMEOUT_SECONDS": "5",
             "WLT_STABILITY_INITIAL_LTE_SETTLE_SECONDS": "0",
             "FAKE_CONTROL_CALLS": str(root / "control-calls.txt"),
             "FAKE_SHORTCUT_CALLS": str(root / "shortcut-calls.txt"),
@@ -871,6 +882,213 @@ class IPhoneWLTStabilityContractTests(unittest.TestCase):
             self.assertTrue(payload["cleanup_succeeded"])
             self.assertEqual((root / "artifacts/emergency-soak-exit.txt").read_text().strip(), "0")
             self.assertFalse((root / "vpn-state.txt.soaking").exists())
+
+    def test_cleanup_waits_for_confirmed_wifi_after_shortcut_returns(self):
+        with tempfile.TemporaryDirectory() as temporary:
+            root = Path(temporary)
+            environment = self.base_environment(root)
+            environment.update({"WLT_STABILITY_ALLOW_SHORT": "1", "FAKE_WIFI_STATUS_DELAY": "3"})
+            result = subprocess.run([str(RUNNER)], env=environment, capture_output=True,
+                                    text=True, timeout=15)
+            self.assertEqual(result.returncode, 0, result.stderr)
+            payload = json.loads((root / "artifacts/result.json").read_text())
+            final = json.loads((root / "artifacts/final-status.json").read_text())
+            first = json.loads((root / "artifacts/final-status-001.json").read_text())
+            self.assertFalse(first["network_final"]["wifi"])
+            self.assertTrue(final["network_final"]["wifi"])
+            self.assertEqual(final["vpn_status"], "disconnected")
+            self.assertTrue(payload["cleanup_succeeded"])
+            self.assertEqual((root / "network-state.wifi-polls").read_text(), "3")
+            self.assertTrue((root / "artifacts/.wifi-restore-proved").exists())
+
+    def test_cleanup_rejects_unproved_wifi_even_with_stale_marker(self):
+        with tempfile.TemporaryDirectory() as temporary:
+            root = Path(temporary)
+            environment = self.base_environment(root)
+            environment.update({"WLT_STABILITY_ALLOW_SHORT": "1",
+                                "FAKE_WIFI_STATUS_DELAY": "999",
+                                "WLT_STABILITY_CLEANUP_TIMEOUT_SECONDS": "2"})
+            (root / "artifacts").mkdir()
+            (root / "artifacts/.wifi-restore-proved").touch()
+            result = subprocess.run([str(RUNNER)], env=environment, capture_output=True,
+                                    text=True, timeout=12)
+            self.assertEqual(result.returncode, 1, result.stderr)
+            payload = json.loads((root / "artifacts/result.json").read_text())
+            self.assertEqual(payload["classification"], "failed")
+            self.assertIn("wifi_restore_not_proved", payload["failures"])
+            self.assertFalse(payload["cleanup_succeeded"])
+
+    def test_emergency_cleanup_waits_for_wifi_without_erasing_original_failure(self):
+        with tempfile.TemporaryDirectory() as temporary:
+            root = Path(temporary)
+            environment = self.base_environment(root)
+            environment.update({"WLT_STABILITY_ALLOW_SHORT": "1", "FAKE_WIFI_STATUS_DELAY": "3"})
+            shortcut = Path(environment["WLT_STABILITY_SHORTCUT_SCRIPT"])
+            shortcut.write_text(shortcut.read_text().replace(
+                "network_state = Path",
+                'if sys.argv[1] == "wltrescan":\n    raise SystemExit(7)\nnetwork_state = Path',
+            ))
+            result = subprocess.run([str(RUNNER)], env=environment, capture_output=True,
+                                    text=True, timeout=15)
+            self.assertEqual(result.returncode, 7, result.stderr)
+            payload = json.loads((root / "artifacts/result.json").read_text())
+            final = json.loads((root / "artifacts/emergency-final-status.json").read_text())
+            self.assertEqual(payload["classification"], "failed")
+            self.assertFalse(payload["qualification"])
+            self.assertTrue(payload["cleanup_succeeded"])
+            self.assertEqual(payload["runner_exit_code"], 7)
+            self.assertTrue(final["network_final"]["wifi"])
+            self.assertEqual((root / "network-state.wifi-polls").read_text(), "3")
+
+    def test_cleanup_bounds_stalled_status_helper(self):
+        with tempfile.TemporaryDirectory() as temporary:
+            root = Path(temporary)
+            environment = self.base_environment(root)
+            environment.update({"WLT_STABILITY_ALLOW_SHORT": "1",
+                                "WLT_STABILITY_CLEANUP_TIMEOUT_SECONDS": "1"})
+            control = Path(environment["WLT_STABILITY_CONTROL_SCRIPT"])
+            control.write_text(control.read_text().replace(
+                "action = sys.argv[1]",
+                'action = sys.argv[1]\n'
+                'if "final-status" in os.environ.get("WLT_CONTROL_ARTIFACT_DIR", ""):\n'
+                '    time.sleep(30)\n',
+            ))
+            result = subprocess.run([str(RUNNER)], env=environment, capture_output=True,
+                                    text=True, timeout=12)
+            self.assertNotEqual(result.returncode, 0, result.stderr)
+            payload = json.loads((root / "artifacts/result.json").read_text())
+            self.assertEqual(payload["classification"], "failed")
+            self.assertFalse(payload["cleanup_succeeded"])
+            self.assertFalse((root / "artifacts/.wifi-restore-proved").exists())
+
+    def test_cleanup_rejects_failed_status_command_with_success_shaped_json(self):
+        with tempfile.TemporaryDirectory() as temporary:
+            root = Path(temporary)
+            environment = self.base_environment(root)
+            environment.update({"WLT_STABILITY_ALLOW_SHORT": "1",
+                                "WLT_STABILITY_CLEANUP_TIMEOUT_SECONDS": "1"})
+            control = Path(environment["WLT_STABILITY_CONTROL_SCRIPT"])
+            control.write_text(control.read_text() +
+                              '\nif "final-status" in os.environ.get("WLT_CONTROL_ARTIFACT_DIR", ""):\n'
+                              '    raise SystemExit(7)\n')
+            result = subprocess.run([str(RUNNER)], env=environment, capture_output=True,
+                                    text=True, timeout=12)
+            self.assertNotEqual(result.returncode, 0, result.stderr)
+            payload = json.loads((root / "artifacts/result.json").read_text())
+            self.assertEqual(payload["classification"], "failed")
+            self.assertIn("baseline_status_not_proved", payload["failures"])
+            self.assertFalse(payload["cleanup_succeeded"])
+            self.assertFalse((root / "artifacts/.wifi-restore-proved").exists())
+
+    def guarded_environment(self, root: Path) -> dict[str, str]:
+        guards = [Path(value) / "infra/ansible/scripts/wlt-device-ownership-preflight.sh"
+                  for value in SCRIPTS.parents]
+        if os.environ.get("WLT_TEST_OWNERSHIP_GUARD"):
+            guards.insert(0, Path(os.environ["WLT_TEST_OWNERSHIP_GUARD"]))
+        guard = next((path for path in guards if path.is_file()), None)
+        if guard is None:
+            self.skipTest("set WLT_TEST_OWNERSHIP_GUARD to exercise the stack guard")
+        environment = self.base_environment(root)
+        environment.update({"WLT_STABILITY_ALLOW_SHORT": "1",
+                            "WLT_OWNERSHIP_PLATFORM": "ios",
+                            "FAKE_PS_SCOPE_PID": str(os.getpid()),
+                            "FAKE_OWNERSHIP_GUARD": str(guard)})
+        environment.pop("WLT_OWNERSHIP_SESSION_PID", None)
+        environment.pop("WLT_OWNERSHIP_OWNER_PID", None)
+        binaries = root / "bin"
+        binaries.mkdir()
+        ps = binaries / "ps"
+        ps.write_text(textwrap.dedent("""\
+            #!/usr/bin/env python3
+            import os
+            import subprocess
+            import sys
+            # Use the real asynchronous process tree, isolated to this test
+            # process so a live device run elsewhere cannot affect the fixture.
+            snapshot = subprocess.check_output(["/bin/ps", *sys.argv[1:]], text=True)
+            rows = {}
+            for line in snapshot.splitlines():
+                fields = line.split(None, 2)
+                if len(fields) == 3:
+                    rows[int(fields[0])] = (int(fields[1]), line)
+            scope = int(os.environ["FAKE_PS_SCOPE_PID"])
+            for pid, (_, line) in rows.items():
+                cursor = pid
+                seen = set()
+                while cursor in rows and cursor not in seen:
+                    if cursor == scope:
+                        print(line)
+                        break
+                    seen.add(cursor)
+                    cursor = rows[cursor][0]
+        """))
+        ps.chmod(0o755)
+        environment["PATH"] = str(binaries) + os.pathsep + environment["PATH"]
+        for kind in ("control", "shortcut"):
+            key = "WLT_STABILITY_" + kind.upper() + "_SCRIPT"
+            backend = environment[key]
+            wrapper = root / ("iphone_wlt_" + kind + ".sh")
+            wrapper.write_text(
+                '#!/usr/bin/env bash\nset -euo pipefail\n'
+                'bash "$FAKE_OWNERSHIP_GUARD" >&2\n'
+                f'"{backend}" "$@"\n'
+            )
+            wrapper.chmod(0o755)
+            environment[key] = str(wrapper)
+        return environment
+
+    def test_real_session_tree_allows_radio_sibling_during_active_soak(self):
+        with tempfile.TemporaryDirectory() as temporary:
+            root = Path(temporary)
+            environment = self.guarded_environment(root)
+            control = root / "fake-control.py"
+            control.write_text(control.read_text().replace(
+                "time.sleep(2)",
+                'pending = Path(os.environ["FAKE_VPN_STATE"] + ".soaking")\n'
+                '    pending.touch()\n    time.sleep(4)\n    pending.unlink()',
+            ))
+            shortcut = root / "fake-shortcut.py"
+            shortcut.write_text(shortcut.read_text().replace(
+                "network_state = Path",
+                'if sys.argv[1] == "wltrescan":\n'
+                '    assert Path(os.environ["FAKE_VPN_STATE"] + ".soaking").exists()\n'
+                '    Path(os.environ["FAKE_VPN_STATE"] + ".radio-during-soak").touch()\n'
+                'network_state = Path',
+            ))
+            result = subprocess.run([str(RUNNER)], env=environment, capture_output=True,
+                                    text=True, timeout=25)
+            self.assertEqual(result.returncode, 0, result.stderr)
+            self.assertTrue((root / "vpn-state.txt.radio-during-soak").exists())
+            self.assertEqual(json.loads((root / "artifacts/result.json").read_text())["classification"],
+                             "success")
+
+    def test_real_session_tree_does_not_admit_unrelated_owner(self):
+        with tempfile.TemporaryDirectory() as temporary:
+            root = Path(temporary)
+            environment = self.guarded_environment(root)
+            environment["WLT_STABILITY_CLEANUP_TIMEOUT_SECONDS"] = "1"
+            other = root / "unrelated" / "iphone_wlt_control.sh"
+            other.parent.mkdir()
+            ready = other.with_suffix(".ready")
+            other.write_text('#!/usr/bin/env bash\nprintf ready >"$1"\nsleep 30\n')
+            other.chmod(0o755)
+            owner = subprocess.Popen([str(other), str(ready)], start_new_session=True)
+            try:
+                deadline = time.monotonic() + 5
+                while not ready.exists() and time.monotonic() < deadline:
+                    time.sleep(0.01)
+                self.assertTrue(ready.exists())
+                result = subprocess.run([str(RUNNER)], env=environment, capture_output=True,
+                                        text=True, timeout=10)
+                self.assertNotEqual(result.returncode, 0, result.stderr)
+                self.assertIn("ownership=busy", result.stderr)
+                self.assertFalse((root / "control-calls.txt").exists())
+                self.assertFalse((root / "shortcut-calls.txt").exists())
+                payload = json.loads((root / "artifacts/result.json").read_text())
+                self.assertFalse(payload["cleanup_succeeded"])
+            finally:
+                os.killpg(owner.pid, 15)
+                owner.wait(timeout=5)
 
     def test_no_loss_soak_uses_bounded_host_probes(self):
         with tempfile.TemporaryDirectory() as temporary:
