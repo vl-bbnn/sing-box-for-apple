@@ -248,45 +248,17 @@ raise SystemExit(0 if retryable else 1)
 }
 
 classify_injected_recovery() {
-  local soak_file="$1"
-  /usr/bin/python3 - "$soak_file" "$loss_after_seconds" "$probe_interval_seconds" <<'PY'
-import json
-from pathlib import Path
-import sys
+  /usr/bin/python3 "$script_dir/wlt_radio_recovery.py" classify \
+    "$artifact_dir/soak-raw.json" "$artifact_dir/radio-injection-timing.json" \
+    "$artifact_dir/soak.json" \
+    --duration-ms "$((duration_seconds * 1000))" \
+    --interval-ms "$((probe_interval_seconds * 1000))" \
+    --recovery-ms "$((handover_recovery_timeout_seconds * 1000))"
+}
 
-path = Path(sys.argv[1])
-loss_after_ms = int(sys.argv[2]) * 1000
-interval_ms = int(sys.argv[3]) * 1000
-value = json.loads(path.read_text())
-samples = value.get("soak_probe_samples") or []
-pre_loss_success = any(
-    sample.get("success") is True
-    and (sample.get("offset_ms") or 0) < loss_after_ms
-    for sample in samples
-)
-post_window = [
-    sample for sample in samples
-    if (sample.get("offset_ms") or 0) >= loss_after_ms - interval_ms // 2
-]
-failure_index = next(
-    (index for index, sample in enumerate(post_window)
-     if sample.get("success") is False),
-    None,
-)
-recovered = bool(
-    failure_index is not None
-    and any(sample.get("success") is True for sample in post_window[failure_index + 1:])
-)
-if pre_loss_success and failure_index is not None:
-    value["network_loss_observed"] = True
-    value["network_loss_source"] = "probe_transition_after_host_injection"
-if pre_loss_success and recovered:
-    value["network_recovered"] = True
-    value["network_recovery_source"] = "probe_success_after_observed_loss"
-temporary = path.with_suffix(path.suffix + ".tmp")
-temporary.write_text(json.dumps(value, sort_keys=True, separators=(",", ":")) + "\n")
-temporary.replace(path)
-PY
+stamp_radio_timing() {
+  /usr/bin/python3 "$script_dir/wlt_radio_recovery.py" stamp \
+    "$artifact_dir/radio-injection-timing.json" "$@"
 }
 
 run_host_driven_soak() {
@@ -630,6 +602,8 @@ if [[ -n "$wifi_handover_after_seconds" || -n "$lte_return_after_seconds" ]]; th
     || die "handover offsets must satisfy Wi-Fi < LTE return < duration"
 fi
 if [[ "$inject_loss" == "1" ]]; then
+  (( handover_recovery_timeout_seconds <= 90 )) \
+    || die "radio recovery timeout must not exceed 90 seconds"
   require_positive_integer WLT_STABILITY_LOSS_AFTER_SECONDS "$loss_after_seconds"
   (( loss_after_seconds < duration_seconds )) \
     || die "loss injection must occur before the soak ends"
@@ -725,12 +699,13 @@ if [[ "$inject_loss" == "0" ]]; then
   run_host_driven_soak
 else
   log "starting app-observed loss/recovery window for ${duration_seconds}s"
+  stamp_radio_timing soak_dispatch
   run_control soak soak \
     env \
       WLT_CONTROL_SOAK_SECONDS="$duration_seconds" \
       WLT_CONTROL_SOAK_INTERVAL_SECONDS="$probe_interval_seconds" \
       WLT_CONTROL_TIMEOUT_SECONDS="$((duration_seconds + 90))" \
-    >"$artifact_dir/soak.json" 2>"$artifact_dir/soak.log" &
+    >"$artifact_dir/soak-raw.json" 2>"$artifact_dir/soak.log" &
   soak_pid=$!
   loss_deadline=$((SECONDS + loss_after_seconds))
   while (( SECONDS < loss_deadline )); do
@@ -739,12 +714,17 @@ else
       || { wait "$soak_pid" || true; die "soak ended before connection-loss injection"; }
   done
   log "injecting a bounded radio loss/recovery cycle"
-  run_shortcut "$loss_shortcut" connection-loss
+  stamp_radio_timing injection_start
+  injection_status=0
+  run_shortcut "$loss_shortcut" connection-loss || injection_status=$?
+  stamp_radio_timing injection_end --exit-code "$injection_status"
+  (( injection_status == 0 )) || exit "$injection_status"
   soak_status=0
   wait "$soak_pid" || soak_status=$?
   soak_pid=""
+  stamp_radio_timing soak_receipt
   (( soak_status == 0 )) || die "soak control action failed; see $artifact_dir/soak.log"
-  classify_injected_recovery "$artifact_dir/soak.json"
+  classify_injected_recovery
 fi
 
 log "proving traffic after soak/recovery"
@@ -815,18 +795,19 @@ minimum_samples = max(2, duration // (interval + 8))
 if (soak.get("soak_samples") or 0) < minimum_samples:
     failures.append("insufficient_soak_samples")
 if inject_loss:
-    if soak.get("network_loss_observed") is not True:
-        if (
-            soak.get("state") == "succeeded"
-            and soak.get("vpn_status") == "connected"
-            and (soak.get("soak_failures") or 0) == 0
-        ):
-            infrastructure_failures.append("connection_loss_injection_ineffective")
-        else:
-            failures.append("connection_loss_not_observed")
-    elif soak.get("network_recovered") is not True:
-        failures.append("connection_recovery_not_observed")
-    if soak.get("unplanned_soak_failures") is not None and (soak.get("unplanned_soak_failures") or 0) != 0:
+    radio = soak.get("radio_recovery") or {}
+    if radio.get("classification") == "infrastructure":
+        infrastructure_failures.extend(radio.get("failures") or ["radio_recovery_not_qualified"])
+    elif radio.get("classification") != "success" or radio.get("qualification") is not True:
+        failures.extend(radio.get("failures") or ["radio_recovery_evidence_missing"])
+    raw_count = soak.get("raw_soak_failures")
+    planned_count = soak.get("planned_radio_failures")
+    unplanned_count = soak.get("unplanned_soak_failures")
+    if (not all(type(value) is int and value >= 0 for value in (raw_count, planned_count, unplanned_count))
+            or raw_count != planned_count + unplanned_count
+            or raw_count != soak.get("soak_failures")):
+        failures.append("radio_failure_accounting_invalid")
+    if type(unplanned_count) is not int or unplanned_count != 0:
         failures.append("unexpected_soak_probe_failure")
 elif (soak.get("unplanned_soak_failures", soak.get("soak_failures")) or 0) != 0:
     failures.append("unexpected_soak_probe_failure")
@@ -876,6 +857,8 @@ payload = {
     "network_loss_observed": soak.get("network_loss_observed"),
     "network_recovered": soak.get("network_recovered"),
     "network_transitions": transitions,
+    "radio_recovery": soak.get("radio_recovery"),
+    "planned_radio_failures": soak.get("planned_radio_failures", 0),
     "cleanup_succeeded": (
         not any("stop" in value or "status" in value for value in failures)
         and (not restore_wifi_expected or wifi_restore_proved)

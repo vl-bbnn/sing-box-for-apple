@@ -478,7 +478,7 @@ class IPhoneWLTStabilityContractTests(unittest.TestCase):
         self.assertIn('"carrier_start_failed_connect" in milestones', control)
         self.assertIn('for start_attempt in $(seq 1 "$max_start_attempts")', control)
         self.assertIn("classify_injected_recovery", control)
-        self.assertIn("probe_transition_after_host_injection", control)
+        self.assertIn("bounded_probe_incident_overlapping_measured_host_injection", (SCRIPTS / "wlt_radio_recovery.py").read_text())
         self.assertIn("final_probe_status=0", control)
         shortcut = SHORTCUT_HELPER.read_text()
         self.assertIn("for resume_attempt in 1 2", shortcut)
@@ -711,19 +711,21 @@ class IPhoneWLTStabilityContractTests(unittest.TestCase):
                     print(json.dumps(result))
                     raise SystemExit(1)
             if action == "soak":
-                time.sleep(2)
+                time.sleep(5)
                 ineffective = os.environ.get("FAKE_INJECTION_INEFFECTIVE") == "1"
                 samples = (
                     [
-                        {"offset_ms": 0, "success": True},
-                        {"offset_ms": 1_000, "success": True},
-                        {"offset_ms": 2_000, "success": True},
+                        {"offset_ms": 0, "elapsed_ms": 100, "success": True},
+                        {"offset_ms": 1_000, "elapsed_ms": 100, "success": True},
+                        {"offset_ms": 3_000, "elapsed_ms": 100, "success": True},
+                        {"offset_ms": 5_000, "elapsed_ms": 0, "success": True},
                     ]
                     if ineffective
                     else [
-                        {"offset_ms": 0, "success": True},
-                        {"offset_ms": 1_000, "success": False},
-                        {"offset_ms": 2_000, "success": True},
+                        {"offset_ms": 0, "elapsed_ms": 100, "success": True},
+                        {"offset_ms": 1_000, "elapsed_ms": 1_500, "success": False},
+                        {"offset_ms": 3_000, "elapsed_ms": 100, "success": True},
+                        {"offset_ms": 5_000, "elapsed_ms": 0, "success": True},
                     ]
                 )
                 failures = sum(sample["success"] is not True for sample in samples)
@@ -756,6 +758,9 @@ class IPhoneWLTStabilityContractTests(unittest.TestCase):
                 handle.write(sys.argv[1] + "\\n")
             network_state = Path(os.environ["FAKE_NETWORK_STATE"])
             previous = network_state.read_text().strip() if network_state.exists() else "cellular"
+            if sys.argv[1] == "wltrescan":
+                import time
+                time.sleep(1)
             if sys.argv[1] == "WLT WiFi":
                 network_state.write_text(
                     "wifi-pending" if os.environ.get("FAKE_WIFI_STATUS_DELAY") else "wifi"
@@ -850,9 +855,15 @@ class IPhoneWLTStabilityContractTests(unittest.TestCase):
             self.assertTrue(payload["network_loss_observed"])
             self.assertTrue(payload["network_recovered"])
             soak = json.loads((root / "artifacts" / "soak.json").read_text())
+            raw = json.loads((root / "artifacts" / "soak-raw.json").read_text())
+            self.assertNotIn("radio_recovery", raw)
+            self.assertEqual(soak["soak_probe_samples"], raw["soak_probe_samples"])
+            self.assertEqual(payload["unplanned_soak_failures"], 0)
+            self.assertEqual(payload["planned_radio_failures"], payload["raw_soak_failures"])
+            self.assertTrue((root / "artifacts/radio-injection-timing.json").is_file())
             self.assertEqual(
                 soak["network_loss_source"],
-                "probe_transition_after_host_injection",
+                "bounded_probe_incident_overlapping_measured_host_injection",
             )
 
     def test_failed_radio_command_joins_active_soak_before_cleanup(self):
@@ -867,7 +878,7 @@ class IPhoneWLTStabilityContractTests(unittest.TestCase):
                 'pending = Path(os.environ["FAKE_VPN_STATE"] + ".soaking")\n'
                 'if action in ("stop", "status") and pending.exists():\n'
                 '    raise SystemExit(9)',
-            ).replace('time.sleep(2)', 'pending.touch()\n    time.sleep(4)\n    pending.unlink()')
+            ).replace('time.sleep(5)', 'pending.touch()\n    time.sleep(5)\n    pending.unlink()')
             control.write_text(source)
             shortcut = Path(environment["WLT_STABILITY_SHORTCUT_SCRIPT"])
             shortcut.write_text(shortcut.read_text().replace(
@@ -1043,9 +1054,9 @@ class IPhoneWLTStabilityContractTests(unittest.TestCase):
             environment = self.guarded_environment(root)
             control = root / "fake-control.py"
             control.write_text(control.read_text().replace(
-                "time.sleep(2)",
+                "time.sleep(5)",
                 'pending = Path(os.environ["FAKE_VPN_STATE"] + ".soaking")\n'
-                '    pending.touch()\n    time.sleep(4)\n    pending.unlink()',
+                '    pending.touch()\n    time.sleep(5)\n    pending.unlink()',
             ))
             shortcut = root / "fake-shortcut.py"
             shortcut.write_text(shortcut.read_text().replace(
@@ -1248,6 +1259,19 @@ class IPhoneWLTStabilityContractTests(unittest.TestCase):
                 ["connection_loss_injection_ineffective"],
             )
             self.assertTrue(payload["cleanup_succeeded"])
+
+    def test_radio_recovery_bound_rejects_over_90_seconds_before_device_access(self):
+        with tempfile.TemporaryDirectory() as temporary:
+            root = Path(temporary)
+            environment = self.base_environment(root)
+            environment.update({"WLT_STABILITY_ALLOW_SHORT": "1",
+                                "WLT_STABILITY_HANDOVER_RECOVERY_TIMEOUT_SECONDS": "91"})
+            result = subprocess.run([str(RUNNER)], env=environment, capture_output=True,
+                                    text=True, timeout=5)
+            self.assertEqual(result.returncode, 1)
+            self.assertIn("radio recovery timeout must not exceed 90 seconds", result.stderr)
+            self.assertFalse((root / "control-calls.txt").exists())
+            self.assertFalse((root / "shortcut-calls.txt").exists())
 
     def test_rejects_short_acceptance_run_without_explicit_smoke_override(self):
         with tempfile.TemporaryDirectory() as temporary:
