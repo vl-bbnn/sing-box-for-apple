@@ -53,6 +53,14 @@ class RadioRecoveryTests(unittest.TestCase):
         self.assertEqual(value["radio_recovery"]["origin_uncertainty_ms"], 2000)
         self.assertEqual(value["radio_recovery"]["recovery_completion_upper_ms"], 31500)
 
+    def test_probe_duration_budget_is_inclusive_and_not_host_copy_time(self):
+        raw, timing = fixture()
+        raw["soak_probe_samples"][12]["elapsed_ms"] = 15000
+        self.assertTrue(self.classify(raw, timing)["radio_recovery"]["qualification"])
+        for duration in (15001, 30000):
+            raw["soak_probe_samples"][12]["elapsed_ms"] = duration
+            self.failed(raw, timing, "probe_duration_exceeds_budget")
+
     def test_delayed_injection_uses_measured_time_not_requested_offset(self):
         raw, timing = fixture(failed=(16,), injection=(241000, 244000))
         self.assertTrue(self.classify(raw, timing)["radio_recovery"]["qualification"])

@@ -66,9 +66,8 @@ def classify(raw, timing, duration_ms, interval_ms, recovery_ms=90000):
                 raise ValueError("invalid_sample_shape")
             offset = integer(sample.get("offset_ms"), "sample_offset")
             probe_elapsed = integer(sample.get("elapsed_ms"), "sample_elapsed")
-            # A radio outage can make the 12s HTTPS probe consume its timeout
-            # plus CoreDevice/result-copy overhead. Keep the measured request timeout
-            # as a hard upper bound so delayed host delivery cannot be accepted.
+            # These durations are measured inside the app, excluding host copy
+            # time. Keep the 12-second probe plus 3 seconds of scheduling slack.
             if probe_elapsed > 15000:
                 raise ValueError("probe_duration_exceeds_budget")
             if index == 0 and offset > 1000:
