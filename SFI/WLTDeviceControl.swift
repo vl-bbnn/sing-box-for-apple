@@ -1854,7 +1854,12 @@ actor WLTDeviceControl {
         let startedAt = unixMilliseconds()
         let deadline = Date().addingTimeInterval(TimeInterval(durationSeconds))
         let observation = ConnectivityObservation()
-        let monitor = NWPathMonitor()
+        // Observe the required physical interface directly.  The unconstrained
+        // monitor can remain satisfied through the VPN path while both radios
+        // are being toggled, which hides a short cellular outage from the soak
+        // evidence.  This gate starts on strict LTE, so a cellular-constrained
+        // monitor gives an unambiguous loss/recovery signal.
+        let monitor = NWPathMonitor(requiredInterfaceType: .cellular)
         monitor.pathUpdateHandler = { path in
             let status = path.status
             Task { await observation.observe(status) }
