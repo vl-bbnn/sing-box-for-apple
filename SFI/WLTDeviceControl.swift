@@ -110,11 +110,13 @@ actor WLTDeviceControl {
     private struct WorkloadPlan: Decodable {
         let schema: Int
         let route: String
+        let requiredTransport: String?
         let selectRoute: Bool?
         let probes: [WorkloadProbe]
 
         enum CodingKeys: String, CodingKey {
             case schema, route, probes
+            case requiredTransport = "required_transport"
             case selectRoute = "select_route"
         }
     }
@@ -1937,6 +1939,11 @@ actor WLTDeviceControl {
                     throw ControlError.invalidWorkload
                 }
                 let configuration = URLSessionConfiguration.ephemeral
+                // A Wi-Fi control workload must not silently fall back to the
+                // cellular interface while the device reports Wi-Fi ready.
+                // LTE workloads keep cellular access enabled; the host-side
+                // reviewer still proves the actual interface from metrics.
+                configuration.allowsCellularAccess = plan.requiredTransport != "wifi"
                 configuration.requestCachePolicy = .reloadIgnoringLocalAndRemoteCacheData
                 configuration.timeoutIntervalForRequest = TimeInterval(probe.timeoutSeconds)
                 configuration.timeoutIntervalForResource = TimeInterval(probe.timeoutSeconds)
@@ -1957,9 +1964,14 @@ actor WLTDeviceControl {
                 )
                 statusCode = (response as? HTTPURLResponse)?.statusCode ?? -1
                 bytesRead = data.count
-                let statusAccepted = probe.acceptedStatusCodes.isEmpty
-                    ? (200 ..< 400).contains(statusCode)
-                    : probe.acceptedStatusCodes.contains(statusCode)
+                let statusAccepted: Bool
+                if probe.acceptedStatusCodes.isEmpty {
+                    statusAccepted = (response as? HTTPURLResponse).map { response in
+                        (200 ..< 400).contains(response.statusCode)
+                    } ?? false
+                } else {
+                    statusAccepted = probe.acceptedStatusCodes.contains(statusCode)
+                }
                 if !statusAccepted {
                     classification = "status_failed"
                 } else if bytesRead < probe.minimumBytes {
@@ -2207,18 +2219,21 @@ actor WLTDeviceControl {
             }
         }
         let endpoint = URL(string: "https://rozetked.me/")!
-        let configuration = URLSessionConfiguration.ephemeral
-        configuration.requestCachePolicy = .reloadIgnoringLocalAndRemoteCacheData
-        configuration.timeoutIntervalForRequest = min(requestTimeout, timeout)
-        configuration.timeoutIntervalForResource = timeout
-        configuration.urlCache = nil
-        let session = URLSession(configuration: configuration)
-        defer { session.invalidateAndCancel() }
         var lastError: Error?
         while elapsed() < timeout {
             try Task.checkCancellation()
             let remainingSeconds = timeout - elapsed()
             guard remainingSeconds > 0 else { break }
+            // A timed-out URLSession is invalidated below.  Create a fresh
+            // session for every bounded attempt so one transient failure does
+            // not poison all retries within the same control request.
+            let configuration = URLSessionConfiguration.ephemeral
+            configuration.requestCachePolicy = .reloadIgnoringLocalAndRemoteCacheData
+            configuration.timeoutIntervalForRequest = min(requestTimeout, remainingSeconds)
+            configuration.timeoutIntervalForResource = remainingSeconds
+            configuration.urlCache = nil
+            let session = URLSession(configuration: configuration)
+            defer { session.invalidateAndCancel() }
             var request = URLRequest(url: endpoint)
             request.cachePolicy = .reloadIgnoringLocalAndRemoteCacheData
             request.timeoutInterval = min(requestTimeout, remainingSeconds)

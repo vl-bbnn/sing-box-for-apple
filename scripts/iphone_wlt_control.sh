@@ -295,11 +295,18 @@ workload_keys = set(value) if isinstance(value, dict) else set()
 if (
     not isinstance(value, dict)
     or not required_workload.issubset(value)
-    or workload_keys not in (required_workload, required_workload | {"select_route"})
+    or workload_keys not in (
+        required_workload,
+        required_workload | {"select_route"},
+        required_workload | {"required_transport"},
+        required_workload | {"required_transport", "select_route"},
+    )
 ):
-    raise SystemExit("workload must contain schema, route, probes, and optional select_route")
+    raise SystemExit("workload must contain schema, route, probes, and optional transport/selection")
 if value["schema"] != 1 or value["route"] not in {"eu", "ru"}:
     raise SystemExit("workload must use schema 1 and a supported ru/eu route")
+if "required_transport" in value and value["required_transport"] not in {"wifi", "cellular"}:
+    raise SystemExit("workload required_transport must be wifi or cellular")
 if "select_route" in value and not isinstance(value["select_route"], bool):
     raise SystemExit("workload select_route must be boolean")
 probes = value["probes"]

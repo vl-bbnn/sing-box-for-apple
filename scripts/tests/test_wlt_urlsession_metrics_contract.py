@@ -43,6 +43,20 @@ class WLTURLSessionMetricsContractTests(unittest.TestCase):
             self.workload.index("let taskMetrics = metricsCollector.snapshot()"),
         )
 
+    def test_startup_probe_recreates_session_after_a_bounded_timeout(self):
+        probe = self.source.split("private func probeTraffic(", 1)[1].split(
+            "private func loadMergedGroupSelections", 1
+        )[0]
+        self.assertIn("while elapsed() < timeout", probe)
+        self.assertLess(
+            probe.index("let session = URLSession(configuration: configuration)"),
+            probe.index("session.invalidateAndCancel()"),
+        )
+        self.assertIn(
+            "Create a fresh\n            // session for every bounded attempt",
+            probe,
+        )
+
     def test_metrics_are_nullable_redirect_complete_and_client_scoped(self):
         self.assertIn("private var capturedMetrics: WorkloadTaskMetrics?", self.metrics)
         self.assertIn("metrics.transactionMetrics.map", self.metrics)
