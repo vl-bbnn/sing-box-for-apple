@@ -18,6 +18,7 @@ public enum WhitelistTransportConfig {
     public let peerWriteBuffer: Int
     public let kcpWindow: Int
     public let kcpBuffer: Int
+    public let goMemoryLimitMiB: Int?
     public let vlessMuxProtocol: String?
     public let vlessMuxMaxConnections: Int?
     public let vlessMuxMinStreams: Int?
@@ -32,6 +33,7 @@ public enum WhitelistTransportConfig {
       case peerWriteBuffer = "peer_write_buffer"
       case kcpWindow = "kcp_window"
       case kcpBuffer = "kcp_buffer"
+      case goMemoryLimitMiB = "go_memory_limit_mib"
       case vlessMuxProtocol = "vless_mux_protocol"
       case vlessMuxMaxConnections = "vless_mux_max_connections"
       case vlessMuxMinStreams = "vless_mux_min_streams"
@@ -75,9 +77,10 @@ public enum WhitelistTransportConfig {
       throw RuntimeCandidateError.invalidEnvelope
     }
     let parameterKeys = Set(parameters.keys)
+    let transportKeys = parameterKeys.subtracting(["go_memory_limit_mib"])
     guard
-      parameterKeys == runtimeParameterKeys
-        || parameterKeys == runtimeParameterKeys.union(vlessMuxParameterKeys)
+      transportKeys == runtimeParameterKeys
+        || transportKeys == runtimeParameterKeys.union(vlessMuxParameterKeys)
     else {
       throw RuntimeCandidateError.invalidSchema
     }
@@ -104,6 +107,17 @@ public enum WhitelistTransportConfig {
       validPositiveDuration(idleTimeout)
     else {
       throw RuntimeCandidateError.invalidValue
+    }
+    let goMemoryLimitMiB: Int?
+    if parameterKeys.contains("go_memory_limit_mib") {
+      guard let value = strictInteger(parameters["go_memory_limit_mib"]),
+        (24...45).contains(value)
+      else {
+        throw RuntimeCandidateError.invalidValue
+      }
+      goMemoryLimitMiB = value
+    } else {
+      goMemoryLimitMiB = nil
     }
     let vlessMuxProtocol: String?
     let vlessMuxMaxConnections: Int?
@@ -137,6 +151,7 @@ public enum WhitelistTransportConfig {
       peerWriteBuffer: peerWriteBuffer,
       kcpWindow: kcpWindow,
       kcpBuffer: kcpBuffer,
+      goMemoryLimitMiB: goMemoryLimitMiB,
       vlessMuxProtocol: vlessMuxProtocol,
       vlessMuxMaxConnections: vlessMuxMaxConnections,
       vlessMuxMinStreams: vlessMuxMinStreams
@@ -221,6 +236,24 @@ public enum WhitelistTransportConfig {
         throw RuntimeCandidateError.missingWLTVLESSOutbound
       }
       dictionary["outbounds"] = outbounds
+    }
+    if let limitMiB = parameters.goMemoryLimitMiB {
+      guard (24...45).contains(limitMiB) else {
+        throw RuntimeCandidateError.invalidValue
+      }
+      if let existing = dictionary["experimental"], !(existing is [String: Any]) {
+        throw RuntimeCandidateError.invalidConfig
+      }
+      var experimental = dictionary["experimental"] as? [String: Any] ?? [:]
+      if let existing = experimental["debug"], !(existing is [String: Any]) {
+        throw RuntimeCandidateError.invalidConfig
+      }
+      var debug = experimental["debug"] as? [String: Any] ?? [:]
+      // This core divides debug.memory_limit by 1.5 before SetMemoryLimit.
+      // Expose the effective Go budget; do not alter GC or OOM protection.
+      debug["memory_limit"] = limitMiB * 1_048_576 * 3 / 2
+      experimental["debug"] = debug
+      dictionary["experimental"] = experimental
     }
     guard JSONSerialization.isValidJSONObject(dictionary) else {
       throw RuntimeCandidateError.invalidConfig

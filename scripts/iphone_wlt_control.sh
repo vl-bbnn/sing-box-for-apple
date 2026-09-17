@@ -175,9 +175,14 @@ if not isinstance(value, dict) or set(value) != {"parameters"}:
     raise SystemExit("candidate must contain only the parameters object")
 parameters = value["parameters"]
 parameter_keys = set(parameters) if isinstance(parameters, dict) else set()
-if parameter_keys not in (runtime_keys, runtime_keys | mux_keys):
+transport_keys = parameter_keys - {"go_memory_limit_mib"}
+if transport_keys not in (runtime_keys, runtime_keys | mux_keys):
     raise SystemExit("candidate parameters must contain the exact runtime schema")
-if parameter_keys == runtime_keys | mux_keys:
+if "go_memory_limit_mib" in parameters:
+    value = parameters["go_memory_limit_mib"]
+    if type(value) is not int or not 24 <= value <= 45:
+        raise SystemExit("Go memory budget must be an integer from 24 to 45 MiB")
+if transport_keys == runtime_keys | mux_keys:
     protocol = parameters["vless_mux_protocol"]
     max_connections = parameters["vless_mux_max_connections"]
     min_streams = parameters["vless_mux_min_streams"]
