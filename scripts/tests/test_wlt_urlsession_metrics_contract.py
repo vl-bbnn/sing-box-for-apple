@@ -33,7 +33,7 @@ class WLTURLSessionMetricsContractTests(unittest.TestCase):
         self.assertNotIn('forHTTPHeaderField: "Connection"', self.workload)
 
     def test_per_task_delegate_preserves_structured_cancellation_without_wait(self):
-        self.assertIn("session.data(\n                    for: request,\n                    delegate: metricsCollector", self.workload)
+        self.assertRegex(self.workload, r"session\.data\(\s+for: request,\s+delegate: metricsCollector")
         self.assertNotIn("withCheckedContinuation", self.workload)
         self.assertNotIn("withCheckedThrowingContinuation", self.workload)
         self.assertNotIn("dataTask(", self.workload)

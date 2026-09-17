@@ -218,7 +218,23 @@ public class ExtensionPlatformInterface: NSObject, LibboxPlatformInterfaceProtoc
     }
 
     networkSettings = settings
-    try await tunnel.setTunnelNetworkSettings(settings)
+    do {
+      #if SFI_DEV
+        let settingsEntered = WLTDefaultInterfaceSelection.uptimeNanos()
+        var settingsApplied = false
+        defer {
+          let returned = WLTDefaultInterfaceSelection.uptimeNanos()
+          // Record after completion: logging must not delay the observed operation.
+          // This brackets iOS route replacement without exposing route addresses.
+          PacketTunnelDiagnostics.append(
+            "wlt tunnel settings apply entry_uptime_ns=\(settingsEntered) return_uptime_ns=\(returned) succeeded=\(settingsApplied)")
+        }
+      #endif
+      try await tunnel.setTunnelNetworkSettings(settings)
+      #if SFI_DEV
+        settingsApplied = true
+      #endif
+    }
 
     if let tunFd = tunnel.packetFlow.value(forKeyPath: "socket.fileDescriptor") as? Int32 {
       ret0_.pointee = tunFd

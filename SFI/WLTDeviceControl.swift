@@ -107,21 +107,22 @@ actor WLTDeviceControl {
         let url: String
     }
 
-    private struct WorkloadPlan: Decodable {
+    private struct WorkloadPlan: Decodable, Sendable {
         let schema: Int
         let route: String
         let requiredTransport: String?
         let selectRoute: Bool?
         let probes: [WorkloadProbe]
+        let concurrency: Int?
 
         enum CodingKeys: String, CodingKey {
-            case schema, route, probes
+            case schema, route, probes, concurrency
             case requiredTransport = "required_transport"
             case selectRoute = "select_route"
         }
     }
 
-    private struct WorkloadProbe: Decodable {
+    private struct WorkloadProbe: Decodable, Sendable {
         let name: String
         let url: String
         let minimumBytes: Int
@@ -403,12 +404,13 @@ actor WLTDeviceControl {
         }
     }
 
-    private struct WorkloadProbeResult: Codable {
+    private struct WorkloadProbeResult: Codable, Sendable {
         let name: String
         let success: Bool
         let classification: String
         let statusCode: Int
         let elapsedMS: Int64
+        let startedUnixMS: Int64
         let bytesRead: Int
         let taskMetricsStatus: String
         let taskMetrics: WorkloadTaskMetrics?
@@ -419,6 +421,7 @@ actor WLTDeviceControl {
             case name, success, classification
             case statusCode = "status_code"
             case elapsedMS = "elapsed_ms"
+            case startedUnixMS = "started_unix_ms"
             case bytesRead = "bytes_read"
             case taskMetricsStatus = "task_metrics_status"
             case taskMetrics = "task_metrics"
@@ -1920,87 +1923,95 @@ actor WLTDeviceControl {
             // path there before persisting it for a later LTE-only workload.
             try await probeTraffic(timeout: 60, requestTimeout: 20)
         }
-        var results: [WorkloadProbeResult] = []
-        for probe in plan.probes {
-            let startedAt = unixMilliseconds()
-            let metricsCollector = WorkloadMetricsCollector()
-            var statusCode = -1
-            var bytesRead = 0
-            var classification = "request_failed"
-            var probeError: Error?
-            do {
-                guard
-                    let endpoint = URL(string: probe.url),
-                    endpoint.scheme?.lowercased() == "https",
-                    endpoint.host != nil,
-                    endpoint.user == nil,
-                    endpoint.password == nil
-                else {
-                    throw ControlError.invalidWorkload
-                }
-                let configuration = URLSessionConfiguration.ephemeral
-                // A Wi-Fi control workload must not silently fall back to the
-                // cellular interface while the device reports Wi-Fi ready.
-                // LTE workloads keep cellular access enabled; the host-side
-                // reviewer still proves the actual interface from metrics.
-                configuration.allowsCellularAccess = plan.requiredTransport != "wifi"
-                configuration.requestCachePolicy = .reloadIgnoringLocalAndRemoteCacheData
-                configuration.timeoutIntervalForRequest = TimeInterval(probe.timeoutSeconds)
-                configuration.timeoutIntervalForResource = TimeInterval(probe.timeoutSeconds)
-                configuration.urlCache = nil
-                let session = URLSession(configuration: configuration)
-                defer { session.invalidateAndCancel() }
-                var request = URLRequest(url: endpoint)
-                request.cachePolicy = .reloadIgnoringLocalAndRemoteCacheData
-                request.timeoutInterval = TimeInterval(probe.timeoutSeconds)
-                request.setValue("no-cache", forHTTPHeaderField: "Cache-Control")
-                // The per-task delegate preserves data(for:)'s structured
-                // cancellation. Foundation delivers metrics before task
-                // completion, so reading the collector after this call returns
-                // or throws requires no wait and also retains failed-task metrics.
-                let (data, response) = try await session.data(
-                    for: request,
-                    delegate: metricsCollector
-                )
-                statusCode = (response as? HTTPURLResponse)?.statusCode ?? -1
-                bytesRead = data.count
-                let statusAccepted: Bool
-                if probe.acceptedStatusCodes.isEmpty {
-                    statusAccepted = (response as? HTTPURLResponse).map { response in
-                        (200 ..< 400).contains(response.statusCode)
-                    } ?? false
-                } else {
-                    statusAccepted = probe.acceptedStatusCodes.contains(statusCode)
-                }
-                if !statusAccepted {
-                    classification = "status_failed"
-                } else if bytesRead < probe.minimumBytes {
-                    classification = "short_body"
-                } else {
-                    classification = "ok"
-                }
-            } catch {
-                probeError = error
-            }
-            // Preserve the original elapsed endpoint. Optional metrics are read
-            // only after this timestamp and are never awaited.
-            let finishedAt = unixMilliseconds()
-            let taskMetrics = metricsCollector.snapshot()
-            let nsError = probeError as NSError?
-            results.append(WorkloadProbeResult(
-                name: probe.name,
-                success: probeError == nil && classification == "ok",
-                classification: classification,
-                statusCode: statusCode,
-                elapsedMS: max(0, finishedAt - startedAt),
-                bytesRead: bytesRead,
-                taskMetricsStatus: taskMetrics == nil ? "missing" : "collected",
-                taskMetrics: taskMetrics,
-                errorDomain: nsError?.domain,
-                errorCode: nsError?.code
-            ))
+        let results = try await WLTBoundedWorkload.run(
+            plan.probes, concurrency: plan.concurrency ?? 1
+        ) { probe in
+            await self.runWorkloadProbe(probe, requiredTransport: plan.requiredTransport)
         }
         return WorkloadOutcome(route: plan.route, probes: results)
+    }
+
+    private func runWorkloadProbe(
+        _ probe: WorkloadProbe, requiredTransport: String?
+    ) async -> WorkloadProbeResult {
+        let startedAt = unixMilliseconds()
+        let metricsCollector = WorkloadMetricsCollector()
+        var statusCode = -1
+        var bytesRead = 0
+        var classification = "request_failed"
+        var probeError: Error?
+        do {
+            guard
+                let endpoint = URL(string: probe.url),
+                endpoint.scheme?.lowercased() == "https",
+                endpoint.host != nil,
+                endpoint.user == nil,
+                endpoint.password == nil
+            else {
+                throw ControlError.invalidWorkload
+            }
+            let configuration = URLSessionConfiguration.ephemeral
+            // A Wi-Fi control workload must not silently fall back to the
+            // cellular interface while the device reports Wi-Fi ready.
+            // LTE workloads keep cellular access enabled; the host-side
+            // reviewer still proves the actual interface from metrics.
+            configuration.allowsCellularAccess = requiredTransport != "wifi"
+            configuration.requestCachePolicy = .reloadIgnoringLocalAndRemoteCacheData
+            configuration.timeoutIntervalForRequest = TimeInterval(probe.timeoutSeconds)
+            configuration.timeoutIntervalForResource = TimeInterval(probe.timeoutSeconds)
+            configuration.urlCache = nil
+            let session = URLSession(configuration: configuration)
+            defer { session.invalidateAndCancel() }
+            var request = URLRequest(url: endpoint)
+            request.cachePolicy = .reloadIgnoringLocalAndRemoteCacheData
+            request.timeoutInterval = TimeInterval(probe.timeoutSeconds)
+            request.setValue("no-cache", forHTTPHeaderField: "Cache-Control")
+            // The per-task delegate preserves data(for:)'s structured
+            // cancellation. Foundation delivers metrics before task
+            // completion, so reading the collector after this call returns
+            // or throws requires no wait and also retains failed-task metrics.
+            let (data, response) = try await session.data(
+                for: request,
+                delegate: metricsCollector
+            )
+            statusCode = (response as? HTTPURLResponse)?.statusCode ?? -1
+            bytesRead = data.count
+            let statusAccepted: Bool
+            if probe.acceptedStatusCodes.isEmpty {
+                statusAccepted = (response as? HTTPURLResponse).map { response in
+                    (200 ..< 400).contains(response.statusCode)
+                } ?? false
+            } else {
+                statusAccepted = probe.acceptedStatusCodes.contains(statusCode)
+            }
+            if !statusAccepted {
+                classification = "status_failed"
+            } else if bytesRead < probe.minimumBytes {
+                classification = "short_body"
+            } else {
+                classification = "ok"
+            }
+        } catch {
+            probeError = error
+        }
+        // Preserve the original elapsed endpoint. Optional metrics are read
+        // only after this timestamp and are never awaited.
+        let finishedAt = unixMilliseconds()
+        let taskMetrics = metricsCollector.snapshot()
+        let nsError = probeError as NSError?
+        return WorkloadProbeResult(
+            name: probe.name,
+            success: probeError == nil && classification == "ok",
+            classification: classification,
+            statusCode: statusCode,
+            elapsedMS: max(0, finishedAt - startedAt),
+            startedUnixMS: startedAt,
+            bytesRead: bytesRead,
+            taskMetricsStatus: taskMetrics == nil ? "missing" : "collected",
+            taskMetrics: taskMetrics,
+            errorDomain: nsError?.domain,
+            errorCode: nsError?.code
+        )
     }
 
     private static let zeroToleranceCounterNames = Set([
@@ -2905,7 +2916,10 @@ actor WLTDeviceControl {
             throw ControlError.invalidWorkload
         }
         let plan = try JSONDecoder().decode(WorkloadPlan.self, from: Data(contentsOf: url))
-        guard plan.schema == 1, ["eu", "ru"].contains(plan.route), (1 ... 32).contains(plan.probes.count) else {
+        guard plan.schema == 1, ["eu", "ru"].contains(plan.route), (1 ... 32).contains(plan.probes.count),
+            (1 ... 16).contains(plan.concurrency ?? 1),
+            plan.requiredTransport == nil || ["wifi", "cellular"].contains(plan.requiredTransport!)
+        else {
             throw ControlError.invalidWorkload
         }
         var names = Set<String>()
