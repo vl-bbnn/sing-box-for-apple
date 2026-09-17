@@ -175,9 +175,12 @@ if not isinstance(value, dict) or set(value) != {"parameters"}:
     raise SystemExit("candidate must contain only the parameters object")
 parameters = value["parameters"]
 parameter_keys = set(parameters) if isinstance(parameters, dict) else set()
-transport_keys = parameter_keys - {"go_memory_limit_mib"}
+transport_keys = parameter_keys - {"go_memory_limit_mib", "diagnostic_route_mode"}
 if transport_keys not in (runtime_keys, runtime_keys | mux_keys):
     raise SystemExit("candidate parameters must contain the exact runtime schema")
+if "diagnostic_route_mode" in parameters:
+    if parameters["diagnostic_route_mode"] != "wlt_only":
+        raise SystemExit("diagnostic route mode must be wlt_only")
 if "go_memory_limit_mib" in parameters:
     value = parameters["go_memory_limit_mib"]
     if type(value) is not int or not 24 <= value <= 45:

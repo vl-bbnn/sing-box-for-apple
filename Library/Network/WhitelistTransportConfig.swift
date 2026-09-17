@@ -19,6 +19,7 @@ public enum WhitelistTransportConfig {
     public let kcpWindow: Int
     public let kcpBuffer: Int
     public let goMemoryLimitMiB: Int?
+    public let diagnosticRouteMode: String?
     public let vlessMuxProtocol: String?
     public let vlessMuxMaxConnections: Int?
     public let vlessMuxMinStreams: Int?
@@ -34,6 +35,7 @@ public enum WhitelistTransportConfig {
       case kcpWindow = "kcp_window"
       case kcpBuffer = "kcp_buffer"
       case goMemoryLimitMiB = "go_memory_limit_mib"
+      case diagnosticRouteMode = "diagnostic_route_mode"
       case vlessMuxProtocol = "vless_mux_protocol"
       case vlessMuxMaxConnections = "vless_mux_max_connections"
       case vlessMuxMinStreams = "vless_mux_min_streams"
@@ -77,7 +79,7 @@ public enum WhitelistTransportConfig {
       throw RuntimeCandidateError.invalidEnvelope
     }
     let parameterKeys = Set(parameters.keys)
-    let transportKeys = parameterKeys.subtracting(["go_memory_limit_mib"])
+    let transportKeys = parameterKeys.subtracting(["go_memory_limit_mib", "diagnostic_route_mode"])
     guard
       transportKeys == runtimeParameterKeys
         || transportKeys == runtimeParameterKeys.union(vlessMuxParameterKeys)
@@ -108,6 +110,13 @@ public enum WhitelistTransportConfig {
     else {
       throw RuntimeCandidateError.invalidValue
     }
+    let diagnosticRouteMode: String?
+    if parameterKeys.contains("diagnostic_route_mode") {
+      guard let value = parameters["diagnostic_route_mode"] as? String,
+        value == "wlt_only"
+      else { throw RuntimeCandidateError.invalidValue }
+      diagnosticRouteMode = value
+    } else { diagnosticRouteMode = nil }
     let goMemoryLimitMiB: Int?
     if parameterKeys.contains("go_memory_limit_mib") {
       guard let value = strictInteger(parameters["go_memory_limit_mib"]),
@@ -152,6 +161,7 @@ public enum WhitelistTransportConfig {
       kcpWindow: kcpWindow,
       kcpBuffer: kcpBuffer,
       goMemoryLimitMiB: goMemoryLimitMiB,
+      diagnosticRouteMode: diagnosticRouteMode,
       vlessMuxProtocol: vlessMuxProtocol,
       vlessMuxMaxConnections: vlessMuxMaxConnections,
       vlessMuxMinStreams: vlessMuxMinStreams
@@ -234,6 +244,40 @@ public enum WhitelistTransportConfig {
       }
       guard modifiedOutbounds > 0 else {
         throw RuntimeCandidateError.missingWLTVLESSOutbound
+      }
+      dictionary["outbounds"] = outbounds
+    }
+    if let mode = parameters.diagnosticRouteMode {
+      guard mode == "wlt_only",
+        let serviceTag = service["tag"] as? String, !serviceTag.isEmpty,
+        var outbounds = dictionary["outbounds"] as? [[String: Any]]
+      else { throw RuntimeCandidateError.invalidConfig }
+      // Diagnostic overlay only: constrain availability groups in memory.
+      // Keep their type, DNS, route policy and bootstrap exceptions intact.
+      let required = ["direct_or_wlt-ru": "vless-wlt-ru",
+                      "ru_or_wlt-ru": "vless-wlt-ru",
+                      "eu_or_wlt-eu": "vless-wlt-eu"]
+      let tags = outbounds.compactMap { $0["tag"] as? String }
+      guard tags.count == outbounds.count, Set(tags).count == tags.count else {
+        throw RuntimeCandidateError.invalidConfig
+      }
+      for (group, member) in required {
+        guard let index = outbounds.firstIndex(where: { $0["tag"] as? String == group }),
+          outbounds[index]["type"] as? String == "urltest",
+          let members = outbounds[index]["outbounds"] as? [String], members.contains(member),
+          let vless = outbounds.first(where: { $0["tag"] as? String == member }),
+          vless["type"] as? String == "vless", let detour = vless["detour"] as? String,
+          let carrier = outbounds.first(where: { $0["tag"] as? String == detour }),
+          carrier["type"] as? String == "wlt",
+          carrier["service"] as? String == serviceTag,
+          carrier["route"] as? String == (member.hasSuffix("-ru") ? "ru" : "eu")
+        else { throw RuntimeCandidateError.invalidConfig }
+        if let probe = outbounds[index]["payload_probe"] as? [String: Any] {
+          guard probe["default"] as? String == member else {
+            throw RuntimeCandidateError.invalidConfig
+          }
+        }
+        outbounds[index]["outbounds"] = [member]
       }
       dictionary["outbounds"] = outbounds
     }
