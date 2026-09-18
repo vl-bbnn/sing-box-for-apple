@@ -198,6 +198,9 @@ public enum PacketTunnelDiagnostics {
         !["app_owner_bound", "app_rpc_return_ok"].contains(stage) || canonicalOperationID != nil else { return false }
       let url = FilePath.cacheDirectory.appendingPathComponent("wlt-stop-\(owner).jsonl")
       return queue.sync {
+        // Foundation JSON parsing creates autoreleased objects. Bound their lifetime
+        // to this append, including retained archive validation, on long-lived workers.
+        autoreleasepool {
         do {
           let disposition = stopReceiptDisposition(stage)
           try FileManager.default.createDirectory(at: url.deletingLastPathComponent(), withIntermediateDirectories: true,
@@ -256,6 +259,7 @@ public enum PacketTunnelDiagnostics {
           return false
         }
       }
+        }
     }
   #endif
 
