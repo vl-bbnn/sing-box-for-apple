@@ -39,6 +39,14 @@ public enum FilePath {
 
     #endif
 
+    #if SFI_DEV
+    public static func prepareWLTAuthSnapshot() throws -> URL {
+        try WLTAuthStorage.prepare(
+            legacy: cacheDirectory.appendingPathComponent("WLT", isDirectory: true),
+            durable: sharedDirectory.appendingPathComponent("Library/Application Support/WLTAuth", isDirectory: true))
+    }
+    #endif
+
     public static var iCloudDirectory = FileManager.default.url(forUbiquityContainerIdentifier: nil)?.appendingPathComponent("Documents", isDirectory: true) ?? URL(string: "stub")!
 }
 

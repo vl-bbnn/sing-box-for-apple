@@ -1069,7 +1069,7 @@ actor WLTDeviceControl {
                 throw ControlError.runtimeCandidateRequiresStoppedVPN
             }
             var armError: NSError?
-            LibboxArmWLTAuthRingTestRejectActiveOnce(wltAuthSnapshotURL().path, &armError)
+            LibboxArmWLTAuthRingTestRejectActiveOnce(try wltAuthSnapshotURL().path, &armError)
             if let armError {
                 throw armError
             }
@@ -1242,10 +1242,8 @@ actor WLTDeviceControl {
         }
     }
 
-    private func wltAuthSnapshotURL() -> URL {
-        FilePath.cacheDirectory
-            .appendingPathComponent("WLT", isDirectory: true)
-            .appendingPathComponent("auth-snapshot.json", isDirectory: false)
+    private func wltAuthSnapshotURL() throws -> URL {
+        try FilePath.prepareWLTAuthSnapshot()
     }
 
     private func identityRingImportURLs(_ requestID: UUID) -> [URL] {
@@ -1328,7 +1326,7 @@ actor WLTDeviceControl {
             throw ControlError.identityRingImportInvalid
         }
 
-        let snapshot = wltAuthSnapshotURL()
+        let snapshot = try wltAuthSnapshotURL()
         let reserveSnapshot = URL(fileURLWithPath: snapshot.path + ".reserve")
         let managed = [
             snapshot,
@@ -1842,7 +1840,7 @@ actor WLTDeviceControl {
 
     private func loadIdentityRingStatus() throws -> IdentityRingStatus {
         var statusError: NSError?
-        let raw = LibboxWLTAuthRingStatus(wltAuthSnapshotURL().path, &statusError)
+        let raw = LibboxWLTAuthRingStatus(try wltAuthSnapshotURL().path, &statusError)
         if let statusError {
             throw statusError
         }

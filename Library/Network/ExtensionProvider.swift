@@ -954,9 +954,7 @@ open class ExtensionProvider: NEPacketTunnelProvider {
     #endif
     #if SFI_DEV
       if whitelistTransportProfileIsCore {
-        let snapshotFile = FilePath.cacheDirectory
-          .appendingPathComponent("WLT", isDirectory: true)
-          .appendingPathComponent("auth-snapshot.json", isDirectory: false)
+        let snapshotFile = try FilePath.prepareWLTAuthSnapshot()
         PacketTunnelDiagnostics.appendStartupMilestone(
           FileManager.default.fileExists(atPath: snapshotFile.path)
             ? "wlt_snapshot_file_present" : "wlt_snapshot_file_missing")
