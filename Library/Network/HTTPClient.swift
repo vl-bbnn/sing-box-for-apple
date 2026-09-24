@@ -29,6 +29,14 @@ public class HTTPClient {
         #endif
         let request = client.newRequest()!
         request.setUserAgent(HTTPClient.userAgent)
+        #if os(iOS) && SFI_DEV
+            // Ask the stage API to keep WLT rule-set entries as remote binary
+            // references. Profile refresh downloads and verifies those files
+            // into the app-group snapshot; Packet Tunnel then rewrites them
+            // to local paths before an offline start. This avoids embedding
+            // multi-megabyte JSON rule sets in the start options.
+            request.setHeader("X-WLT-Offline-Binary-Rule-Sets", value: "1")
+        #endif
         try request.setURL(url)
         let response = try request.execute()
         let content = try response.getContent()
@@ -51,6 +59,9 @@ public class HTTPClient {
         #endif
         let request = client.newRequest()!
         request.setUserAgent(HTTPClient.userAgent)
+        #if os(iOS) && SFI_DEV
+            request.setHeader("X-WLT-Offline-Binary-Rule-Sets", value: "1")
+        #endif
         try request.setURL(url)
         let response = try request.execute()
         if let progress {

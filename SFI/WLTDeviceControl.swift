@@ -2060,29 +2060,42 @@ actor WLTDeviceControl {
         guard route == "eu" || route == "ru" else {
             throw ControlError.invalidWorkload
         }
-        let selections: [(String, String)] = route == "ru"
-            ? [
-                ("whitelist-exit", "ru"),
-                ("ru_or_wlt-ru", "vless-wlt-ru"),
-            ]
-            : [
-                ("whitelist-exit", "eu"),
-                ("eu_or_wlt-eu", "vless-wlt-eu"),
-            ]
-        var selected = false
-        for (group, outbound) in selections {
+        let clean = try await selectedProfileUsesCleanWLT()
+        let group = clean ? "whitelist-exit" : (route == "ru" ? "ru_or_wlt-ru" : "eu_or_wlt-eu")
+        let outbound = clean ? route : (route == "ru" ? "vless-wlt-ru" : "vless-wlt-eu")
+
+        // URLTest groups may already have selected the requested WLT leaf while
+        // the carrier was coming up.  Re-sending the command in that state can
+        // return a transient libbox selection error (ControlError 12) even
+        // though the route is already correct.  Treat the observed selection as
+        // success and only issue a command when a change is actually needed.
+        if !clean, let current = try? await loadMergedGroupSelections(),
+           current.first(where: { $0.tag == group })?.selected == outbound {
+            return
+        }
+
+        var lastError: Error?
+        for attempt in 1...3 {
             do {
                 let client = LibboxNewStandaloneCommandClient()!
                 try await client.selectOutbound(group, outboundTag: outbound)
-                selected = true
+                if !clean {
+                    if let current = try? await loadMergedGroupSelections(),
+                       current.first(where: { $0.tag == group })?.selected == outbound {
+                        return
+                    }
+                } else {
+                    return
+                }
             } catch {
-                continue
+                lastError = error
+            }
+            if attempt < 3 {
+                try? await Task.sleep(nanoseconds: 500_000_000)
             }
         }
-        guard selected else {
-            throw ControlError.workloadRouteSelectionFailed
-        }
-        try? await Task.sleep(nanoseconds: 300_000_000)
+        _ = lastError
+        throw ControlError.workloadRouteSelectionFailed
     }
 
     private func loadCurrentStatus() async -> NEVPNStatus? {
