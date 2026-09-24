@@ -8,7 +8,12 @@ public extension Profile {
             return
         }
         let url = remoteURL
-        let remoteContent = try await HTTPClient.getStringAsync(url)
+        let fetchedContent = try await HTTPClient.getStringAsync(url)
+        #if os(iOS) && SFI_DEV
+            let remoteContent = try WhitelistTransportConfig.compatibleProfile(fetchedContent)
+        #else
+            let remoteContent = fetchedContent
+        #endif
         try await BlockingIO.run {
             var error: NSError?
             LibboxCheckConfig(remoteContent, &error)
@@ -16,6 +21,9 @@ public extension Profile {
                 throw error
             }
         }
+        #if os(iOS) && SFI_DEV
+            try await WhitelistTransportConfig.prepareOfflineRuleSets(remoteContent, profileURL: url)
+        #endif
 
         let oldContent = try? await readAsync()
         if oldContent == remoteContent {

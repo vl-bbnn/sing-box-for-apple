@@ -1,4 +1,5 @@
 #if SFI_DEV
+import Darwin
 import Foundation
 import Libbox
 import Library
@@ -60,7 +61,7 @@ actor WLTDeviceControl {
                         .first(where: { $0.name == "interval" })?.value,
                     let duration = Int(durationValue),
                     let interval = Int(intervalValue),
-                    (5...1_800).contains(duration),
+                    (5...3_600).contains(duration),
                     (1...300).contains(interval),
                     interval <= duration
                 else {
@@ -79,6 +80,7 @@ actor WLTDeviceControl {
         case bootstrapProfile = "bootstrap-profile"
         case upsertProfile = "upsert-profile"
         case exportProfile = "export-profile"
+        case exportState = "export-state"
         case ping
         case probe
         case refreshProfile = "refresh-profile"
@@ -91,10 +93,12 @@ actor WLTDeviceControl {
         case startProbe = "start-probe"
         case status
         case groupStatus = "group-status"
+        case routeDiagnostics = "route-diagnostics"
         case stop
         case soak
         case workload
         case networkWorkload = "network-workload"
+        case explicitSavedWLTOutboundReachability = "explicit_saved_WLT_outbound_reachability"
     }
 
     private struct ProfilePlan: Codable {
@@ -106,11 +110,13 @@ actor WLTDeviceControl {
     private struct WorkloadPlan: Decodable {
         let schema: Int
         let route: String
+        let requiredTransport: String?
         let selectRoute: Bool?
         let probes: [WorkloadProbe]
 
         enum CodingKeys: String, CodingKey {
             case schema, route, probes
+            case requiredTransport = "required_transport"
             case selectRoute = "select_route"
         }
     }
@@ -130,6 +136,273 @@ actor WLTDeviceControl {
         }
     }
 
+    private struct ExplicitWLTPlan: Decodable {
+        let schema: Int
+        let scope: String
+        let requests: [ExplicitWLTProbeRequest]
+    }
+
+    private struct ExplicitWLTProfileBinding {
+        let selectedID: Int64
+        let path: String
+        let mainSHA256: String
+        let lastKnownGoodPath: String
+        let lastKnownGoodSHA256: String?
+    }
+
+    private struct ExplicitWLTProbeRequest: Codable {
+        let schema: Int
+        let probeID: String
+        let kind: String
+        let groupTag: String
+        let outboundTag: String
+        let wltTag: String
+        let timeoutMS: Int
+        let server: String?
+        let queryName: String?
+        let url: String?
+        let expectedStatus: Int?
+        let expectedBytes: Int?
+        let maxReadBytes: Int?
+
+        enum CodingKeys: String, CodingKey {
+            case schema, kind, server, url
+            case probeID = "probe_id"
+            case groupTag = "group_tag"
+            case outboundTag = "outbound_tag"
+            case wltTag = "wlt_tag"
+            case timeoutMS = "timeout_ms"
+            case queryName = "query_name"
+            case expectedStatus = "expected_status"
+            case expectedBytes = "expected_bytes"
+            case maxReadBytes = "max_read_bytes"
+        }
+    }
+
+    private struct ExplicitWLTProbeResult: Codable {
+        let schema: Int
+        let scope: String
+        let probeID: String
+        let kind: String
+        let status: String
+        let errorCode: String
+        let groupTag: String
+        let outboundTag: String
+        let wltTag: String
+        let network: String
+        let attempt: String
+        let fallbackAttempted: Bool
+        let selectionTouched: Bool
+        let profileTouched: Bool
+        let instanceCurrent: Bool
+        let durationMS: Int
+        let requestSHA256: String
+        let httpStatus: Int?
+        let bytesRead: Int?
+        let destinationSHA256: String?
+        let dnsRcode: Int?
+        let dnsAnswerCount: Int?
+        let dnsQuestionSHA256: String?
+        let dnsServerSHA256: String?
+
+        enum CodingKeys: String, CodingKey {
+            case schema, scope, kind, status, network, attempt
+            case probeID = "probe_id"
+            case errorCode = "error_code"
+            case groupTag = "group_tag"
+            case outboundTag = "outbound_tag"
+            case wltTag = "wlt_tag"
+            case fallbackAttempted = "fallback_attempted"
+            case selectionTouched = "selection_touched"
+            case profileTouched = "profile_touched"
+            case instanceCurrent = "instance_current"
+            case durationMS = "duration_ms"
+            case requestSHA256 = "request_sha256"
+            case httpStatus = "http_status"
+            case bytesRead = "bytes_read"
+            case destinationSHA256 = "destination_sha256"
+            case dnsRcode = "dns_rcode"
+            case dnsAnswerCount = "dns_answer_count"
+            case dnsQuestionSHA256 = "dns_question_sha256"
+            case dnsServerSHA256 = "dns_server_sha256"
+        }
+    }
+
+    private struct WorkloadTransactionMetrics: Codable, Sendable {
+        let resourceFetchType: String
+        let networkProtocolName: String?
+        let responseStatusCode: Int?
+        let proxyConnection: Bool
+        let reusedConnection: Bool
+        let cellular: Bool
+        let expensive: Bool
+        let constrained: Bool
+        let multipath: Bool
+        let domainLookupMS: Int64?
+        let connectMS: Int64?
+        let secureConnectionMS: Int64?
+        let requestMS: Int64?
+        let ttfbAfterRequestMS: Int64?
+        let bodyMS: Int64?
+        let fetchToFirstByteMS: Int64?
+        let fetchToEndMS: Int64?
+        let requestHeaderBytesSent: Int64
+        let requestBodyBytesSent: Int64
+        let requestBodyBytesBeforeEncoding: Int64
+        let responseHeaderBytesReceived: Int64
+        let responseBodyBytesReceived: Int64
+        let responseBodyBytesAfterDecoding: Int64
+
+        enum CodingKeys: String, CodingKey {
+            case resourceFetchType = "resource_fetch_type"
+            case networkProtocolName = "network_protocol_name"
+            case responseStatusCode = "response_status_code"
+            case proxyConnection = "proxy_connection"
+            case reusedConnection = "reused_connection"
+            case cellular, expensive, constrained, multipath
+            case domainLookupMS = "domain_lookup_ms"
+            case connectMS = "connect_ms"
+            case secureConnectionMS = "secure_connection_ms"
+            case requestMS = "request_ms"
+            case ttfbAfterRequestMS = "ttfb_after_request_ms"
+            case bodyMS = "body_ms"
+            case fetchToFirstByteMS = "fetch_to_first_byte_ms"
+            case fetchToEndMS = "fetch_to_end_ms"
+            case requestHeaderBytesSent = "request_header_bytes_sent"
+            case requestBodyBytesSent = "request_body_bytes_sent"
+            case requestBodyBytesBeforeEncoding = "request_body_bytes_before_encoding"
+            case responseHeaderBytesReceived = "response_header_bytes_received"
+            case responseBodyBytesReceived = "response_body_bytes_received"
+            case responseBodyBytesAfterDecoding = "response_body_bytes_after_decoding"
+        }
+
+        init(_ metrics: URLSessionTaskTransactionMetrics) {
+            resourceFetchType = switch metrics.resourceFetchType {
+            case .networkLoad: "network_load"
+            case .serverPush: "server_push"
+            case .localCache: "local_cache"
+            case .unknown: "unknown"
+            @unknown default: "unknown"
+            }
+            networkProtocolName = metrics.networkProtocolName
+            responseStatusCode = (metrics.response as? HTTPURLResponse)?.statusCode
+            proxyConnection = metrics.isProxyConnection
+            reusedConnection = metrics.isReusedConnection
+            cellular = metrics.isCellular
+            expensive = metrics.isExpensive
+            constrained = metrics.isConstrained
+            multipath = metrics.isMultipath
+            domainLookupMS = Self.durationMS(
+                from: metrics.domainLookupStartDate,
+                to: metrics.domainLookupEndDate
+            )
+            // URLSession's connect interval contains the secure-connection
+            // interval when TLS is negotiated. These values overlap and must
+            // not be added together.
+            connectMS = Self.durationMS(
+                from: metrics.connectStartDate,
+                to: metrics.connectEndDate
+            )
+            secureConnectionMS = Self.durationMS(
+                from: metrics.secureConnectionStartDate,
+                to: metrics.secureConnectionEndDate
+            )
+            requestMS = Self.durationMS(
+                from: metrics.requestStartDate,
+                to: metrics.requestEndDate
+            )
+            // TTFB starts after the request upload has ended. It still
+            // includes server processing and path latency.
+            ttfbAfterRequestMS = Self.durationMS(
+                from: metrics.requestEndDate,
+                to: metrics.responseStartDate
+            )
+            // data(for:) buffers the full body, so this is the client-observed
+            // span from the first response byte through the last response byte.
+            bodyMS = Self.durationMS(
+                from: metrics.responseStartDate,
+                to: metrics.responseEndDate
+            )
+            fetchToFirstByteMS = Self.durationMS(
+                from: metrics.fetchStartDate,
+                to: metrics.responseStartDate
+            )
+            fetchToEndMS = Self.durationMS(
+                from: metrics.fetchStartDate,
+                to: metrics.responseEndDate
+            )
+            requestHeaderBytesSent = Int64(metrics.countOfRequestHeaderBytesSent)
+            requestBodyBytesSent = Int64(metrics.countOfRequestBodyBytesSent)
+            requestBodyBytesBeforeEncoding = Int64(metrics.countOfRequestBodyBytesBeforeEncoding)
+            responseHeaderBytesReceived = Int64(metrics.countOfResponseHeaderBytesReceived)
+            responseBodyBytesReceived = Int64(metrics.countOfResponseBodyBytesReceived)
+            responseBodyBytesAfterDecoding = Int64(metrics.countOfResponseBodyBytesAfterDecoding)
+        }
+
+        private static func durationMS(from start: Date?, to end: Date?) -> Int64? {
+            guard let start, let end else {
+                return nil
+            }
+            let duration = end.timeIntervalSince(start)
+            guard duration >= 0 else {
+                return nil
+            }
+            return Int64((duration * 1_000).rounded())
+        }
+    }
+
+    private struct WorkloadTaskMetrics: Codable, Sendable {
+        let schema: Int
+        let scope: String
+        let taskIntervalMS: Int64
+        let redirectCount: Int
+        let connectDurationIncludesSecureConnection: Bool
+        let internalTunnelPhasesVisible: Bool
+        let transactions: [WorkloadTransactionMetrics]
+
+        enum CodingKeys: String, CodingKey {
+            case schema, scope, transactions
+            case taskIntervalMS = "task_interval_ms"
+            case redirectCount = "redirect_count"
+            case connectDurationIncludesSecureConnection = "connect_duration_includes_secure_connection"
+            case internalTunnelPhasesVisible = "internal_tunnel_phases_visible"
+        }
+
+        init(_ metrics: URLSessionTaskMetrics) {
+            schema = 1
+            scope = "urlsession_client"
+            taskIntervalMS = Int64((metrics.taskInterval.duration * 1_000).rounded())
+            redirectCount = metrics.redirectCount
+            connectDurationIncludesSecureConnection = true
+            internalTunnelPhasesVisible = false
+            // Keep every transaction so redirects and their independent
+            // connection/cache behavior are not collapsed into one total.
+            transactions = metrics.transactionMetrics.map(WorkloadTransactionMetrics.init)
+        }
+    }
+
+    private final class WorkloadMetricsCollector: NSObject, URLSessionTaskDelegate, @unchecked Sendable {
+        private let lock = NSLock()
+        private var capturedMetrics: WorkloadTaskMetrics?
+
+        func urlSession(
+            _ session: URLSession,
+            task: URLSessionTask,
+            didFinishCollecting metrics: URLSessionTaskMetrics
+        ) {
+            let captured = WorkloadTaskMetrics(metrics)
+            lock.lock()
+            defer { lock.unlock() }
+            capturedMetrics = captured
+        }
+
+        func snapshot() -> WorkloadTaskMetrics? {
+            lock.lock()
+            defer { lock.unlock() }
+            return capturedMetrics
+        }
+    }
+
     private struct WorkloadProbeResult: Codable {
         let name: String
         let success: Bool
@@ -137,6 +410,8 @@ actor WLTDeviceControl {
         let statusCode: Int
         let elapsedMS: Int64
         let bytesRead: Int
+        let taskMetricsStatus: String
+        let taskMetrics: WorkloadTaskMetrics?
         let errorDomain: String?
         let errorCode: Int?
 
@@ -145,6 +420,8 @@ actor WLTDeviceControl {
             case statusCode = "status_code"
             case elapsedMS = "elapsed_ms"
             case bytesRead = "bytes_read"
+            case taskMetricsStatus = "task_metrics_status"
+            case taskMetrics = "task_metrics"
             case errorDomain = "error_domain"
             case errorCode = "error_code"
         }
@@ -159,6 +436,24 @@ actor WLTDeviceControl {
         let tag: String
         let selected: String
         let available: [String]
+    }
+
+    private struct RouteDiagnostics: Codable, Sendable {
+        let instagramFamily: [String: Int]
+        let metaFamily: [String: Int]
+        let tiktokFamily: [String: Int]
+        let youtubeFamily: [String: Int]
+        let githubFamily: [String: Int]
+        let neutralExample: [String: Int]
+
+        enum CodingKeys: String, CodingKey {
+            case instagramFamily = "instagram-family"
+            case metaFamily = "meta-family"
+            case tiktokFamily = "tiktok-family"
+            case youtubeFamily = "youtube-family"
+            case githubFamily = "github-family"
+            case neutralExample = "neutral-example"
+        }
     }
 
     private struct SoakProbeSample: Codable {
@@ -208,7 +503,10 @@ actor WLTDeviceControl {
         let runtimeParameters: WhitelistTransportConfig.RuntimeParameters?
         let workloadRoute: String?
         let workloadProbes: [WorkloadProbeResult]?
+        let explicitSavedWLTOutboundReachability: [ExplicitWLTProbeResult]?
         let groupSelections: [GroupSelection]?
+        let routeDiagnostics: RouteDiagnostics?
+        let routeDiagnosticsScope: String?
         let transportCounters: [String: Int64]?
         let identityRing: IdentityRingStatus?
         let identityRingImport: IdentityRingImportStatus?
@@ -216,6 +514,10 @@ actor WLTDeviceControl {
         let networkFinal: NetworkSnapshot?
         let errorDomain: String?
         let errorCode: Int?
+        let errorMessage: String?
+        let underlyingErrorDomain: String?
+        let underlyingErrorCode: Int?
+        let underlyingErrorMessage: String?
 
         enum CodingKeys: String, CodingKey {
             case schema
@@ -239,7 +541,10 @@ actor WLTDeviceControl {
             case runtimeParameters = "runtime_parameters"
             case workloadRoute = "workload_route"
             case workloadProbes = "workload_probes"
+            case explicitSavedWLTOutboundReachability = "explicit_saved_WLT_outbound_reachability"
             case groupSelections = "group_selections"
+            case routeDiagnostics = "route_diagnostics"
+            case routeDiagnosticsScope = "route_diagnostics_scope"
             case transportCounters = "transport_counters"
             case identityRing = "identity_ring"
             case identityRingImport = "identity_ring_import"
@@ -247,6 +552,10 @@ actor WLTDeviceControl {
             case networkFinal = "network_final"
             case errorDomain = "error_domain"
             case errorCode = "error_code"
+            case errorMessage = "error_message"
+            case underlyingErrorDomain = "underlying_error_domain"
+            case underlyingErrorCode = "underlying_error_code"
+            case underlyingErrorMessage = "underlying_error_message"
         }
     }
 
@@ -289,6 +598,8 @@ actor WLTDeviceControl {
         let cellular: Bool
         let wifi: Bool
         let radioTechnology: String
+        let radioTechnologies: [String]
+        let radioTechnologySource: String
         let cellularServiceCount: Int
         let dataServiceIDHash: String?
 
@@ -297,6 +608,8 @@ actor WLTDeviceControl {
             case cellular
             case wifi
             case radioTechnology = "radio_technology"
+            case radioTechnologies = "radio_technologies"
+            case radioTechnologySource = "radio_technology_source"
             case cellularServiceCount = "cellular_service_count"
             case dataServiceIDHash = "data_service_id_hash"
         }
@@ -309,7 +622,10 @@ actor WLTDeviceControl {
         let soak: SoakOutcome?
         let runtimeParameters: WhitelistTransportConfig.RuntimeParameters?
         let workload: WorkloadOutcome?
+        let explicitSavedWLTOutboundReachability: [ExplicitWLTProbeResult]?
         let groupSelections: [GroupSelection]?
+        let routeDiagnostics: RouteDiagnostics?
+        let routeDiagnosticsScope: String?
         let transportCounters: [String: Int64]?
         let identityRing: IdentityRingStatus?
         let identityRingImport: IdentityRingImportStatus?
@@ -321,7 +637,10 @@ actor WLTDeviceControl {
             soak: SoakOutcome?,
             runtimeParameters: WhitelistTransportConfig.RuntimeParameters?,
             workload: WorkloadOutcome? = nil,
+            explicitSavedWLTOutboundReachability: [ExplicitWLTProbeResult]? = nil,
             groupSelections: [GroupSelection]? = nil,
+            routeDiagnostics: RouteDiagnostics? = nil,
+            routeDiagnosticsScope: String? = nil,
             transportCounters: [String: Int64]? = nil,
             identityRing: IdentityRingStatus? = nil,
             identityRingImport: IdentityRingImportStatus? = nil
@@ -332,7 +651,10 @@ actor WLTDeviceControl {
             self.soak = soak
             self.runtimeParameters = runtimeParameters
             self.workload = workload
+            self.explicitSavedWLTOutboundReachability = explicitSavedWLTOutboundReachability
             self.groupSelections = groupSelections
+            self.routeDiagnostics = routeDiagnostics
+            self.routeDiagnosticsScope = routeDiagnosticsScope
             self.transportCounters = transportCounters
             self.identityRing = identityRing
             self.identityRingImport = identityRingImport
@@ -382,6 +704,12 @@ actor WLTDeviceControl {
         case identityRingImportInstallFailed = 21
         case transportCountersUnavailable = 22
         case mergedProfileContractFailed = 23
+        case stateExportRequiresStoppedVPN = 24
+        case stateExportInvalidProfilePath = 25
+        case stateExportChangedDuringCapture = 26
+        case invalidExplicitWLTPlan = 27
+        case explicitWLTProfileGraphMismatch = 28
+        case explicitWLTResultInvalid = 29
     }
 
     private var isRunning = false
@@ -392,6 +720,7 @@ actor WLTDeviceControl {
         let workloadURL = workloadPlanURL(request.id)
         let profileURL = profilePlanURL(request.id)
         let exportURL = profileExportURL(request.id)
+        let stateExportURL = stateExportURL(request.id)
         let identityRingImportURLs = identityRingImportURLs(request.id)
         guard !isRunning else {
             try? FileManager.default.removeItem(at: candidateURL)
@@ -413,7 +742,8 @@ actor WLTDeviceControl {
         isRunning = true
         defer { isRunning = false }
         let keepsDeviceAwake = switch request.action {
-        case .bootstrapProfile, .upsertProfile, .start, .startProbe, .soak, .workload, .networkWorkload:
+        case .bootstrapProfile, .upsertProfile, .start, .startProbe, .soak, .workload,
+             .networkWorkload, .explicitSavedWLTOutboundReachability:
             true
         default:
             false
@@ -438,18 +768,25 @@ actor WLTDeviceControl {
         pruneWorkloadPlans(excluding: workloadURL)
         pruneProfilePlans(excluding: profileURL)
         pruneProfileExports(excluding: exportURL)
+        pruneStateExports(excluding: stateExportURL)
         pruneIdentityRingImports(excluding: identityRingImportURLs)
         defer { try? FileManager.default.removeItem(at: candidateURL) }
         defer { try? FileManager.default.removeItem(at: workloadURL) }
         defer { try? FileManager.default.removeItem(at: profileURL) }
         defer { identityRingImportURLs.forEach { try? FileManager.default.removeItem(at: $0) } }
 
+        var loadedRuntimeParameters: WhitelistTransportConfig.RuntimeParameters?
         do {
             let runtimeParameters = try loadRuntimeCandidate(
                 for: request.action,
                 at: candidateURL
             )
+            loadedRuntimeParameters = runtimeParameters
             let workloadPlan = try loadWorkloadPlan(
+                for: request.action,
+                at: workloadURL
+            )
+            let explicitWLTPlan = try loadExplicitWLTPlan(
                 for: request.action,
                 at: workloadURL
             )
@@ -462,14 +799,17 @@ actor WLTDeviceControl {
                 request,
                 runtimeParameters: runtimeParameters,
                 workloadPlan: workloadPlan,
-                profilePlan: profilePlan
+                profilePlan: profilePlan,
+                explicitWLTPlan: explicitWLTPlan
             )
             let networkFinal = await captureNetworkSnapshot()
             let workloadSucceeded = outcome.workload?.probes.allSatisfy(\.success) ?? true
+            let explicitWLTSucceeded = outcome.explicitSavedWLTOutboundReachability?
+                .allSatisfy { $0.status == "success" } ?? true
             writeResult(
                 request: request,
                 receivedAt: receivedAt,
-                state: workloadSucceeded ? "succeeded" : "failed",
+                state: workloadSucceeded && explicitWLTSucceeded ? "succeeded" : "failed",
                 vpnStatus: outcome.status.map(statusDescription) ?? "not_checked",
                 outcome: outcome,
                 networkInitial: networkInitial,
@@ -484,7 +824,15 @@ actor WLTDeviceControl {
                 receivedAt: receivedAt,
                 state: "failed",
                 vpnStatus: currentStatus.map(statusDescription) ?? "unknown",
-                outcome: nil,
+                outcome: loadedRuntimeParameters.map {
+                    Outcome(
+                        status: currentStatus,
+                        vpnStartupMS: nil,
+                        probeElapsedMS: nil,
+                        soak: nil,
+                        runtimeParameters: $0
+                    )
+                },
                 networkInitial: nil,
                 networkFinal: networkFinal,
                 error: error
@@ -496,7 +844,8 @@ actor WLTDeviceControl {
         _ request: Request,
         runtimeParameters: WhitelistTransportConfig.RuntimeParameters?,
         workloadPlan: WorkloadPlan?,
-        profilePlan: ProfilePlan?
+        profilePlan: ProfilePlan?,
+        explicitWLTPlan: ExplicitWLTPlan?
     ) async throws -> Outcome {
         let action = request.action
         if action == .ping {
@@ -574,6 +923,20 @@ actor WLTDeviceControl {
                 runtimeParameters: nil
             )
         }
+        if action == .exportState {
+            let currentStatus = await loadCurrentStatus()
+            guard currentStatus == .disconnected else {
+                throw ControlError.stateExportRequiresStoppedVPN
+            }
+            try await exportState(to: stateExportURL(request.id))
+            return Outcome(
+                status: currentStatus,
+                vpnStartupMS: nil,
+                probeElapsedMS: nil,
+                soak: nil,
+                runtimeParameters: nil
+            )
+        }
         if action == .bootstrapProfile {
             guard let profilePlan else {
                 throw ControlError.invalidProfilePlan
@@ -610,7 +973,7 @@ actor WLTDeviceControl {
         }
 
         switch action {
-        case .bootstrapProfile, .upsertProfile, .exportProfile, .selectProfile, .assertMergedProfile:
+        case .bootstrapProfile, .upsertProfile, .exportProfile, .exportState, .selectProfile, .assertMergedProfile:
             preconditionFailure("profile actions are handled before Network Extension loading")
         case .ping:
             return Outcome(
@@ -665,13 +1028,36 @@ actor WLTDeviceControl {
             guard await profile.status == .connected else {
                 throw ControlError.probeRequiresConnectedVPN
             }
+            let cleanProfile = try await selectedProfileUsesCleanWLT()
+            let groupSelections = cleanProfile
+                ? try await loadCleanGroupSelections()
+                : try await loadMergedGroupSelections()
             return Outcome(
                 status: .connected,
                 vpnStartupMS: nil,
                 probeElapsedMS: nil,
                 soak: nil,
                 runtimeParameters: nil,
-                groupSelections: try await loadMergedGroupSelections()
+                groupSelections: groupSelections,
+                routeDiagnostics: cleanProfile ? nil : await loadRouteDiagnostics(),
+                // The daemon intentionally omits singleton groups.  For a
+                // clean profile, selectedProfileUsesCleanWLT() has already
+                // validated the fixed ru/eu -> VLESS leaf composition from
+                // the saved profile; runtime group evidence is the exposed
+                // root selector and its selected EU member.
+                routeDiagnosticsScope: cleanProfile ? "clean_root_selection" : "leaf_selection"
+            )
+        case .routeDiagnostics:
+            guard await profile.status == .connected else {
+                throw ControlError.probeRequiresConnectedVPN
+            }
+            return Outcome(
+                status: .connected,
+                vpnStartupMS: nil,
+                probeElapsedMS: nil,
+                soak: nil,
+                runtimeParameters: nil,
+                routeDiagnostics: await loadRouteDiagnostics()
             )
         case .identityRingStatus:
             return Outcome(
@@ -719,6 +1105,16 @@ actor WLTDeviceControl {
                 profile,
                 runtimeParameters: runtimeParameters
             )
+            // A clean WLT profile has a fixed whitelist-exit selector.  Its
+            // first child can be the RU path, while the content gate asks for
+            // the EU path immediately afterwards.  Selecting EU only after
+            // the first probe creates an avoidable live-path handoff and can
+            // surface mux-open errors on the first media workload.  Resolve
+            // the clean selector before the initial traffic probe; merged
+            // profiles keep their independent urltest groups unchanged.
+            if try await selectedProfileUsesCleanWLT() {
+                try await selectWorkloadRoute("eu")
+            }
             let startupMS = max(0, unixMilliseconds() - startedAt)
             let trafficLogClient = CommandClient(.log, logMaxLines: 1_000)
             trafficLogClient.connect()
@@ -824,7 +1220,29 @@ actor WLTDeviceControl {
                 probeElapsedMS: nil,
                 soak: nil,
                 runtimeParameters: nil,
-                workload: workload
+                workload: workload,
+                routeDiagnostics: await loadRouteDiagnostics()
+            )
+        case .explicitSavedWLTOutboundReachability:
+            guard await profile.status == .connected else {
+                throw ControlError.probeRequiresConnectedVPN
+            }
+            guard let explicitWLTPlan else {
+                throw ControlError.invalidExplicitWLTPlan
+            }
+            let results = try await runExplicitSavedWLTOutboundReachability(
+                explicitWLTPlan, through: profile
+            )
+            guard await profile.status == .connected else {
+                throw ControlError.probeRequiresConnectedVPN
+            }
+            return Outcome(
+                status: .connected,
+                vpnStartupMS: nil,
+                probeElapsedMS: nil,
+                soak: nil,
+                runtimeParameters: nil,
+                explicitSavedWLTOutboundReachability: results
             )
         }
     }
@@ -1092,6 +1510,313 @@ actor WLTDeviceControl {
         }
     }
 
+    private func selectedProfileUsesCleanWLT() async throws -> Bool {
+        let profileID = await SharedPreferences.selectedProfileID.get()
+        guard let profile = try await ProfileManager.get(profileID) else {
+            throw ControlError.selectedProfileUnavailable
+        }
+        let sharedDirectory = FilePath.sharedDirectory.standardizedFileURL
+        let profileURL: URL
+        if profile.path.hasPrefix("/") {
+            profileURL = URL(fileURLWithPath: profile.path).standardizedFileURL
+        } else {
+            profileURL = sharedDirectory.appendingPathComponent(profile.path).standardizedFileURL
+        }
+        guard profileURL.path.hasPrefix(sharedDirectory.path + "/") else {
+            throw ControlError.mergedProfileContractFailed
+        }
+        let data = try Data(contentsOf: profileURL)
+        guard let root = try JSONSerialization.jsonObject(with: data) as? [String: Any],
+              let route = root["route"] as? [String: Any],
+              let final = route["final"] as? String else {
+            throw ControlError.mergedProfileContractFailed
+        }
+        guard final == "whitelist-exit" else { return false }
+        guard let outbounds = root["outbounds"] as? [[String: Any]] else {
+            throw ControlError.mergedProfileContractFailed
+        }
+        var byTag: [String: [String: Any]] = [:]
+        for outbound in outbounds {
+            guard let tag = outbound["tag"] as? String, !tag.isEmpty, byTag[tag] == nil else {
+                throw ControlError.mergedProfileContractFailed
+            }
+            byTag[tag] = outbound
+        }
+        guard
+            byTag["whitelist-exit"]?["type"] as? String == "selector",
+            byTag["whitelist-exit"]?["outbounds"] as? [String] == ["ru", "eu"],
+            byTag["ru"]?["type"] as? String == "selector",
+            byTag["ru"]?["outbounds"] as? [String] == ["vless-wlt-ru"],
+            byTag["eu"]?["type"] as? String == "selector",
+            byTag["eu"]?["outbounds"] as? [String] == ["vless-wlt-eu"],
+            byTag["vless-wlt-ru"]?["type"] as? String == "vless",
+            byTag["vless-wlt-eu"]?["type"] as? String == "vless"
+        else {
+            throw ControlError.mergedProfileContractFailed
+        }
+        return true
+    }
+
+    private func runExplicitSavedWLTOutboundReachability(
+        _ plan: ExplicitWLTPlan,
+        through profile: ExtensionProfile
+    ) async throws -> [ExplicitWLTProbeResult] {
+        let profileBinding = try await validateSelectedMainForExplicitWLT(plan)
+        let encoder = JSONEncoder()
+        encoder.outputFormatting = [.sortedKeys, .withoutEscapingSlashes]
+        var results: [ExplicitWLTProbeResult] = []
+        for request in plan.requests {
+            try await validateExplicitWLTProfileBinding(profileBinding)
+            let requestData = try encoder.encode(request)
+            guard requestData.count <= 16 * 1024,
+                  let requestJSON = String(data: requestData, encoding: .utf8) else {
+                throw ControlError.invalidExplicitWLTPlan
+            }
+            let resultJSON = try await profile.probeWltOutbound(
+                requestJSON,
+                timeoutMillis: request.timeoutMS + 5_000
+            )
+            guard let resultData = resultJSON.data(using: .utf8),
+                  resultData.count <= 16 * 1024 else {
+                throw ControlError.explicitWLTResultInvalid
+            }
+            let result = try JSONDecoder().decode(ExplicitWLTProbeResult.self, from: resultData)
+            try validateExplicitWLTResult(result, raw: resultData, request: request,
+                                          requestData: requestData)
+            try await validateExplicitWLTProfileBinding(profileBinding)
+            results.append(result)
+            if result.status == "failed" {
+                break
+            }
+        }
+        return results
+    }
+
+    private func validateSelectedMainForExplicitWLT(
+        _ plan: ExplicitWLTPlan
+    ) async throws -> ExplicitWLTProfileBinding {
+        try await assertSelectedMergedProfile()
+        let profileID = await SharedPreferences.selectedProfileID.get()
+        guard let selected = try await ProfileManager.get(profileID) else {
+            throw ControlError.selectedProfileUnavailable
+        }
+        let sharedDirectory = FilePath.sharedDirectory.standardizedFileURL
+        let profileURL = selected.path.hasPrefix("/")
+            ? URL(fileURLWithPath: selected.path).standardizedFileURL
+            : sharedDirectory.appendingPathComponent(selected.path).standardizedFileURL
+        let lastKnownGoodURL = URL(
+            fileURLWithPath: profileURL.path + ".last-known-good"
+        ).standardizedFileURL
+        guard let profileData = try readExplicitWLTProfileFile(at: profileURL),
+              let root = try JSONSerialization.jsonObject(with: profileData) as? [String: Any],
+              let dns = root["dns"] as? [String: Any],
+              dns["strategy"] as? String == "prefer_ipv4",
+              let finalTag = dns["final"] as? String,
+              let servers = dns["servers"] as? [[String: Any]],
+              let outbounds = root["outbounds"] as? [[String: Any]]
+        else {
+            throw ControlError.explicitWLTProfileGraphMismatch
+        }
+        let matchingServers = servers.filter { $0["tag"] as? String == finalTag }
+        guard matchingServers.count == 1,
+              let finalServer = matchingServers.first,
+              finalServer["type"] as? String == "tcp",
+              finalServer["detour"] as? String == "ru_or_wlt-ru",
+              let server = finalServer["server"] as? String,
+              let port = finalServer["server_port"] as? Int
+        else {
+            throw ControlError.explicitWLTProfileGraphMismatch
+        }
+        var byTag: [String: [String: Any]] = [:]
+        for outbound in outbounds {
+            guard let tag = outbound["tag"] as? String, !tag.isEmpty, byTag[tag] == nil else {
+                throw ControlError.explicitWLTProfileGraphMismatch
+            }
+            byTag[tag] = outbound
+        }
+        guard
+            byTag["ru_or_wlt-ru"]?["type"] as? String == "urltest",
+            byTag["ru_or_wlt-ru"]?["outbounds"] as? [String] == ["ru", "vless-wlt-ru"],
+            byTag["eu_or_wlt-eu"]?["type"] as? String == "urltest",
+            byTag["eu_or_wlt-eu"]?["outbounds"] as? [String] == ["eu", "vless-wlt-eu"],
+            byTag["vless-wlt-ru"]?["type"] as? String == "vless",
+            byTag["vless-wlt-ru"]?["detour"] as? String == "wlt-ru",
+            byTag["wlt-ru"]?["type"] as? String == "wlt",
+            byTag["wlt-ru"]?["route"] as? String == "ru",
+            byTag["vless-wlt-eu"]?["type"] as? String == "vless",
+            byTag["vless-wlt-eu"]?["detour"] as? String == "wlt-eu",
+            byTag["wlt-eu"]?["type"] as? String == "wlt",
+            byTag["wlt-eu"]?["route"] as? String == "eu"
+        else {
+            throw ControlError.explicitWLTProfileGraphMismatch
+        }
+        let serverLiteral = server.contains(":") ? "[\(server)]:\(port)" : "\(server):\(port)"
+        guard validLiteralIPPort(serverLiteral),
+              plan.requests.first?.server == serverLiteral else {
+            throw ControlError.explicitWLTProfileGraphMismatch
+        }
+        let lastKnownGoodData = try readExplicitWLTProfileFile(
+            at: lastKnownGoodURL,
+            required: false
+        )
+        return ExplicitWLTProfileBinding(
+            selectedID: profileID,
+            path: profileURL.path,
+            mainSHA256: sha256Hex(profileData),
+            lastKnownGoodPath: lastKnownGoodURL.path,
+            lastKnownGoodSHA256: lastKnownGoodData.map(sha256Hex)
+        )
+    }
+
+    private func validateExplicitWLTProfileBinding(
+        _ binding: ExplicitWLTProfileBinding
+    ) async throws {
+        let currentID = await SharedPreferences.selectedProfileID.get()
+        guard
+            currentID == binding.selectedID,
+            let selected = try await ProfileManager.get(currentID)
+        else {
+            throw ControlError.explicitWLTProfileGraphMismatch
+        }
+        let sharedDirectory = FilePath.sharedDirectory.standardizedFileURL
+        let profileURL = selected.path.hasPrefix("/")
+            ? URL(fileURLWithPath: selected.path).standardizedFileURL
+            : sharedDirectory.appendingPathComponent(selected.path).standardizedFileURL
+        let lastKnownGoodURL = URL(
+            fileURLWithPath: profileURL.path + ".last-known-good"
+        ).standardizedFileURL
+        guard
+            profileURL.path == binding.path,
+            lastKnownGoodURL.path == binding.lastKnownGoodPath,
+            let profileData = try readExplicitWLTProfileFile(at: profileURL),
+            sha256Hex(profileData) == binding.mainSHA256,
+            try readExplicitWLTProfileFile(at: lastKnownGoodURL, required: false)
+                .map(sha256Hex) == binding.lastKnownGoodSHA256
+        else {
+            throw ControlError.explicitWLTProfileGraphMismatch
+        }
+    }
+
+    private func readExplicitWLTProfileFile(
+        at url: URL,
+        required: Bool = true
+    ) throws -> Data? {
+        let fileManager = FileManager.default
+        let sharedDirectory = FilePath.sharedDirectory.standardizedFileURL
+        guard
+            url.path.hasPrefix(sharedDirectory.path + "/"),
+            url.resolvingSymlinksInPath() == url
+        else {
+            throw ControlError.explicitWLTProfileGraphMismatch
+        }
+        if let values = try? url.resourceValues(forKeys: [.isSymbolicLinkKey]),
+           values.isSymbolicLink == true
+        {
+            throw ControlError.explicitWLTProfileGraphMismatch
+        }
+        guard fileManager.fileExists(atPath: url.path) else {
+            if required {
+                throw ControlError.explicitWLTProfileGraphMismatch
+            }
+            return nil
+        }
+        let values = try url.resourceValues(
+            forKeys: [.isRegularFileKey, .isSymbolicLinkKey, .fileSizeKey]
+        )
+        guard
+            values.isRegularFile == true,
+            values.isSymbolicLink != true,
+            let fileSize = values.fileSize,
+            fileSize <= 16 * 1_024 * 1_024
+        else {
+            throw ControlError.explicitWLTProfileGraphMismatch
+        }
+        let data = try Data(contentsOf: url)
+        guard data.count <= 16 * 1_024 * 1_024 else {
+            throw ControlError.explicitWLTProfileGraphMismatch
+        }
+        return data
+    }
+
+    private func validateExplicitWLTResult(
+        _ result: ExplicitWLTProbeResult,
+        raw: Data,
+        request: ExplicitWLTProbeRequest,
+        requestData: Data
+    ) throws {
+        guard let object = try JSONSerialization.jsonObject(with: raw) as? [String: Any] else {
+            throw ControlError.explicitWLTResultInvalid
+        }
+        let commonKeys = Set([
+            "schema", "scope", "probe_id", "kind", "status", "error_code", "group_tag",
+            "outbound_tag", "wlt_tag", "network", "attempt", "fallback_attempted",
+            "selection_touched", "profile_touched", "instance_current", "duration_ms",
+            "request_sha256",
+        ])
+        let kindKeys = request.kind == "dns"
+            ? Set(["dns_rcode", "dns_answer_count", "dns_question_sha256", "dns_server_sha256"])
+            : Set(["http_status", "bytes_read", "destination_sha256"])
+        guard
+            Set(object.keys) == commonKeys.union(kindKeys),
+            result.schema == 1,
+            result.scope == "explicit_saved_WLT_outbound_reachability",
+            result.probeID == request.probeID,
+            result.kind == request.kind,
+            ["success", "failed"].contains(result.status),
+            result.errorCode.range(
+                of: "^[a-z0-9_]{0,64}$", options: .regularExpression
+            ) != nil,
+            result.groupTag == request.groupTag,
+            result.outboundTag == request.outboundTag,
+            result.wltTag == request.wltTag,
+            result.network == "tcp",
+            result.attempt == "primary",
+            !result.fallbackAttempted,
+            !result.selectionTouched,
+            !result.profileTouched,
+            result.durationMS >= 0,
+            result.status != "success" || result.durationMS <= request.timeoutMS,
+            result.requestSHA256 == sha256Hex(requestData),
+            (result.status == "success" && result.errorCode.isEmpty && result.instanceCurrent)
+                || (result.status == "failed" && !result.errorCode.isEmpty)
+        else {
+            throw ControlError.explicitWLTResultInvalid
+        }
+        if request.kind == "dns" {
+            guard let queryName = request.queryName, let server = request.server,
+                  let rcode = result.dnsRcode, (-1 ... 15).contains(rcode),
+                  let answerCount = result.dnsAnswerCount, answerCount >= 0,
+                  result.dnsQuestionSHA256 == sha256Hex(
+                    Data(queryName.lowercased().trimmingCharacters(in: CharacterSet(charactersIn: ".")).utf8)
+                  ),
+                  result.dnsServerSHA256 == sha256Hex(Data(server.utf8)),
+                  result.httpStatus == nil, result.bytesRead == nil,
+                  result.destinationSHA256 == nil,
+                  result.status != "success" || (rcode == 0 && answerCount > 0)
+            else {
+                throw ControlError.explicitWLTResultInvalid
+            }
+        } else {
+            guard let expectedStatus = request.expectedStatus,
+                  let expectedBytes = request.expectedBytes,
+                  let maximum = request.maxReadBytes,
+                  let status = result.httpStatus, status >= 0,
+                  let bytes = result.bytesRead, (0 ... maximum).contains(bytes),
+                  let url = request.url,
+                  result.destinationSHA256 == sha256Hex(Data(url.utf8)),
+                  result.dnsRcode == nil, result.dnsAnswerCount == nil,
+                  result.dnsQuestionSHA256 == nil, result.dnsServerSHA256 == nil,
+                  result.status != "success" || (status == expectedStatus && bytes == expectedBytes)
+            else {
+                throw ControlError.explicitWLTResultInvalid
+            }
+        }
+    }
+
+    private func sha256Hex(_ data: Data) -> String {
+        SHA256.hash(data: data).map { String(format: "%02x", $0) }.joined()
+    }
+
     private func writeProtectedAtomically(_ data: Data, to destination: URL) throws {
         let fileManager = FileManager.default
         let directory = destination.deletingLastPathComponent()
@@ -1201,6 +1926,7 @@ actor WLTDeviceControl {
         var results: [WorkloadProbeResult] = []
         for probe in plan.probes {
             let startedAt = unixMilliseconds()
+            let metricsCollector = WorkloadMetricsCollector()
             var statusCode = -1
             var bytesRead = 0
             var classification = "request_failed"
@@ -1216,6 +1942,11 @@ actor WLTDeviceControl {
                     throw ControlError.invalidWorkload
                 }
                 let configuration = URLSessionConfiguration.ephemeral
+                // A Wi-Fi control workload must not silently fall back to the
+                // cellular interface while the device reports Wi-Fi ready.
+                // LTE workloads keep cellular access enabled; the host-side
+                // reviewer still proves the actual interface from metrics.
+                configuration.allowsCellularAccess = plan.requiredTransport != "wifi"
                 configuration.requestCachePolicy = .reloadIgnoringLocalAndRemoteCacheData
                 configuration.timeoutIntervalForRequest = TimeInterval(probe.timeoutSeconds)
                 configuration.timeoutIntervalForResource = TimeInterval(probe.timeoutSeconds)
@@ -1226,12 +1957,24 @@ actor WLTDeviceControl {
                 request.cachePolicy = .reloadIgnoringLocalAndRemoteCacheData
                 request.timeoutInterval = TimeInterval(probe.timeoutSeconds)
                 request.setValue("no-cache", forHTTPHeaderField: "Cache-Control")
-                let (data, response) = try await session.data(for: request)
+                // The per-task delegate preserves data(for:)'s structured
+                // cancellation. Foundation delivers metrics before task
+                // completion, so reading the collector after this call returns
+                // or throws requires no wait and also retains failed-task metrics.
+                let (data, response) = try await session.data(
+                    for: request,
+                    delegate: metricsCollector
+                )
                 statusCode = (response as? HTTPURLResponse)?.statusCode ?? -1
                 bytesRead = data.count
-                let statusAccepted = probe.acceptedStatusCodes.isEmpty
-                    ? (200 ..< 400).contains(statusCode)
-                    : probe.acceptedStatusCodes.contains(statusCode)
+                let statusAccepted: Bool
+                if probe.acceptedStatusCodes.isEmpty {
+                    statusAccepted = (response as? HTTPURLResponse).map { response in
+                        (200 ..< 400).contains(response.statusCode)
+                    } ?? false
+                } else {
+                    statusAccepted = probe.acceptedStatusCodes.contains(statusCode)
+                }
                 if !statusAccepted {
                     classification = "status_failed"
                 } else if bytesRead < probe.minimumBytes {
@@ -1242,14 +1985,20 @@ actor WLTDeviceControl {
             } catch {
                 probeError = error
             }
+            // Preserve the original elapsed endpoint. Optional metrics are read
+            // only after this timestamp and are never awaited.
+            let finishedAt = unixMilliseconds()
+            let taskMetrics = metricsCollector.snapshot()
             let nsError = probeError as NSError?
             results.append(WorkloadProbeResult(
                 name: probe.name,
                 success: probeError == nil && classification == "ok",
                 classification: classification,
                 statusCode: statusCode,
-                elapsedMS: max(0, unixMilliseconds() - startedAt),
+                elapsedMS: max(0, finishedAt - startedAt),
                 bytesRead: bytesRead,
+                taskMetricsStatus: taskMetrics == nil ? "missing" : "collected",
+                taskMetrics: taskMetrics,
                 errorDomain: nsError?.domain,
                 errorCode: nsError?.code
             ))
@@ -1277,12 +2026,13 @@ actor WLTDeviceControl {
         logClient.connect()
         defer { logClient.disconnect() }
         try? await Task.sleep(nanoseconds: 500_000_000)
-        let initialCount = await MainActor.run { logClient.logList.count }
+        // The log buffer evicts old entries at its limit, so its count is not a cursor.
+        let initialLogIDs = await MainActor.run { Set(logClient.logList.map(\.id)) }
         let workload = try await runWorkload(plan)
         let deadline = Date().addingTimeInterval(35)
         while Date() < deadline {
             let messages = await MainActor.run {
-                logClient.logList.dropFirst(initialCount).map(\.message)
+                logClient.logList.filter { !initialLogIDs.contains($0.id) }.map(\.message)
             }
             for message in messages.reversed() where message.contains("wlt service stats ") {
                 var counters: [String: Int64] = [:]
@@ -1307,13 +2057,18 @@ actor WLTDeviceControl {
     }
 
     private func selectWorkloadRoute(_ route: String) async throws {
-        guard route == "eu" else {
+        guard route == "eu" || route == "ru" else {
             throw ControlError.invalidWorkload
         }
-        let selections = [
-            ("whitelist-exit", "eu"),
-            ("eu_or_wlt-eu", "vless-wlt-eu"),
-        ]
+        let selections: [(String, String)] = route == "ru"
+            ? [
+                ("whitelist-exit", "ru"),
+                ("ru_or_wlt-ru", "vless-wlt-ru"),
+            ]
+            : [
+                ("whitelist-exit", "eu"),
+                ("eu_or_wlt-eu", "vless-wlt-eu"),
+            ]
         var selected = false
         for (group, outbound) in selections {
             do {
@@ -1399,17 +2154,14 @@ actor WLTDeviceControl {
 
     private func stop(_ profile: ExtensionProfile) async throws -> NEVPNStatus {
         let initialStatus = await profile.status
-        switch initialStatus {
-        case .disconnected, .invalid:
-            return initialStatus
-        case .disconnecting:
-            return try await waitForStatus(profile, desired: .disconnected)
-        case .connecting, .connected, .reasserting:
-            try await profile.stop()
-            return try await waitForStatus(profile, desired: .disconnected)
-        @unknown default:
-            throw ControlError.unexpectedStatus
+        // The extension can be killed during startup before its status is observed.
+        // stop() also disables on-demand, so it must run even when NE reports
+        // disconnected or disconnecting; otherwise iOS immediately relaunches it.
+        try await profile.stop()
+        if initialStatus == .invalid {
+            return .invalid
         }
+        return try await waitForStatus(profile, desired: .disconnected)
     }
 
     private func waitForStatus(
@@ -1443,32 +2195,79 @@ actor WLTDeviceControl {
         timeout: TimeInterval = 15,
         requestTimeout: TimeInterval = 10
     ) async throws {
+        try Task.checkCancellation()
+        guard timeout.isFinite, timeout > 0, requestTimeout.isFinite, requestTimeout > 0 else {
+            throw ControlError.probeFailed
+        }
+        var timebase = mach_timebase_info_data_t()
+        guard mach_timebase_info(&timebase) == KERN_SUCCESS, timebase.numer > 0, timebase.denom > 0 else {
+            throw ControlError.probeFailed
+        }
+        let secondsPerTick = Double(timebase.numer) / Double(timebase.denom) / 1e9
+        let startedAt = mach_continuous_time()
+        let elapsed: @Sendable () -> TimeInterval = {
+            Double(mach_continuous_time() &- startedAt) * secondsPerTick
+        }
+        let sleepUntil: @Sendable (TimeInterval) async throws -> Void = { target in
+            while true {
+                try Task.checkCancellation()
+                let remaining = min(target, timeout) - elapsed()
+                guard remaining > 0 else { return }
+                // Legacy Task.sleep may pause during system sleep. Short slices
+                // recheck the same continuous deadline promptly after wake.
+                try await Task.sleep(nanoseconds: UInt64(min(remaining, 0.05) * 1e9))
+            }
+        }
         let endpoint = URL(string: "https://rozetked.me/")!
-        let deadline = Date().addingTimeInterval(timeout)
-        let configuration = URLSessionConfiguration.ephemeral
-        configuration.requestCachePolicy = .reloadIgnoringLocalAndRemoteCacheData
-        configuration.timeoutIntervalForRequest = requestTimeout
-        configuration.urlCache = nil
-        let session = URLSession(configuration: configuration)
-        defer { session.invalidateAndCancel() }
         var lastError: Error?
-        while Date() < deadline {
+        while elapsed() < timeout {
+            try Task.checkCancellation()
+            let remainingSeconds = timeout - elapsed()
+            guard remainingSeconds > 0 else { break }
+            // A timed-out URLSession is invalidated below.  Create a fresh
+            // session for every bounded attempt so one transient failure does
+            // not poison all retries within the same control request.
+            let configuration = URLSessionConfiguration.ephemeral
+            configuration.requestCachePolicy = .reloadIgnoringLocalAndRemoteCacheData
+            configuration.timeoutIntervalForRequest = min(requestTimeout, remainingSeconds)
+            configuration.timeoutIntervalForResource = remainingSeconds
+            configuration.urlCache = nil
+            let session = URLSession(configuration: configuration)
             var request = URLRequest(url: endpoint)
             request.cachePolicy = .reloadIgnoringLocalAndRemoteCacheData
-            request.timeoutInterval = requestTimeout
+            request.timeoutInterval = min(requestTimeout, remainingSeconds)
             request.setValue("no-cache", forHTTPHeaderField: "Cache-Control")
+            let boundedRequest = request
             do {
-                let (_, response) = try await session.data(for: request)
-                if let response = response as? HTTPURLResponse,
-                    (200 ..< 400).contains(response.statusCode)
-                {
-                    return
+                let accepted = try await withThrowingTaskGroup(of: Bool.self) { group in
+                    group.addTask {
+                        let (_, response) = try await session.data(for: boundedRequest)
+                        return (response as? HTTPURLResponse).map {
+                            (200 ..< 400).contains($0.statusCode)
+                        } ?? false
+                    }
+                    group.addTask {
+                        try await sleepUntil(timeout)
+                        // Cancel the underlying URLSession operation as well as
+                        // its task. The total deadline includes response-body reads.
+                        session.invalidateAndCancel()
+                        throw URLError(.timedOut)
+                    }
+                    defer { group.cancelAll() }
+                    guard let accepted = try await group.next() else {
+                        throw CancellationError()
+                    }
+                    return accepted
                 }
+                if accepted && elapsed() < timeout { return }
             } catch {
+                try Task.checkCancellation()
                 lastError = error
             }
-            try await Task.sleep(nanoseconds: 200_000_000)
+            session.invalidateAndCancel()
+            try await sleepUntil(min(elapsed() + 0.2, timeout))
         }
+        try Task.checkCancellation()
         if let lastError {
             throw lastError
         }
@@ -1521,6 +2320,126 @@ actor WLTDeviceControl {
         throw ControlError.timeout
     }
 
+    private func loadCleanGroupSelections() async throws -> [GroupSelection] {
+        let expectedTag = "whitelist-exit"
+        let expectedItems = ["ru", "eu"]
+        let commandClient = await MainActor.run { () -> CommandClient in
+            let client = CommandClient(.groups)
+            client.connect()
+            return client
+        }
+        defer {
+            Task { @MainActor in
+                commandClient.disconnect()
+            }
+        }
+
+        let deadline = Date().addingTimeInterval(12)
+        while Date() < deadline {
+            let selections = await MainActor.run { () -> [GroupSelection] in
+                guard let groups = commandClient.groups else { return [] }
+                return groups.compactMap { group in
+                    guard group.tag == expectedTag else { return nil }
+                    let iterator = group.getItems()
+                    var available: [String] = []
+                    while iterator?.hasNext() == true {
+                        guard let item = iterator?.next() else { continue }
+                        available.append(item.tag)
+                    }
+                    guard available == expectedItems, group.selected == "eu" else { return nil }
+                    return GroupSelection(tag: group.tag, selected: group.selected, available: available)
+                }.sorted { $0.tag < $1.tag }
+            }
+            // Exactly one exposed root record is required.  The daemon does
+            // not publish the statically validated one-member ru/eu groups.
+            if selections.count == 1 {
+                return selections
+            }
+            try await Task.sleep(nanoseconds: 200_000_000)
+        }
+        throw ControlError.timeout
+    }
+
+    private func loadRouteDiagnostics() async -> RouteDiagnostics {
+        let allowedCategories = [
+            "instagram-family", "meta-family", "tiktok-family",
+            "youtube-family", "github-family", "neutral-example",
+        ]
+        let allowedOutbounds = ["wlt-eu", "wlt-ru", "direct", "other"]
+        let allowedNetworks = ["tcp", "udp"]
+        let allowedAttempts = ["primary", "fallback"]
+        let commandClient = await MainActor.run { () -> CommandClient in
+            let client = CommandClient(.log, logMaxLines: 3_000)
+            client.connect()
+            return client
+        }
+        defer {
+            Task { @MainActor in
+                commandClient.disconnect()
+            }
+        }
+        let deadline = Date().addingTimeInterval(2)
+        while Date() < deadline {
+            let connected = await MainActor.run { commandClient.isConnected }
+            if connected {
+                try? await Task.sleep(nanoseconds: 300_000_000)
+                break
+            }
+            try? await Task.sleep(nanoseconds: 100_000_000)
+        }
+        let messages = await MainActor.run { commandClient.logList.map(\.message) }
+        var counts: [String: [String: Int]] = [
+            "instagram-family": [:],
+            "meta-family": [:],
+            "tiktok-family": [:],
+            "youtube-family": [:],
+            "github-family": [:],
+            "neutral-example": [:],
+        ]
+        for message in messages {
+            guard message.components(separatedBy: "wlt-route-leaf-category=").count == 2,
+                  !message.contains("wlt-route-policy-category="),
+                  !message.contains("wlt-route-category=")
+            else { continue }
+            for category in allowedCategories {
+                let marker = "wlt-route-leaf-category=\(category) "
+                guard let markerRange = message.range(of: marker) else { continue }
+                let remainder = message[markerRange.upperBound...]
+                let allowedFieldNames = ["outbound-class", "network", "attempt"]
+                var fields: [String: String] = [:]
+                var malformed = false
+                for token in remainder.split(whereSeparator: \.isWhitespace) {
+                    let parts = token.split(separator: "=", maxSplits: 1, omittingEmptySubsequences: false)
+                    guard parts.count == 2 else {
+                        malformed = true
+                        break
+                    }
+                    let name = String(parts[0])
+                    let value = String(parts[1])
+                    guard allowedFieldNames.contains(name), !value.isEmpty, fields[name] == nil else {
+                        malformed = true
+                        break
+                    }
+                    fields[name] = value
+                }
+                guard !malformed, fields.count == allowedFieldNames.count,
+                      let outbound = fields["outbound-class"], allowedOutbounds.contains(outbound),
+                      let network = fields["network"], allowedNetworks.contains(network),
+                      let attempt = fields["attempt"], allowedAttempts.contains(attempt)
+                else { continue }
+                counts[category, default: [:]][outbound, default: 0] += 1
+            }
+        }
+        return RouteDiagnostics(
+            instagramFamily: counts["instagram-family"] ?? [:],
+            metaFamily: counts["meta-family"] ?? [:],
+            tiktokFamily: counts["tiktok-family"] ?? [:],
+            youtubeFamily: counts["youtube-family"] ?? [:],
+            githubFamily: counts["github-family"] ?? [:],
+            neutralExample: counts["neutral-example"] ?? [:]
+        )
+    }
+
     private func writeResult(
         request: Request,
         receivedAt: Int64,
@@ -1533,8 +2452,20 @@ actor WLTDeviceControl {
     ) {
         let finishedAt = unixMilliseconds()
         let nsError = error as NSError?
+        let underlyingError = nsError?.userInfo[NSUnderlyingErrorKey] as? NSError
+        func sanitized(_ value: String?) -> String? {
+            guard let value, !value.isEmpty else { return nil }
+            return value
+                .replacingOccurrences(
+                    of: "https?://[^\\s]+",
+                    with: "<redacted-url>",
+                    options: .regularExpression
+                )
+                .prefix(512)
+                .description
+        }
         let result = Result(
-            schema: 7,
+            schema: 8,
             requestID: request.id.uuidString.lowercased(),
             action: request.action,
             state: state,
@@ -1557,14 +2488,23 @@ actor WLTDeviceControl {
             runtimeParameters: outcome?.runtimeParameters,
             workloadRoute: outcome?.workload?.route,
             workloadProbes: outcome?.workload?.probes,
+            explicitSavedWLTOutboundReachability:
+                outcome?.explicitSavedWLTOutboundReachability,
             groupSelections: outcome?.groupSelections,
+            routeDiagnostics: outcome?.routeDiagnostics,
+            routeDiagnosticsScope: outcome?.routeDiagnosticsScope
+                ?? (outcome?.routeDiagnostics == nil ? nil : "leaf_selection"),
             transportCounters: outcome?.transportCounters,
             identityRing: outcome?.identityRing,
             identityRingImport: outcome?.identityRingImport,
             networkInitial: networkInitial,
             networkFinal: networkFinal,
             errorDomain: nsError?.domain,
-            errorCode: nsError?.code
+            errorCode: nsError?.code,
+            errorMessage: sanitized(nsError?.localizedDescription),
+            underlyingErrorDomain: underlyingError?.domain,
+            underlyingErrorCode: underlyingError?.code,
+            underlyingErrorMessage: sanitized(underlyingError?.localizedDescription)
         )
         do {
             let directory = try resultDirectory()
@@ -1641,6 +2581,163 @@ actor WLTDeviceControl {
         )
     }
 
+    private func stateExportURL(_ requestID: UUID) -> URL {
+        FilePath.cacheDirectory.appendingPathComponent(
+            "wlt-test-state-export-\(requestID.uuidString.lowercased())",
+            isDirectory: true
+        )
+    }
+
+    private func exportState(to destination: URL) async throws {
+        let fileManager = FileManager.default
+        let shared = FilePath.sharedDirectory.standardizedFileURL
+        let profiles = (try await ProfileManager.list()).sorted { $0.mustID < $1.mustID }
+        guard !profiles.isEmpty, profiles.count <= 64 else {
+            throw ControlError.stateExportChangedDuringCapture
+        }
+
+        struct Captured {
+            let databasePath: String
+            let relativePath: String
+            let main: Data
+            let lastKnownGood: Data?
+        }
+        func resolve(_ rawPath: String) throws -> (URL, String) {
+            let url = rawPath.hasPrefix("/")
+                ? URL(fileURLWithPath: rawPath).standardizedFileURL
+                : shared.appendingPathComponent(rawPath).standardizedFileURL
+            guard url.path.hasPrefix(shared.path + "/") else {
+                throw ControlError.stateExportInvalidProfilePath
+            }
+            guard url.resolvingSymlinksInPath() == url else {
+                throw ControlError.stateExportInvalidProfilePath
+            }
+            let values = try url.resourceValues(forKeys: [.isRegularFileKey, .isSymbolicLinkKey])
+            guard values.isRegularFile == true, values.isSymbolicLink != true else {
+                throw ControlError.stateExportInvalidProfilePath
+            }
+            return (url, String(url.path.dropFirst(shared.path.count + 1)))
+        }
+        func readCapture() throws -> [Captured] {
+            var seen = Set<String>()
+            var totalBytes = 0
+            return try profiles.map { profile in
+                let (url, relativePath) = try resolve(profile.path)
+                guard seen.insert(relativePath).inserted else {
+                    throw ControlError.stateExportInvalidProfilePath
+                }
+                let mainSize = try url.resourceValues(forKeys: [.fileSizeKey]).fileSize
+                guard let mainSize, mainSize <= 16 * 1_024 * 1_024 else {
+                    throw ControlError.stateExportChangedDuringCapture
+                }
+                let main = try Data(contentsOf: url)
+                let lastKnownGoodURL = URL(fileURLWithPath: url.path + ".last-known-good")
+                let lastKnownGood: Data?
+                if let values = try? lastKnownGoodURL.resourceValues(forKeys: [.isSymbolicLinkKey]),
+                   values.isSymbolicLink == true
+                {
+                    throw ControlError.stateExportInvalidProfilePath
+                }
+                if fileManager.fileExists(atPath: lastKnownGoodURL.path) {
+                    let values = try lastKnownGoodURL.resourceValues(
+                        forKeys: [.isRegularFileKey, .isSymbolicLinkKey, .fileSizeKey]
+                    )
+                    guard lastKnownGoodURL.resolvingSymlinksInPath() == lastKnownGoodURL,
+                          values.isRegularFile == true,
+                          values.isSymbolicLink != true,
+                          let fileSize = values.fileSize,
+                          fileSize <= 16 * 1_024 * 1_024
+                    else {
+                        throw ControlError.stateExportInvalidProfilePath
+                    }
+                    lastKnownGood = try Data(contentsOf: lastKnownGoodURL)
+                } else {
+                    lastKnownGood = nil
+                }
+                guard main.count <= 16 * 1_024 * 1_024,
+                      (lastKnownGood?.count ?? 0) <= 16 * 1_024 * 1_024
+                else {
+                    throw ControlError.stateExportChangedDuringCapture
+                }
+                totalBytes += main.count + (lastKnownGood?.count ?? 0)
+                guard totalBytes <= 32 * 1_024 * 1_024 else {
+                    throw ControlError.stateExportChangedDuringCapture
+                }
+                return Captured(databasePath: profile.path, relativePath: relativePath,
+                                main: main, lastKnownGood: lastKnownGood)
+            }
+        }
+        func digest(_ data: Data) -> String {
+            SHA256.hash(data: data).map { String(format: "%02x", $0) }.joined()
+        }
+
+        let before = try readCapture()
+        try fileManager.createDirectory(
+            at: destination,
+            withIntermediateDirectories: false,
+            attributes: [.posixPermissions: 0o700,
+                         .protectionKey: FileProtectionType.completeUntilFirstUserAuthentication]
+        )
+        let databaseURL = destination.appendingPathComponent("settings.db")
+        let databasePaths = try await ProfileManager.backupProfileDatabase(to: databaseURL)
+        try fileManager.setAttributes(
+            [.posixPermissions: 0o600,
+             .protectionKey: FileProtectionType.completeUntilFirstUserAuthentication],
+            ofItemAtPath: databaseURL.path
+        )
+        let after = try readCapture()
+        guard before.map(\.databasePath) == databasePaths,
+              before.count == after.count,
+              before.indices.allSatisfy({ index in
+                  before[index].databasePath == after[index].databasePath
+                      && before[index].relativePath == after[index].relativePath
+                      && before[index].main == after[index].main
+                      && before[index].lastKnownGood == after[index].lastKnownGood
+              })
+        else {
+            throw ControlError.stateExportChangedDuringCapture
+        }
+
+        let filesURL = destination.appendingPathComponent("configs", isDirectory: true)
+        try fileManager.createDirectory(at: filesURL, withIntermediateDirectories: false,
+                                        attributes: [.posixPermissions: 0o700])
+        var entries: [[String: Any]] = []
+        for (index, capture) in before.enumerated() {
+            let base = String(format: "%03d", index)
+            let mainName = "\(base).json"
+            let mainURL = filesURL.appendingPathComponent(mainName)
+            try writeProtectedAtomically(capture.main, to: mainURL)
+            try fileManager.setAttributes([.posixPermissions: 0o600], ofItemAtPath: mainURL.path)
+            var entry: [String: Any] = [
+                "source_relative_path": capture.relativePath,
+                "database_path": capture.databasePath,
+                "main": ["path": "configs/\(mainName)", "bytes": capture.main.count,
+                         "sha256": digest(capture.main)],
+                "last_known_good_present": capture.lastKnownGood != nil,
+            ]
+            if let lkg = capture.lastKnownGood {
+                let lkgName = "\(base).last-known-good.json"
+                let lkgURL = filesURL.appendingPathComponent(lkgName)
+                try writeProtectedAtomically(lkg, to: lkgURL)
+                try fileManager.setAttributes([.posixPermissions: 0o600], ofItemAtPath: lkgURL.path)
+                entry["last_known_good"] = ["path": "configs/\(lkgName)", "bytes": lkg.count,
+                                             "sha256": digest(lkg)]
+            }
+            entries.append(entry)
+        }
+        let databaseData = try Data(contentsOf: databaseURL)
+        let manifest: [String: Any] = [
+            "schema": 1,
+            "database": ["path": "settings.db", "bytes": databaseData.count,
+                         "sha256": digest(databaseData)],
+            "profiles": entries,
+        ]
+        let manifestData = try JSONSerialization.data(withJSONObject: manifest, options: [.sortedKeys])
+        let manifestURL = destination.appendingPathComponent("manifest.json")
+        try writeProtectedAtomically(manifestData, to: manifestURL)
+        try fileManager.setAttributes([.posixPermissions: 0o600], ofItemAtPath: manifestURL.path)
+    }
+
     private func loadProfilePlan(for action: Action, at url: URL) throws -> ProfilePlan? {
         guard action == .bootstrapProfile || action == .upsertProfile else {
             return nil
@@ -1692,12 +2789,14 @@ actor WLTDeviceControl {
             guard try await ProfileManager.list().isEmpty else {
                 throw ControlError.profileStoreNotEmpty
             }
-            let remoteContent = try await HTTPClient.getStringAsync(plan.url)
+            let fetchedContent = try await HTTPClient.getStringAsync(plan.url)
+            let remoteContent = try WhitelistTransportConfig.compatibleProfile(fetchedContent)
             var configError: NSError?
             LibboxCheckConfig(remoteContent, &configError)
             if let configError {
                 throw configError
             }
+            try await WhitelistTransportConfig.prepareOfflineRuleSets(remoteContent, profileURL: plan.url)
             let nextProfileID = try await ProfileManager.nextID()
             let profileDirectory = FilePath.sharedDirectory.appendingPathComponent(
                 "configs",
@@ -1780,12 +2879,14 @@ actor WLTDeviceControl {
             try await existing.updateRemoteProfile()
             selectedProfile = existing
         } else {
-            let remoteContent = try await HTTPClient.getStringAsync(plan.url)
+            let fetchedContent = try await HTTPClient.getStringAsync(plan.url)
+            let remoteContent = try WhitelistTransportConfig.compatibleProfile(fetchedContent)
             var configError: NSError?
             LibboxCheckConfig(remoteContent, &configError)
             if let configError {
                 throw configError
             }
+            try await WhitelistTransportConfig.prepareOfflineRuleSets(remoteContent, profileURL: plan.url)
             let nextProfileID = try await ProfileManager.nextID()
             let profileDirectory = FilePath.sharedDirectory.appendingPathComponent(
                 "configs",
@@ -1824,7 +2925,7 @@ actor WLTDeviceControl {
             throw ControlError.invalidWorkload
         }
         let plan = try JSONDecoder().decode(WorkloadPlan.self, from: Data(contentsOf: url))
-        guard plan.schema == 1, plan.route == "eu", (1 ... 32).contains(plan.probes.count) else {
+        guard plan.schema == 1, ["eu", "ru"].contains(plan.route), (1 ... 32).contains(plan.probes.count) else {
             throw ControlError.invalidWorkload
         }
         var names = Set<String>()
@@ -1846,6 +2947,124 @@ actor WLTDeviceControl {
             }
         }
         return plan
+    }
+
+    private func loadExplicitWLTPlan(for action: Action, at url: URL) throws -> ExplicitWLTPlan? {
+        guard action == .explicitSavedWLTOutboundReachability else {
+            return nil
+        }
+        guard
+            FileManager.default.fileExists(atPath: url.path),
+            let data = try? Data(contentsOf: url),
+            data.count <= 32 * 1024,
+            let root = try? JSONSerialization.jsonObject(with: data) as? [String: Any],
+            Set(root.keys) == Set(["schema", "scope", "requests"]),
+            let rawRequests = root["requests"] as? [[String: Any]],
+            rawRequests.count == 3
+        else {
+            throw ControlError.invalidExplicitWLTPlan
+        }
+        let plan = try JSONDecoder().decode(ExplicitWLTPlan.self, from: data)
+        guard
+            plan.schema == 1,
+            plan.scope == "explicit_saved_WLT_outbound_reachability",
+            plan.requests.count == 3,
+            plan.requests.map(\.kind) == ["dns", "https", "https"]
+        else {
+            throw ControlError.invalidExplicitWLTPlan
+        }
+        var probeIDs = Set<String>()
+        let common = Set([
+            "schema", "probe_id", "kind", "group_tag", "outbound_tag", "wlt_tag",
+            "timeout_ms",
+        ])
+        for (index, request) in plan.requests.enumerated() {
+            let rawKeys = Set(rawRequests[index].keys)
+            guard
+                request.schema == 1,
+                request.probeID.range(
+                    of: "^[A-Za-z0-9][A-Za-z0-9._-]{0,63}$", options: .regularExpression
+                ) != nil,
+                probeIDs.insert(request.probeID).inserted,
+                (1 ... 90_000).contains(request.timeoutMS)
+            else {
+                throw ControlError.invalidExplicitWLTPlan
+            }
+            if request.kind == "dns" {
+                guard
+                    index == 0,
+                    rawKeys == common.union(["server", "query_name"]),
+                    request.groupTag == "ru_or_wlt-ru",
+                    request.outboundTag == "vless-wlt-ru",
+                    request.wltTag == "wlt-ru",
+                    let server = request.server,
+                    validLiteralIPPort(server),
+                    let queryName = request.queryName?.lowercased(),
+                    queryName.range(
+                        of: "^[a-z0-9](?:[a-z0-9-]{0,61}[a-z0-9])?(?:\\.[a-z0-9](?:[a-z0-9-]{0,61}[a-z0-9])?)+$",
+                        options: .regularExpression
+                    ) != nil,
+                    queryName.count <= 253,
+                    queryName.hasSuffix(".vercel.app"),
+                    request.url == nil,
+                    request.expectedStatus == nil,
+                    request.expectedBytes == nil,
+                    request.maxReadBytes == nil
+                else {
+                    throw ControlError.invalidExplicitWLTPlan
+                }
+            } else {
+                guard
+                    rawKeys == common.union([
+                        "url", "expected_status", "expected_bytes", "max_read_bytes",
+                    ]),
+                    request.groupTag == "eu_or_wlt-eu",
+                    request.outboundTag == "vless-wlt-eu",
+                    request.wltTag == "wlt-eu",
+                    request.server == nil,
+                    request.queryName == nil,
+                    let url = request.url
+                else {
+                    throw ControlError.invalidExplicitWLTPlan
+                }
+                if index == 1 {
+                    guard
+                        url == "https://cp.cloudflare.com/generate_204",
+                        request.expectedStatus == 204,
+                        request.expectedBytes == 0,
+                        request.maxReadBytes == 1
+                    else {
+                        throw ControlError.invalidExplicitWLTPlan
+                    }
+                } else {
+                    guard
+                        url.range(
+                            of: "^https://speed\\.cloudflare\\.com/__down\\?bytes=1048576&seed=[A-Za-z0-9._-]{1,64}$",
+                            options: .regularExpression
+                        ) != nil,
+                        request.expectedStatus == 200,
+                        request.expectedBytes == 1_048_576,
+                        request.maxReadBytes == 1_048_577
+                    else {
+                        throw ControlError.invalidExplicitWLTPlan
+                    }
+                }
+            }
+        }
+        return plan
+    }
+
+    private func validLiteralIPPort(_ value: String) -> Bool {
+        if value.hasPrefix("["), let closing = value.firstIndex(of: "]") {
+            let address = String(value[value.index(after: value.startIndex) ..< closing])
+            let suffix = value[value.index(after: closing)...]
+            guard suffix.first == ":", let port = Int(suffix.dropFirst()) else { return false }
+            return IPv6Address(address) != nil && (1 ... 65_535).contains(port)
+        }
+        guard let separator = value.lastIndex(of: ":") else { return false }
+        let address = String(value[..<separator])
+        guard let port = Int(value[value.index(after: separator)...]) else { return false }
+        return IPv4Address(address) != nil && (1 ... 65_535).contains(port)
     }
 
     private func loadRuntimeCandidate(
@@ -1907,6 +3126,23 @@ actor WLTDeviceControl {
         pruneProfileFiles(prefix: "wlt-test-profile-export-", excluding: current)
     }
 
+    private func pruneStateExports(excluding current: URL) {
+        let directory = current.deletingLastPathComponent()
+        guard let files = try? FileManager.default.contentsOfDirectory(
+            at: directory,
+            includingPropertiesForKeys: [.isDirectoryKey],
+            options: [.skipsHiddenFiles]
+        ) else {
+            return
+        }
+        for file in files where
+            file.lastPathComponent != current.lastPathComponent
+            && file.lastPathComponent.hasPrefix("wlt-test-state-export-")
+        {
+            try? FileManager.default.removeItem(at: file)
+        }
+    }
+
     private func pruneIdentityRingImports(excluding current: [URL]) {
         guard let first = current.first else {
             return
@@ -1955,12 +3191,18 @@ actor WLTDeviceControl {
         monitor.cancel()
         let telephony = CTTelephonyNetworkInfo()
         let radioByService = telephony.serviceCurrentRadioAccessTechnology ?? [:]
-        let radioValues = radioByService.values.sorted()
+        let radioTechnologies = Array(Set(radioByService.values.compactMap {
+            Self.sanitizedRadioTechnology($0)
+        })).sorted()
         let cellularServiceCount = max(
             radioByService.count,
             telephony.serviceSubscriberCellularProviders?.count ?? 0
         )
-        let dataServiceIDHash = telephony.dataServiceIdentifier.flatMap { identifier in
+        let dataServiceIdentifier = telephony.dataServiceIdentifier
+        let activeDataRadioTechnology = dataServiceIdentifier.flatMap { identifier in
+            Self.sanitizedRadioTechnology(radioByService[identifier])
+        }
+        let dataServiceIDHash = dataServiceIdentifier.flatMap { identifier in
             identifier.data(using: .utf8).map { data in
                 SHA256.hash(data: data)
                     .prefix(6)
@@ -1968,16 +3210,53 @@ actor WLTDeviceControl {
                     .joined()
             }
         }
+        let singleServiceRadioTechnology = radioByService.count == 1
+            ? Self.sanitizedRadioTechnology(radioByService.values.first)
+            : nil
+        let radioTechnology: String
+        let radioTechnologySource: String
+        if let activeDataRadioTechnology {
+            radioTechnology = activeDataRadioTechnology
+            radioTechnologySource = "active_data_service"
+        } else if let singleServiceRadioTechnology {
+            radioTechnology = singleServiceRadioTechnology
+            radioTechnologySource = "single_service"
+        } else {
+            radioTechnology = "unknown"
+            radioTechnologySource = "unavailable"
+        }
         return NetworkSnapshot(
             status: path.status == .satisfied ? "satisfied" : "unsatisfied",
             cellular: path.usesInterfaceType(.cellular),
             wifi: path.usesInterfaceType(.wifi),
-            radioTechnology: radioValues.isEmpty
-                ? "unknown"
-                : radioValues.joined(separator: ","),
+            radioTechnology: radioTechnology,
+            radioTechnologies: radioTechnologies,
+            radioTechnologySource: radioTechnologySource,
             cellularServiceCount: cellularServiceCount,
             dataServiceIDHash: dataServiceIDHash
         )
+    }
+
+    private static func sanitizedRadioTechnology(_ technology: String?) -> String? {
+        guard let technology else {
+            return nil
+        }
+        let allowed = [
+            CTRadioAccessTechnologyGPRS,
+            CTRadioAccessTechnologyEdge,
+            CTRadioAccessTechnologyWCDMA,
+            CTRadioAccessTechnologyHSDPA,
+            CTRadioAccessTechnologyHSUPA,
+            CTRadioAccessTechnologyCDMA1x,
+            CTRadioAccessTechnologyCDMAEVDORev0,
+            CTRadioAccessTechnologyCDMAEVDORevA,
+            CTRadioAccessTechnologyCDMAEVDORevB,
+            CTRadioAccessTechnologyeHRPD,
+            CTRadioAccessTechnologyLTE,
+            CTRadioAccessTechnologyNRNSA,
+            CTRadioAccessTechnologyNR,
+        ]
+        return allowed.contains(technology) ? technology : nil
     }
 
     private func pruneResults(in directory: URL, keeping newestCount: Int = 64) {

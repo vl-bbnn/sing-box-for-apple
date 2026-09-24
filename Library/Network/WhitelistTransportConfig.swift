@@ -1,6 +1,10 @@
 import Foundation
 
 #if SFI_DEV
+  import CryptoKit
+#endif
+
+#if SFI_DEV
   import CoreFoundation
 #endif
 
@@ -18,6 +22,9 @@ public enum WhitelistTransportConfig {
     public let peerWriteBuffer: Int
     public let kcpWindow: Int
     public let kcpBuffer: Int
+    public let vlessMuxProtocol: String?
+    public let vlessMuxMaxConnections: Int?
+    public let vlessMuxMinStreams: Int?
 
     enum CodingKeys: String, CodingKey {
       case maxActive = "max_active"
@@ -29,6 +36,9 @@ public enum WhitelistTransportConfig {
       case peerWriteBuffer = "peer_write_buffer"
       case kcpWindow = "kcp_window"
       case kcpBuffer = "kcp_buffer"
+      case vlessMuxProtocol = "vless_mux_protocol"
+      case vlessMuxMaxConnections = "vless_mux_max_connections"
+      case vlessMuxMinStreams = "vless_mux_min_streams"
     }
   }
 
@@ -39,6 +49,7 @@ public enum WhitelistTransportConfig {
     case invalidConfig = 4
     case missingWLTService = 5
     case multipleWLTServices = 6
+    case missingWLTVLESSOutbound = 7
   }
 
   private static let runtimeParameterKeys: Set<String> = [
@@ -53,6 +64,12 @@ public enum WhitelistTransportConfig {
     "kcp_buffer",
   ]
 
+  private static let vlessMuxParameterKeys: Set<String> = [
+    "vless_mux_protocol",
+    "vless_mux_max_connections",
+    "vless_mux_min_streams",
+  ]
+
   public static func decodeRuntimeCandidate(_ data: Data) throws -> RuntimeParameters {
     guard
       let envelope = try JSONSerialization.jsonObject(with: data) as? [String: Any],
@@ -61,7 +78,11 @@ public enum WhitelistTransportConfig {
     else {
       throw RuntimeCandidateError.invalidEnvelope
     }
-    guard Set(parameters.keys) == runtimeParameterKeys else {
+    let parameterKeys = Set(parameters.keys)
+    guard
+      parameterKeys == runtimeParameterKeys
+        || parameterKeys == runtimeParameterKeys.union(vlessMuxParameterKeys)
+    else {
       throw RuntimeCandidateError.invalidSchema
     }
     guard
@@ -88,6 +109,28 @@ public enum WhitelistTransportConfig {
     else {
       throw RuntimeCandidateError.invalidValue
     }
+    let vlessMuxProtocol: String?
+    let vlessMuxMaxConnections: Int?
+    let vlessMuxMinStreams: Int?
+    if parameterKeys.isSuperset(of: vlessMuxParameterKeys) {
+      guard
+        let protocolValue = parameters["vless_mux_protocol"] as? String,
+        ["smux", "yamux", "h2mux"].contains(protocolValue),
+        let maxConnections = strictInteger(parameters["vless_mux_max_connections"]),
+        let minStreams = strictInteger(parameters["vless_mux_min_streams"]),
+        maxConnections > 0,
+        minStreams > 0
+      else {
+        throw RuntimeCandidateError.invalidValue
+      }
+      vlessMuxProtocol = protocolValue
+      vlessMuxMaxConnections = maxConnections
+      vlessMuxMinStreams = minStreams
+    } else {
+      vlessMuxProtocol = nil
+      vlessMuxMaxConnections = nil
+      vlessMuxMinStreams = nil
+    }
     return RuntimeParameters(
       maxActive: maxActive,
       maxOpen: maxOpen,
@@ -97,7 +140,10 @@ public enum WhitelistTransportConfig {
       idleTimeout: idleTimeout,
       peerWriteBuffer: peerWriteBuffer,
       kcpWindow: kcpWindow,
-      kcpBuffer: kcpBuffer
+      kcpBuffer: kcpBuffer,
+      vlessMuxProtocol: vlessMuxProtocol,
+      vlessMuxMaxConnections: vlessMuxMaxConnections,
+      vlessMuxMinStreams: vlessMuxMinStreams
     )
   }
 
@@ -139,6 +185,47 @@ public enum WhitelistTransportConfig {
     service["kcp_buffer"] = parameters.kcpBuffer
     services[index] = service
     dictionary["services"] = services
+    if
+      let protocolValue = parameters.vlessMuxProtocol,
+      let maxConnections = parameters.vlessMuxMaxConnections,
+      let minStreams = parameters.vlessMuxMinStreams
+    {
+      guard var outbounds = dictionary["outbounds"] as? [Any] else {
+        throw RuntimeCandidateError.invalidConfig
+      }
+      let wltTags = Set(outbounds.compactMap { raw -> String? in
+        guard
+          let outbound = raw as? [String: Any],
+          stringValue(outbound["type"])?.lowercased() == "wlt"
+        else {
+          return nil
+        }
+        return stringValue(outbound["tag"])
+      })
+      var modifiedOutbounds = 0
+      for outboundIndex in outbounds.indices {
+        guard
+          var outbound = outbounds[outboundIndex] as? [String: Any],
+          stringValue(outbound["type"])?.lowercased() == "vless",
+          let detour = stringValue(outbound["detour"]),
+          wltTags.contains(detour)
+        else {
+          continue
+        }
+        outbound["multiplex"] = [
+          "enabled": true,
+          "protocol": protocolValue,
+          "max_connections": maxConnections,
+          "min_streams": minStreams,
+        ]
+        outbounds[outboundIndex] = outbound
+        modifiedOutbounds += 1
+      }
+      guard modifiedOutbounds > 0 else {
+        throw RuntimeCandidateError.missingWLTVLESSOutbound
+      }
+      dictionary["outbounds"] = outbounds
+    }
     guard JSONSerialization.isValidJSONObject(dictionary) else {
       throw RuntimeCandidateError.invalidConfig
     }
@@ -351,15 +438,11 @@ public enum WhitelistTransportConfig {
   }
 
   private static func validPositiveDuration(_ value: String) -> Bool {
-    let suffixLength: Int
-    if value.hasSuffix("ms") {
-      suffixLength = 2
-    } else if value.hasSuffix("s") {
-      suffixLength = 1
-    } else {
+    let suffixes = ["ns", "us", "µs", "ms", "s", "m", "h"]
+    guard let suffix = suffixes.first(where: { value.hasSuffix($0) }) else {
       return false
     }
-    let number = value.dropLast(suffixLength)
+    let number = value.dropLast(suffix.count)
     guard !number.isEmpty, let parsed = Double(number) else {
       return false
     }
@@ -420,3 +503,230 @@ public enum WhitelistTransportConfig {
     "vless-wlt-eu",
   ]
 }
+
+#if SFI_DEV
+  public extension WhitelistTransportConfig {
+    enum OfflineRuleSetError: Error {
+      case invalidProfile
+      case invalidRuleSet
+      case missingSnapshot
+      case invalidDownload
+    }
+
+    private static func ruleSnapshotDirectory(for content: String) -> URL {
+      let digest = SHA256.hash(data: Data(content.utf8))
+        .map { String(format: "%02x", $0) }.joined()
+      return FilePath.sharedDirectory
+        .appendingPathComponent("wlt-rule-snapshots", isDirectory: true)
+        .appendingPathComponent(digest, isDirectory: true)
+    }
+
+    private static func remoteBinaryRuleSets(
+      in config: [String: Any], profileURL: URL?
+    ) throws -> [(index: Int, tag: String, url: URL, version: String)] {
+      guard let route = config["route"] as? [String: Any],
+        let rawEntries = route["rule_set"]
+      else { return [] }
+      guard let entries = rawEntries as? [[String: Any]] else {
+        throw OfflineRuleSetError.invalidRuleSet
+      }
+      var result: [(Int, String, URL, String)] = []
+      var tags = Set<String>()
+      for (index, entry) in entries.enumerated() {
+        guard entry["type"] as? String == "remote" else { continue }
+        guard entry["format"] as? String == "binary",
+          let tag = entry["tag"] as? String,
+          !tag.isEmpty, tag.count <= 96,
+          tag.unicodeScalars.allSatisfy({
+            CharacterSet.alphanumerics.contains($0) || $0 == "_" || $0 == "-"
+          }),
+          tags.insert(tag).inserted,
+          let rawURL = entry["url"] as? String,
+          let url = URL(string: rawURL), url.scheme == "https",
+          let host = url.host, !host.isEmpty,
+          url.user == nil, url.password == nil, url.fragment == nil,
+          profileURL == nil || host == profileURL?.host
+        else { throw OfflineRuleSetError.invalidRuleSet }
+        let version = URLComponents(url: url, resolvingAgainstBaseURL: false)?
+          .queryItems?.first(where: { $0.name == "v" })?.value ?? ""
+        guard version.isEmpty || (version.count >= 16 && version.count <= 64
+          && version.unicodeScalars.allSatisfy({
+            CharacterSet(charactersIn: "0123456789abcdef").contains($0)
+          })) else { throw OfflineRuleSetError.invalidRuleSet }
+        result.append((index, tag, url, version))
+      }
+      guard result.count <= 64 else { throw OfflineRuleSetError.invalidRuleSet }
+      return result
+    }
+
+    private static func parsedConfig(_ content: String) throws -> [String: Any] {
+      guard let config = try JSONSerialization.jsonObject(with: Data(content.utf8))
+        as? [String: Any] else { throw OfflineRuleSetError.invalidProfile }
+      return config
+    }
+
+    /// Stage can publish payload health checks for newer WLT cores. The iOS
+    /// Libbox used by this client does not support that optional URLTest field.
+    /// Keep the group and its ordinary health URL, but remove only the two
+    /// known merged-group extensions before validation and persistence.
+    static func compatibleProfile(_ content: String) throws -> String {
+      guard usesCoreWhitelistTransport(content) else { return content }
+      var config = try parsedConfig(content)
+      guard var outbounds = config["outbounds"] as? [[String: Any]] else {
+        throw OfflineRuleSetError.invalidProfile
+      }
+      var changed = false
+      for index in outbounds.indices where outbounds[index]["payload_probe"] != nil {
+        let outbound = outbounds[index]
+        guard outbound["type"] as? String == "urltest",
+          let tag = outbound["tag"] as? String,
+          (tag == "eu_or_wlt-eu" || tag == "ru_or_wlt-ru"),
+          let probe = outbound["payload_probe"] as? [String: Any],
+          Set(probe.keys) == Set(["bytes", "default"]),
+          probe["bytes"] as? Int == 65536,
+          let fallback = probe["default"] as? String,
+          fallback == "vless-wlt-\(tag == "eu_or_wlt-eu" ? "eu" : "ru")",
+          let members = outbound["outbounds"] as? [String],
+          members.contains(fallback)
+        else { throw OfflineRuleSetError.invalidProfile }
+        outbounds[index].removeValue(forKey: "payload_probe")
+        changed = true
+      }
+      guard changed else { return content }
+      config["outbounds"] = outbounds
+      let data = try JSONSerialization.data(withJSONObject: config, options: [.sortedKeys])
+      guard let normalized = String(data: data, encoding: .utf8) else {
+        throw OfflineRuleSetError.invalidProfile
+      }
+      return normalized
+    }
+
+    /// Fetches all binary assets before committing a received WLT profile.
+    /// No network access occurs in the Packet Tunnel or in localRuleSetConfig.
+    static func prepareOfflineRuleSets(_ content: String, profileURL: String?) async throws {
+      guard usesCoreWhitelistTransport(content) else { return }
+      let config = try parsedConfig(content)
+      let sourceURL = profileURL.flatMap(URL.init(string:))
+      let sets = try remoteBinaryRuleSets(in: config, profileURL: sourceURL)
+      guard !sets.isEmpty else { return }
+      let destination = ruleSnapshotDirectory(for: content)
+      let parent = destination.deletingLastPathComponent()
+      try FileManager.default.createDirectory(at: parent, withIntermediateDirectories: true)
+      let pending = parent.appendingPathComponent(".pending-\(UUID().uuidString)", isDirectory: true)
+      try FileManager.default.createDirectory(at: pending, withIntermediateDirectories: false)
+      defer { try? FileManager.default.removeItem(at: pending) }
+      var hashes: [String: String] = [:]
+      let sessionConfiguration = URLSessionConfiguration.ephemeral
+      sessionConfiguration.timeoutIntervalForRequest = 12
+      sessionConfiguration.timeoutIntervalForResource = 20
+      let session = URLSession(configuration: sessionConfiguration)
+      defer { session.invalidateAndCancel() }
+      for set in sets {
+        let (data, response) = try await session.data(from: set.url)
+        let digest = SHA256.hash(data: data).map({ String(format: "%02x", $0) }).joined()
+        guard let response = response as? HTTPURLResponse, response.statusCode == 200,
+          data.count >= 4, data.count <= 8 * 1024 * 1024,
+          data.starts(with: Data("SRS".utf8)),
+          // The query parameter is a server-side version token, not a
+          // content digest. The complete digest is recorded in the local
+          // manifest and verified on every cold start.
+          !digest.isEmpty
+        else { throw OfflineRuleSetError.invalidDownload }
+        try data.write(to: pending.appendingPathComponent("\(set.tag).srs"), options: .atomic)
+        hashes[set.tag] = digest
+      }
+      let manifest = try JSONSerialization.data(withJSONObject: hashes)
+      try manifest.write(to: pending.appendingPathComponent("manifest.json"), options: .atomic)
+      guard try verifiedRuleSetFiles(sets, at: pending) else {
+        throw OfflineRuleSetError.invalidDownload
+      }
+      let backup = parent.appendingPathComponent(destination.lastPathComponent + ".backup")
+      if FileManager.default.fileExists(atPath: backup.path),
+        !FileManager.default.fileExists(atPath: destination.path),
+        try verifiedRuleSetFiles(sets, at: backup) {
+        try FileManager.default.moveItem(at: backup, to: destination)
+      }
+      let hadPrevious = FileManager.default.fileExists(atPath: destination.path)
+      if hadPrevious, FileManager.default.fileExists(atPath: backup.path) {
+        // A prior interrupted replacement may have left this backup. Keep it
+        // until the new snapshot is installed; never create a window with no
+        // verified copy on disk.
+        guard try verifiedRuleSetFiles(sets, at: backup) else {
+          throw OfflineRuleSetError.missingSnapshot
+        }
+        try FileManager.default.removeItem(at: destination)
+      } else if hadPrevious {
+        try FileManager.default.moveItem(at: destination, to: backup)
+      }
+      do {
+        try FileManager.default.moveItem(at: pending, to: destination)
+      } catch {
+        if hadPrevious, !FileManager.default.fileExists(atPath: destination.path) {
+          try? FileManager.default.moveItem(at: backup, to: destination)
+        }
+        throw error
+      }
+      if hadPrevious { try? FileManager.default.removeItem(at: backup) }
+    }
+
+    private static func verifiedRuleSetFiles(
+      _ sets: [(index: Int, tag: String, url: URL, version: String)], at directory: URL
+    ) throws -> Bool {
+      guard let manifestData = try? Data(contentsOf: directory.appendingPathComponent("manifest.json")),
+        let hashes = try? JSONSerialization.jsonObject(with: manifestData) as? [String: String],
+        hashes.count == sets.count
+      else { return false }
+      for set in sets {
+        let path = directory.appendingPathComponent("\(set.tag).srs")
+        guard let expected = hashes[set.tag], expected.count == 64,
+          expected.unicodeScalars.allSatisfy({
+            CharacterSet(charactersIn: "0123456789abcdef").contains($0)
+          })
+        else { return false }
+        guard let data = try? Data(contentsOf: path),
+          data.count >= 4, data.count <= 8 * 1024 * 1024,
+          data.starts(with: Data("SRS".utf8)),
+          SHA256.hash(data: data).map({ String(format: "%02x", $0) }).joined() == expected
+        else { return false }
+      }
+      return true
+    }
+
+    /// Replaces remote rule-set URLs with local binary paths before IPC to the
+    /// extension. Missing assets fail closed; cold startup never fetches API URLs.
+    static func localRuleSetConfig(_ content: String) throws -> String {
+      guard usesCoreWhitelistTransport(content) else { return content }
+      var config = try parsedConfig(content)
+      let sets = try remoteBinaryRuleSets(in: config, profileURL: nil)
+      guard !sets.isEmpty else { return content }
+      let primary = ruleSnapshotDirectory(for: content)
+      let backup = primary.deletingLastPathComponent()
+        .appendingPathComponent(primary.lastPathComponent + ".backup")
+      let directory: URL
+      if try verifiedRuleSetFiles(sets, at: primary) {
+        directory = primary
+      } else if try verifiedRuleSetFiles(sets, at: backup) {
+        directory = backup
+      } else {
+        throw OfflineRuleSetError.missingSnapshot
+      }
+      guard
+        var route = config["route"] as? [String: Any],
+        var entries = route["rule_set"] as? [[String: Any]]
+      else { throw OfflineRuleSetError.missingSnapshot }
+      for set in sets {
+        entries[set.index] = [
+          "type": "local", "format": "binary", "tag": set.tag,
+          "path": directory.appendingPathComponent("\(set.tag).srs").path,
+        ]
+      }
+      route["rule_set"] = entries
+      config["route"] = route
+      let serialized = try JSONSerialization.data(withJSONObject: config)
+      guard let output = String(data: serialized, encoding: .utf8) else {
+        throw OfflineRuleSetError.invalidProfile
+      }
+      return output
+    }
+  }
+#endif

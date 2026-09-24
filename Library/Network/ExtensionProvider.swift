@@ -958,6 +958,11 @@ open class ExtensionProvider: NEPacketTunnelProvider {
   }
 
   override open func handleAppMessage(_ messageData: Data) async -> Data? {
+    #if os(iOS) && SFI_DEV
+      if ExtensionDiagnosticMessage.isDiagnostic(messageData) {
+        return handleDiagnosticMessage(messageData)
+      }
+    #endif
     do {
       let options = try ExtensionStartOptions.decode(messageData)
       applyStartOptions(options)
@@ -968,6 +973,51 @@ open class ExtensionProvider: NEPacketTunnelProvider {
       return error.localizedDescription.data(using: .utf8)
     }
   }
+
+  #if os(iOS) && SFI_DEV
+    private func handleDiagnosticMessage(_ messageData: Data) -> Data? {
+      let request: ExtensionDiagnosticMessage.Request
+      do {
+        request = try ExtensionDiagnosticMessage.decodeRequest(messageData)
+      } catch {
+        return try? ExtensionDiagnosticMessage.encodeResponse(
+          ExtensionDiagnosticMessage.Response(
+            version: 1, status: "failed", resultJSON: nil,
+            errorCode: "invalid_diagnostic_envelope"))
+      }
+      guard let commandServer else {
+        return try? ExtensionDiagnosticMessage.encodeResponse(
+          ExtensionDiagnosticMessage.Response(
+            version: 1, status: "failed", resultJSON: nil,
+            errorCode: "command_server_unavailable"))
+      }
+      let response: ExtensionDiagnosticMessage.Response
+      do {
+        var probeError: NSError?
+        let resultJSON = commandServer.probeWltOutbound(
+          request.requestJSON, error: &probeError)
+        if let probeError {
+          throw probeError
+        }
+        guard resultJSON.utf8.count <= 16 * 1024 else {
+          response = ExtensionDiagnosticMessage.Response(
+            version: 1, status: "failed", resultJSON: nil,
+            errorCode: "result_too_large")
+          return try? ExtensionDiagnosticMessage.encodeResponse(response)
+        }
+        response = ExtensionDiagnosticMessage.Response(
+          version: 1, status: "success", resultJSON: resultJSON,
+          errorCode: "")
+      } catch {
+        // Core probe errors are deliberately collapsed to a bounded code.
+        // The core result carries its own sanitized network failure details.
+        response = ExtensionDiagnosticMessage.Response(
+          version: 1, status: "failed", resultJSON: nil,
+          errorCode: "probe_rejected")
+      }
+      return try? ExtensionDiagnosticMessage.encodeResponse(response)
+    }
+  #endif
 
   override open func sleep() async {
     writeLifecycleMessage("(packet-tunnel): sleep")

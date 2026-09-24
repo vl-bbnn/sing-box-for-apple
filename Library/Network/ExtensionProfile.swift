@@ -9,6 +9,140 @@ import os
 
 private let logger = Logger(category: "ExtensionProfile")
 
+#if os(iOS) && SFI_DEV
+  enum ExtensionDiagnosticMessage {
+    private static let magic = Data("SFI_DEV_DIAGNOSTIC\0".utf8)
+    private static let maximumMessageBytes = 32 * 1024
+
+    struct Request: Codable {
+      let version: Int
+      let operation: String
+      let requestJSON: String
+
+      enum CodingKeys: String, CodingKey {
+        case version, operation
+        case requestJSON = "request_json"
+      }
+    }
+
+    struct Response: Codable {
+      let version: Int
+      let status: String
+      let resultJSON: String?
+      let errorCode: String
+
+      enum CodingKeys: String, CodingKey {
+        case version, status
+        case resultJSON = "result_json"
+        case errorCode = "error_code"
+      }
+    }
+
+    static func isDiagnostic(_ data: Data) -> Bool {
+      data.starts(with: magic)
+    }
+
+    static func encodeProbeRequest(_ requestJSON: String) throws -> Data {
+      try encode(
+        Request(
+          version: 1,
+          operation: "probe_wlt_outbound",
+          requestJSON: requestJSON
+        ))
+    }
+
+    static func decodeRequest(_ data: Data) throws -> Request {
+      let payload = try payload(data)
+      guard
+        let object = try JSONSerialization.jsonObject(with: payload) as? [String: Any],
+        Set(object.keys) == Set(["version", "operation", "request_json"])
+      else {
+        throw CocoaError(.coderInvalidValue)
+      }
+      let request: Request = try decode(data)
+      guard
+        request.version == 1,
+        request.operation == "probe_wlt_outbound",
+        !request.requestJSON.isEmpty,
+        request.requestJSON.utf8.count <= 16 * 1024
+      else {
+        throw CocoaError(.coderInvalidValue)
+      }
+      return request
+    }
+
+    static func encodeResponse(_ response: Response) throws -> Data {
+      try encode(response)
+    }
+
+    static func decodeResponse(_ data: Data) throws -> Response {
+      let responsePayload = try payload(data)
+      guard
+        let object = try JSONSerialization.jsonObject(with: responsePayload) as? [String: Any],
+        Set(object.keys).isSubset(of: Set(["version", "status", "result_json", "error_code"])),
+        Set(["version", "status", "error_code"]).isSubset(of: Set(object.keys))
+      else {
+        throw CocoaError(.coderInvalidValue)
+      }
+      let response: Response = try decode(data)
+      guard
+        response.version == 1,
+        ["success", "failed"].contains(response.status),
+        response.errorCode.count <= 64,
+        response.resultJSON?.utf8.count ?? 0 <= 16 * 1024,
+        (response.status == "success" && response.errorCode.isEmpty
+          && response.resultJSON != nil)
+          || (response.status == "failed" && !response.errorCode.isEmpty
+            && response.resultJSON == nil)
+      else {
+        throw CocoaError(.coderInvalidValue)
+      }
+      return response
+    }
+
+    private static func encode<T: Encodable>(_ value: T) throws -> Data {
+      let encoder = JSONEncoder()
+      encoder.outputFormatting = [.sortedKeys]
+      let payload = try encoder.encode(value)
+      guard payload.count + magic.count <= maximumMessageBytes else {
+        throw CocoaError(.coderInvalidValue)
+      }
+      return magic + payload
+    }
+
+    private static func decode<T: Decodable>(_ data: Data) throws -> T {
+      try JSONDecoder().decode(T.self, from: payload(data))
+    }
+
+    private static func payload(_ data: Data) throws -> Data {
+      guard isDiagnostic(data), data.count <= maximumMessageBytes else {
+        throw CocoaError(.coderInvalidValue)
+      }
+      return Data(data.dropFirst(magic.count))
+    }
+  }
+
+  private final class ExtensionDiagnosticResponseWaiter: @unchecked Sendable {
+    private let lock = NSLock()
+    private var continuation: CheckedContinuation<Data?, Error>?
+
+    func install(_ continuation: CheckedContinuation<Data?, Error>) {
+      lock.lock()
+      self.continuation = continuation
+      lock.unlock()
+    }
+
+    func resume(_ result: Result<Data?, Error>) {
+      lock.lock()
+      let pending = continuation
+      continuation = nil
+      lock.unlock()
+      guard let pending else { return }
+      pending.resume(with: result)
+    }
+  }
+#endif
+
 @MainActor
 public class ExtensionProfile: ObservableObject {
   public static let controlKind = AppConfiguration.widgetControlKind
@@ -182,17 +316,17 @@ public class ExtensionProfile: ObservableObject {
     manager.isEnabled = true
     let alwaysOn = await SharedPreferences.alwaysOn.get()
     let onDemandEnabled = await SharedPreferences.onDemandEnabled.get()
-    #if os(iOS) && SFI_DEV
-      let whitelistTransportAutoRecovery =
-        (options["whitelistTransportEnabled"] as? NSNumber)?.boolValue ?? false
-    #else
-      let whitelistTransportAutoRecovery = false
-    #endif
-    if alwaysOn || onDemandEnabled || whitelistTransportAutoRecovery {
+    // A manual WLT start must not turn on Connect On Demand implicitly. If the
+    // provider is killed during startup (for example by the iOS memory limit),
+    // an implicit on-demand rule immediately starts it again and can trap the
+    // device in an unbounded reconnect loop. Honor only the user's preferences.
+    if alwaysOn || onDemandEnabled {
       manager.isOnDemandEnabled = true
       await setOnDemandRules(
-        useDefaultRules: alwaysOn || whitelistTransportAutoRecovery
+        useDefaultRules: alwaysOn
       )
+    } else {
+      manager.isOnDemandEnabled = false
     }
     if let proto = manager.protocolConfiguration as? NETunnelProviderProtocol {
       var config = proto.providerConfiguration ?? [:]
@@ -273,6 +407,65 @@ public class ExtensionProfile: ObservableObject {
     }
   }
 
+  #if os(iOS) && SFI_DEV
+    public func probeWltOutbound(
+      _ requestJSON: String,
+      timeoutMillis: Int
+    ) async throws -> String {
+      guard !isMock, let session = connection as? NETunnelProviderSession else {
+        throw NSError(
+          domain: "ExtensionDiagnosticMessage", code: -1,
+          userInfo: [NSLocalizedDescriptionKey: "Tunnel session unavailable"])
+      }
+      guard status == .connected else {
+        throw NSError(
+          domain: "ExtensionDiagnosticMessage", code: -2,
+          userInfo: [NSLocalizedDescriptionKey: "Tunnel is not connected"])
+      }
+      guard (1...95_000).contains(timeoutMillis) else {
+        throw NSError(
+          domain: "ExtensionDiagnosticMessage", code: -5,
+          userInfo: [NSLocalizedDescriptionKey: "Diagnostic timeout invalid"])
+      }
+      let message = try ExtensionDiagnosticMessage.encodeProbeRequest(requestJSON)
+      let waiter = ExtensionDiagnosticResponseWaiter()
+      let responseData = try await withCheckedThrowingContinuation {
+        (continuation: CheckedContinuation<Data?, Error>) in
+        waiter.install(continuation)
+        DispatchQueue.global(qos: .utility).asyncAfter(
+          deadline: .now() + .milliseconds(timeoutMillis)
+        ) {
+          waiter.resume(
+            .failure(
+              NSError(
+                domain: "ExtensionDiagnosticMessage", code: -6,
+                userInfo: [NSLocalizedDescriptionKey: "Diagnostic response timeout"])))
+        }
+        do {
+          try session.sendProviderMessage(message) { response in
+            waiter.resume(.success(response))
+          }
+        } catch {
+          waiter.resume(.failure(error))
+        }
+      }
+      guard let responseData else {
+        throw NSError(
+          domain: "ExtensionDiagnosticMessage", code: -3,
+          userInfo: [NSLocalizedDescriptionKey: "Diagnostic response unavailable"])
+      }
+      let response = try ExtensionDiagnosticMessage.decodeResponse(responseData)
+      guard response.status == "success", response.errorCode.isEmpty,
+        let resultJSON = response.resultJSON
+      else {
+        throw NSError(
+          domain: "ExtensionDiagnosticMessage", code: -4,
+          userInfo: [NSLocalizedDescriptionKey: response.errorCode])
+      }
+      return resultJSON
+    }
+  #endif
+
   private func prepareStartOptions(
     configContentTransform: ((String) throws -> String)? = nil
   ) async throws -> [String: NSObject] {
@@ -290,6 +483,9 @@ public class ExtensionProfile: ObservableObject {
     }
 
     var configContent = try await profile.readAsync()
+    #if os(iOS) && SFI_DEV
+      configContent = try WhitelistTransportConfig.localRuleSetConfig(configContent)
+    #endif
     if let configContentTransform {
       configContent = try configContentTransform(configContent)
     }

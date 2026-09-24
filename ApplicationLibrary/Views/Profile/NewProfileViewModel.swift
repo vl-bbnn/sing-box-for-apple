@@ -147,7 +147,12 @@ public final class NewProfileViewModel: BaseViewModel {
             }
             savePath = remotePath
         } else if profileType == .remote {
-            let remoteContent = try await HTTPClient.getStringAsync(remotePath)
+            let fetchedContent = try await HTTPClient.getStringAsync(remotePath)
+            #if os(iOS) && SFI_DEV
+                let remoteContent = try WhitelistTransportConfig.compatibleProfile(fetchedContent)
+            #else
+                let remoteContent = fetchedContent
+            #endif
             try await BlockingIO.run {
                 var error: NSError?
                 LibboxCheckConfig(remoteContent, &error)
@@ -155,6 +160,9 @@ public final class NewProfileViewModel: BaseViewModel {
                     throw error
                 }
             }
+            #if os(iOS) && SFI_DEV
+                try await WhitelistTransportConfig.prepareOfflineRuleSets(remoteContent, profileURL: remotePath)
+            #endif
             let profileConfigDirectory = FilePath.sharedDirectory.appendingPathComponent("configs", isDirectory: true)
             let profileConfig = profileConfigDirectory.appendingPathComponent("config_\(nextProfileID).json")
             try await BlockingIO.run {
