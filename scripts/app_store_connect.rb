@@ -30,7 +30,14 @@ class AppStoreConnectClient
 
   def verify_app(bundle_id:)
     app_id = find_app_id(bundle_id)
-    puts JSON.pretty_generate({ app_id: app_id, bundle_id: bundle_id })
+    puts JSON.pretty_generate({ app_id: app_id, bundle_id: bundle_id, token_mode: @token_mode })
+    begin
+      response = request(:get, "/v1/bundleIds", params: { "filter[identifier]" => bundle_id, "limit" => "1" })
+      puts JSON.pretty_generate({ developer_api: "accessible", bundle_ids: response.fetch("data", []).map { |item| item.fetch("id") } })
+    rescue => error
+      warn error.message
+      raise
+    end
   end
 
   def verify_build(bundle_id:, platform:, version:, build_number:, timeout:)
