@@ -77,13 +77,11 @@ if [[ -z "$libbox_version" || "$libbox_version" == "unknown" ]]; then
 fi
 echo "using sing-box libbox version: $libbox_version"
 
-wireguard_submodule="$(
-	git config -f .gitmodules --get submodule.submodules/wireguard-go.path 2>/dev/null \
-		|| true
-)"
-if [[ -n "$wireguard_submodule" ]]; then
-	git submodule sync -- "$wireguard_submodule"
-	git submodule update --init --depth=1 --recursive -- "$wireguard_submodule"
+# LX now replaces gvisor, sing-tun and uTLS with pinned submodules as well.
+# Initialize source dependencies only; client submodules are separate releases.
+if [[ -d submodules ]]; then
+	git submodule sync -- submodules
+	git submodule update --init --recursive -- submodules
 fi
 
 extra_tag_list=()
@@ -143,6 +141,8 @@ fi
 printf '%s\n' "$variant" > "$destination/.libbox-variant"
 printf '%s\n' "$libbox_version" > "$destination/.libbox-version"
 git rev-parse HEAD > "$destination/.libbox-source-ref"
+git submodule status -- submodules > "$destination/.libbox-submodules"
+go version > "$destination/.libbox-go-version"
 active_xcframework="$client_root/$default_destination"
 if [[ "${LIBBOX_ACTIVATE:-1}" == "1" && "$destination" != "$active_xcframework" ]]; then
 	rm -rf "$active_xcframework"
