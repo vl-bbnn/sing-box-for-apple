@@ -1019,7 +1019,7 @@
 				"STRING_CATALOG_GENERATE_SYMBOLS" = "NO";
 				"PROVISIONING_PROFILE_SPECIFIER" = "";
 				"SUPPORTED_PLATFORMS" = "macosx";
-				"INFOPLIST_KEY_CFBundleDisplayName" = "sing-box";
+				"INFOPLIST_KEY_CFBundleDisplayName" = "$(OVERLAY_APPLICATION_NAME)";
 				"MACOSX_DEPLOYMENT_TARGET" = "13.0";
 				"CODE_SIGN_STYLE" = "Manual";
 				"SDKROOT" = "macosx";
@@ -2185,7 +2185,7 @@
 				"STRING_CATALOG_GENERATE_SYMBOLS" = "NO";
 				"PROVISIONING_PROFILE_SPECIFIER" = "";
 				"SUPPORTED_PLATFORMS" = "macosx";
-				"INFOPLIST_KEY_CFBundleDisplayName" = "sing-box";
+				"INFOPLIST_KEY_CFBundleDisplayName" = "$(OVERLAY_APPLICATION_NAME)";
 				"MACOSX_DEPLOYMENT_TARGET" = "13.0";
 				"CODE_SIGN_STYLE" = "Manual";
 				"SWIFT_OPTIMIZATION_LEVEL" = "-Onone";
@@ -3418,7 +3418,7 @@
 				"CLANG_ENABLE_MODULES" = "YES";
 				"STRING_CATALOG_GENERATE_SYMBOLS" = "NO";
 				"SUPPORTED_PLATFORMS" = "iphoneos iphonesimulator macosx";
-				"INFOPLIST_KEY_CFBundleDisplayName" = "sing-box";
+				"INFOPLIST_KEY_CFBundleDisplayName" = "$(OVERLAY_APPLICATION_NAME)";
 				"MACOSX_DEPLOYMENT_TARGET" = "13.0";
 				"SUPPORTS_MAC_DESIGNED_FOR_IPHONE_IPAD" = "NO";
 				"SUPPORTS_MACCATALYST" = "NO";
@@ -4476,7 +4476,7 @@
 				"CLANG_ENABLE_MODULES" = "YES";
 				"STRING_CATALOG_GENERATE_SYMBOLS" = "NO";
 				"SUPPORTED_PLATFORMS" = "iphoneos iphonesimulator macosx";
-				"INFOPLIST_KEY_CFBundleDisplayName" = "sing-box";
+				"INFOPLIST_KEY_CFBundleDisplayName" = "$(OVERLAY_APPLICATION_NAME)";
 				"MACOSX_DEPLOYMENT_TARGET" = "13.0";
 				"SUPPORTS_MAC_DESIGNED_FOR_IPHONE_IPAD" = "NO";
 				"SUPPORTS_MACCATALYST" = "NO";
