@@ -62,6 +62,9 @@ public class ExtensionProfile: ObservableObject {
                 self.connection = connection
                 self.status = connection.status
                 self.connectedDate = connection.connectedDate
+                if connection.status == .disconnected {
+                    Self.schedulePromoteOOMDraft()
+                }
                 #if os(iOS)
                     if #available(iOS 16.0, *) {
                         if connection.status == .connected || connection.status == .disconnected {
@@ -70,6 +73,26 @@ public class ExtensionProfile: ObservableObject {
                     }
                 #endif
             }
+        }
+    }
+
+    private static func schedulePromoteOOMDraft() {
+        Task.detached {
+            try? await Task.sleep(nanoseconds: 2 * NSEC_PER_SEC)
+            #if os(macOS)
+                if Variant.useSystemExtension {
+                    guard HelperServiceManager.rootHelperStatus == .enabled else {
+                        return
+                    }
+                    do {
+                        try RootHelperClient.shared.promoteOOMDraft()
+                    } catch {
+                        logger.warning("promote OOM draft: \(error.localizedDescription)")
+                    }
+                    return
+                }
+            #endif
+            LibboxPromoteOOMDraft()
         }
     }
 
@@ -126,6 +149,28 @@ public class ExtensionProfile: ObservableObject {
         try await manager.saveToPreferences()
     }
 
+    private func applyProtocolConfiguration() async {
+        #if !os(tvOS)
+            guard let protocolConfiguration = manager?.protocolConfiguration else { return }
+            protocolConfiguration.includeAllNetworks = await SharedPreferences.includeAllNetworks.get()
+            protocolConfiguration.excludeLocalNetworks = await SharedPreferences.excludeLocalNetworks.get()
+            protocolConfiguration.enforceRoutes = await SharedPreferences.enforceRoutes.get()
+            if #available(iOS 16.4, macOS 13.3, *) {
+                protocolConfiguration.excludeAPNs = await SharedPreferences.excludeAPNs.get()
+                protocolConfiguration.excludeCellularServices = await SharedPreferences.excludeCellularServices.get()
+            }
+            if #available(iOS 17.4, macOS 14.4, *) {
+                protocolConfiguration.excludeDeviceCommunication = await SharedPreferences.excludeDeviceCommunication.get()
+            }
+        #endif
+    }
+
+    public func updateProtocolConfiguration() async throws {
+        guard let manager else { return }
+        await applyProtocolConfiguration()
+        try await manager.saveToPreferences()
+    }
+
     @available(iOS 16.0, macOS 13.0, tvOS 17.0, *)
     public func fetchLastDisconnectError() async throws {
         guard let connection else { return }
@@ -145,8 +190,8 @@ public class ExtensionProfile: ObservableObject {
         manager.isEnabled = true
         let alwaysOn = await SharedPreferences.alwaysOn.get()
         let onDemandEnabled = await SharedPreferences.onDemandEnabled.get()
-        if alwaysOn || onDemandEnabled {
-            manager.isOnDemandEnabled = true
+        manager.isOnDemandEnabled = alwaysOn || onDemandEnabled
+        if manager.isOnDemandEnabled {
             await setOnDemandRules(useDefaultRules: alwaysOn)
         }
         if let proto = manager.protocolConfiguration as? NETunnelProviderProtocol {
@@ -155,28 +200,16 @@ public class ExtensionProfile: ObservableObject {
                 proto.providerConfiguration = config
             }
         }
-        #if !os(tvOS)
-            if let protocolConfiguration = manager.protocolConfiguration {
-                let includeAllNetworks = await SharedPreferences.includeAllNetworks.get()
-                protocolConfiguration.includeAllNetworks = includeAllNetworks
-                protocolConfiguration.excludeLocalNetworks = await SharedPreferences.excludeLocalNetworks.get()
-                protocolConfiguration.enforceRoutes = await SharedPreferences.enforceRoutes.get()
-                if #available(iOS 16.4, macOS 13.3, *) {
-                    protocolConfiguration.excludeAPNs = await SharedPreferences.excludeAPNs.get()
-                    protocolConfiguration.excludeCellularServices = await SharedPreferences.excludeCellularServices.get()
-                }
-                if #available(iOS 17.4, macOS 14.4, *) {
-                    protocolConfiguration.excludeDeviceCommunication = await SharedPreferences.excludeDeviceCommunication.get()
-                }
-            }
-        #endif
+        await applyProtocolConfiguration()
         try await manager.saveToPreferences()
         let options = try await prepareStartOptions()
         try manager.connection.startVPNTunnel(options: options)
     }
 
     public func reloadService() async throws {
-        if isMock { return }
+        if isMock {
+            return
+        }
         let options = try await prepareStartOptions()
         let data = try ExtensionStartOptions.encode(options)
         guard let session = connection as? NETunnelProviderSession else {
@@ -204,6 +237,7 @@ public class ExtensionProfile: ObservableObject {
     private func prepareStartOptions() async throws -> [String: NSObject] {
         var options: [String: NSObject] = [
             "manualStart": NSNumber(value: true),
+            "locale": NSString(string: ApplicationLocale.preferredIdentifier),
         ]
 
         let profileID = await SharedPreferences.selectedProfileID.get()
@@ -216,9 +250,12 @@ public class ExtensionProfile: ObservableObject {
         let configContent = try await profile.readAsync()
         options["configContent"] = NSString(string: configContent)
 
-        #if !os(macOS)
-            options["ignoreMemoryLimit"] = await NSNumber(value: SharedPreferences.ignoreMemoryLimit.get())
+        #if os(macOS)
+            options["oomKillerEnabled"] = await NSNumber(value: SharedPreferences.oomKillerEnabled.get())
+            options["oomMemoryLimitMB"] = await NSNumber(value: SharedPreferences.oomMemoryLimitMB.get())
+            options["oomKillerKillConnections"] = await NSNumber(value: SharedPreferences.oomKillerKillConnections.get())
         #endif
+        options["powerReportEnabled"] = await NSNumber(value: SharedPreferences.powerReportEnabled.get())
         options["systemProxyEnabled"] = await NSNumber(value: SharedPreferences.systemProxyEnabled.get())
         options["excludeDefaultRoute"] = await NSNumber(value: SharedPreferences.excludeDefaultRoute.get())
         options["autoRouteUseSubRangesByDefault"] = await NSNumber(value: SharedPreferences.autoRouteUseSubRangesByDefault.get())
@@ -289,7 +326,11 @@ public class ExtensionProfile: ObservableObject {
         if managers.isEmpty {
             return nil
         }
-        return ExtensionProfile(managers[0])
+        let profile = ExtensionProfile(managers[0])
+        if profile.status == .disconnected {
+            schedulePromoteOOMDraft()
+        }
+        return profile
     }
 
     public static func install() async throws {

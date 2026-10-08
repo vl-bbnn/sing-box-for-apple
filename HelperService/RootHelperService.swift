@@ -27,6 +27,12 @@ class RootHelperService: NSObject {
     private var pathMonitor: NWPathMonitor?
     private var pendingNATFlush: DispatchWorkItem?
     private var tunInterfaceName: String?
+    private let updateLock = NSLock()
+    private var updateInProgress = false
+    var pendingCrashLogs: [CrashLogFileResult] = []
+
+    private let shellSessionManager = ShellSessionManager()
+    private let bridgeSessionManager = BridgeSessionManager()
 
     func start() {
         listener = NSXPCListener(machServiceName: AppConfiguration.rootHelperMachService)
@@ -52,6 +58,11 @@ extension RootHelperService: NSXPCListenerDelegate {
         RootHelperXPC.configureInterface(exportedInterface)
         newConnection.exportedInterface = exportedInterface
         newConnection.exportedObject = self
+        let ownerID = ObjectIdentifier(newConnection)
+        newConnection.invalidationHandler = { [weak self] in
+            self?.shellSessionManager.reap(owner: ownerID)
+            self?.bridgeSessionManager.reap(owner: ownerID)
+        }
         newConnection.resume()
         return true
     }
@@ -140,6 +151,294 @@ extension RootHelperService: RootHelperProtocol {
         tunInterfaceName = name
         flushInternetSharingNAT()
         reply(nil)
+    }
+
+    static func readCrashLogFiles() -> [CrashLogFileResult] {
+        var results: [CrashLogFileResult] = []
+
+        let crashLogSearchPaths: [(directory: String, fileNames: [String])] = [
+            (WorkingDirectoryManager.extensionWorkingDirectoryPath, [
+                "CrashReport-NetworkExtension.log",
+                "CrashReport-NetworkExtension.log.old",
+            ]),
+            (WorkingDirectoryManager.helperWorkingDirectoryPath, [
+                "CrashReport-RootHelper.log",
+                "CrashReport-RootHelper.log.old",
+            ]),
+            (WorkingDirectoryManager.extensionBasePath, [
+                "configuration.json",
+            ]),
+            (WorkingDirectoryManager.helperBasePath, [
+                "configuration.json",
+            ]),
+        ]
+
+        for searchPath in crashLogSearchPaths {
+            for fileName in searchPath.fileNames {
+                let filePath = (searchPath.directory as NSString).appendingPathComponent(fileName)
+                guard FileManager.default.fileExists(atPath: filePath),
+                      let content = try? String(contentsOfFile: filePath, encoding: .utf8),
+                      !content.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
+                else {
+                    continue
+                }
+
+                let attrs = try? FileManager.default.attributesOfItem(atPath: filePath)
+                let modificationDate = (attrs?[.modificationDate] as? Date) ?? Date()
+
+                results.append(CrashLogFileResult(
+                    fileName: fileName,
+                    content: content,
+                    modificationDate: modificationDate
+                ))
+
+                try? FileManager.default.removeItem(atPath: filePath)
+            }
+        }
+
+        return results
+    }
+
+    func collectAllCrashArtifacts(reply: @escaping (CrashArtifactsResult?, NSError?) -> Void) {
+        let result = CrashArtifactsResult()
+
+        var crashLogs = pendingCrashLogs
+        pendingCrashLogs.removeAll()
+        crashLogs.append(contentsOf: Self.readCrashLogFiles())
+        result.crashLogs = crashLogs
+
+        result.helperNativeCrashData = NativeCrashReporter.loadAndPurgePendingCrashReportData()
+
+        let extensionReportURL = CrashReportArchive.pendingNativeCrashReportURL(
+            basePath: URL(fileURLWithPath: WorkingDirectoryManager.extensionNativeCrashBasePath, isDirectory: true),
+            bundleIdentifier: AppConfiguration.systemExtensionBundleID
+        )
+        if let data = try? Data(contentsOf: extensionReportURL), !data.isEmpty {
+            result.extensionNativeCrashData = data
+            try? FileManager.default.removeItem(at: extensionReportURL)
+        }
+
+        reply(result, nil)
+    }
+
+    func collectOOMReportArtifacts(reply: @escaping (OOMReportArtifactsResult?, NSError?) -> Void) {
+        let result = OOMReportArtifactsResult()
+        let oomReportsPath = WorkingDirectoryManager.extensionOOMReportsPath
+        let fm = FileManager.default
+
+        guard fm.fileExists(atPath: oomReportsPath),
+              let entries = try? fm.contentsOfDirectory(atPath: oomReportsPath)
+        else {
+            reply(result, nil)
+            return
+        }
+
+        for entry in entries {
+            let dirPath = (oomReportsPath as NSString).appendingPathComponent(entry)
+            var isDir: ObjCBool = false
+            guard fm.fileExists(atPath: dirPath, isDirectory: &isDir), isDir.boolValue else {
+                continue
+            }
+
+            guard let fileNames = try? fm.contentsOfDirectory(atPath: dirPath) else {
+                continue
+            }
+
+            var files: [OOMReportFileResult] = []
+            for fileName in fileNames {
+                let filePath = (dirPath as NSString).appendingPathComponent(fileName)
+                guard let data = fm.contents(atPath: filePath) else {
+                    continue
+                }
+                files.append(OOMReportFileResult(name: fileName, data: data))
+            }
+
+            if !files.isEmpty {
+                result.reports.append(OOMReportDirectoryResult(directoryName: entry, files: files))
+            }
+
+            try? fm.removeItem(atPath: dirPath)
+        }
+
+        reply(result, nil)
+    }
+
+    func promoteOOMDraft(reply: @escaping (NSError?) -> Void) {
+        LibboxPromoteOOMDraftAt(WorkingDirectoryManager.extensionWorkingDirectoryPath)
+        reply(nil)
+    }
+
+    func triggerGoCrash(reply: @escaping (NSError?) -> Void) {
+        reply(nil)
+        LibboxTriggerGoPanic()
+    }
+
+    func installUpdatePackage(pkgPath: String, reply: @escaping (NSError?) -> Void) {
+        updateLock.lock()
+        if updateInProgress {
+            updateLock.unlock()
+            reply(NSError(domain: "RootHelper", code: -1, userInfo: [
+                NSLocalizedDescriptionKey: "update installation is already in progress",
+            ]))
+            return
+        }
+        updateInProgress = true
+        updateLock.unlock()
+        DispatchQueue.global().async { [weak self] in
+            defer {
+                if let self {
+                    self.updateLock.lock()
+                    self.updateInProgress = false
+                    self.updateLock.unlock()
+                }
+            }
+            do {
+                try UpdateInstaller.install(pkgPath: pkgPath)
+                reply(nil)
+            } catch {
+                logger.error("installUpdatePackage: \(error.localizedDescription, privacy: .public)")
+                reply(error as NSError)
+            }
+        }
+    }
+
+    func triggerNativeCrash(reply: @escaping (NSError?) -> Void) {
+        reply(nil)
+        DispatchQueue.global().asyncAfter(deadline: .now() + .milliseconds(200)) {
+            fatalError("debug native crash")
+        }
+    }
+
+    func createBridgeService(
+        bridgeName: String,
+        mtu: Int32,
+        inet4Port: String,
+        inet6Port: String,
+        interfaceName: String,
+        reply: @escaping (FileHandle?, NSString?, Bool, NSString?, NSError?) -> Void
+    ) {
+        guard let currentConnection = NSXPCConnection.current() else {
+            reply(nil, nil, false, nil, NSError(domain: "RootHelper", code: -1, userInfo: [
+                NSLocalizedDescriptionKey: "no current XPC connection",
+            ]))
+            return
+        }
+        let options = LibboxBridgeOptions()
+        options.bridgeName = bridgeName
+        options.mtu = mtu
+        options.inet4Port = inet4Port
+        options.inet6Port = inet6Port
+        options.interface = interfaceName
+        do {
+            let (handle, session) = try bridgeSessionManager.create(owner: ObjectIdentifier(currentConnection), options: options)
+            logger.info("createBridgeService: \(session.name(), privacy: .public)")
+            let fileHandle = FileHandle(fileDescriptor: session.fileDescriptor(), closeOnDealloc: false)
+            reply(fileHandle, session.name() as NSString, session.inet6Active(), handle as NSString, nil)
+        } catch {
+            logger.error("createBridgeService: \(error.localizedDescription, privacy: .public)")
+            reply(nil, nil, false, nil, error as NSError)
+        }
+    }
+
+    func setBridgeEgress(handle: String, egress: String, reply: @escaping (NSError?) -> Void) {
+        guard let session = bridgeSessionManager.session(handle: handle) else {
+            reply(NSError(domain: "RootHelper", code: -1, userInfo: [
+                NSLocalizedDescriptionKey: "bridge session not found",
+            ]))
+            return
+        }
+        do {
+            try session.setEgress(egress)
+            reply(nil)
+        } catch {
+            reply(error as NSError)
+        }
+    }
+
+    func closeBridgeService(handle: String, reply: @escaping (NSError?) -> Void) {
+        guard let currentConnection = NSXPCConnection.current() else {
+            reply(nil)
+            return
+        }
+        bridgeSessionManager.close(owner: ObjectIdentifier(currentConnection), handle: handle)
+        reply(nil)
+    }
+
+    func openShellSession(
+        user: PlatformUserPayload,
+        command: String,
+        environ: NSArray,
+        term: String,
+        rows: Int32,
+        cols: Int32,
+        reply: @escaping (FileHandle?, String?, NSError?) -> Void
+    ) {
+        guard let currentConnection = NSXPCConnection.current() else {
+            reply(nil, nil, NSError(domain: "RootHelper", code: -1, userInfo: [
+                NSLocalizedDescriptionKey: "no current XPC connection",
+            ]))
+            return
+        }
+        do {
+            let (fileHandle, handle) = try shellSessionManager.open(
+                owner: ObjectIdentifier(currentConnection),
+                user: user,
+                command: command,
+                environ: environ.compactMap { $0 as? String },
+                term: term,
+                rows: rows,
+                cols: cols
+            )
+            reply(fileHandle, handle, nil)
+        } catch {
+            logger.error("openShellSession: \(error.localizedDescription)")
+            reply(nil, nil, error as NSError)
+        }
+    }
+
+    func readSystemSSHHostKey(reply: @escaping (NSString?, NSError?) -> Void) {
+        do {
+            let keyData = try String(contentsOfFile: "/etc/ssh/ssh_host_ed25519_key", encoding: .utf8)
+            reply(keyData as NSString, nil)
+        } catch {
+            reply(nil, error as NSError)
+        }
+    }
+
+    func signalShellSession(handle: String, signal sig: Int32, reply: @escaping (NSError?) -> Void) {
+        do {
+            try shellSessionManager.signal(handle: handle, signal: sig)
+            reply(nil)
+        } catch {
+            reply(error as NSError)
+        }
+    }
+
+    func waitShellSession(handle: String, reply: @escaping (Int32, NSError?) -> Void) {
+        DispatchQueue.global().async { [weak self] in
+            guard let self else {
+                reply(255, NSError(domain: "RootHelper", code: -1, userInfo: [
+                    NSLocalizedDescriptionKey: "service deallocated",
+                ]))
+                return
+            }
+            do {
+                let exitStatus = try shellSessionManager.wait(handle: handle)
+                reply(exitStatus, nil)
+            } catch {
+                logger.error("waitShellSession: handle \(handle) failed: \(error.localizedDescription)")
+                reply(255, error as NSError)
+            }
+        }
+    }
+
+    func closeShellSession(handle: String, reply: @escaping (NSError?) -> Void) {
+        do {
+            try shellSessionManager.close(handle: handle)
+            reply(nil)
+        } catch {
+            reply(error as NSError)
+        }
     }
 
     func closeNeighborMonitor(reply: @escaping (NSError?) -> Void) {

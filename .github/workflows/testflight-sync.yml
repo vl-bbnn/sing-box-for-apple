@@ -19,11 +19,11 @@ on:
       version:
         description: App marketing version
         type: string
-        default: '1.0'
+        default: '1.14.6'
       build_number:
         description: Unique App Store Connect build number
         type: string
-        default: '2026100801'
+        default: '2026100803'
 
 permissions:
   contents: read
@@ -44,7 +44,7 @@ env:
   OVERLAY_SOURCE_LINK: ${{ vars.OVERLAY_SOURCE_LINK }}
   OVERLAY_RELEASES_LINK: ${{ vars.OVERLAY_RELEASES_LINK }}
   SING_BOX_REPO_URL: https://github.com/vl-bbnn/sing-box.git
-  SING_BOX_REPO_REF: ef1d02148a66158e23fc22d4e372f4f3bf855bc1
+  SING_BOX_REPO_REF: 3a85db1ddb54c55ced03e7cf92aae68b95b3acaf
   SING_BOX_LX: '1'
   LIBBOX_VARIANT: ordinary
   LIBBOX_APPLE_PLATFORMS: ios
@@ -96,7 +96,7 @@ jobs:
           submodules: recursive
       - uses: actions/setup-go@v6
         with:
-          go-version: '~1.25.9'
+          go-version: '~1.26.8'
           cache: false
       - name: Prepare API key and build configuration
         shell: bash
@@ -146,16 +146,16 @@ jobs:
         uses: actions/cache/restore@v5
         with:
           path: build/libbox/ordinary/Libbox.xcframework
-          key: bbnn-libbox-ios-lx-${{ env.SING_BOX_REPO_REF }}-go1.25.9
+          key: bbnn-libbox-ios-lx-${{ env.SING_BOX_REPO_REF }}-go1.26.8
       - name: Build pinned WLT-free libbox
         if: inputs.platform == 'ios' && steps.libbox-cache.outputs.cache-hit != 'true'
-        run: bash scripts/build_libbox.sh 1.13.13
+        run: bash scripts/build_libbox.sh 1.14.2
       - name: Save compiled ordinary libbox
         if: inputs.platform == 'ios' && steps.libbox-cache.outputs.cache-hit != 'true'
         uses: actions/cache/save@v5
         with:
           path: build/libbox/ordinary/Libbox.xcframework
-          key: bbnn-libbox-ios-lx-${{ env.SING_BOX_REPO_REF }}-go1.25.9
+          key: bbnn-libbox-ios-lx-${{ env.SING_BOX_REPO_REF }}-go1.26.8
       - name: Verify ordinary source and variant
         if: inputs.platform == 'ios'
         run: |
@@ -202,11 +202,15 @@ jobs:
           assert info['CFBundleShortVersionString'] == os.environ['RELEASE_VERSION']
           assert info['CFBundleVersion'] == os.environ['RELEASE_BUILD_NUMBER']
           assert 'pro.bbnn.vpn' in [scheme for item in info['CFBundleURLTypes'] for scheme in item['CFBundleURLSchemes']]
-          for extension in (app/'PlugIns').glob('*.appex'):
+          extensions = list((app/'PlugIns').glob('*.appex')) + list((app/'Extensions').glob('*.appex'))
+          seen = {info['CFBundleIdentifier']}
+          for extension in extensions:
               p = plistlib.loads((extension/'Info.plist').read_bytes())
+              seen.add(p['CFBundleIdentifier'])
               assert p['CFBundleIdentifier'].startswith(expected+'.'), p['CFBundleIdentifier']
               assert p['CFBundleShortVersionString'] == info['CFBundleShortVersionString']
               assert p['CFBundleVersion'] == info['CFBundleVersion']
+          assert seen == {expected + suffix for suffix in ('', '.extension', '.fileprovider', '.intents', '.widget', '.share', '.action')}, seen
           print({k: info[k] for k in ('CFBundleIdentifier', 'CFBundleDisplayName', 'CFBundleShortVersionString', 'CFBundleVersion')})
           PYVERIFY
           codesign --verify --deep --strict build/SFI.xcarchive/Products/Applications/bbnn-vpn.app

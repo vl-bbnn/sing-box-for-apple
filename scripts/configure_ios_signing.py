@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Apply retained App Store profiles only to the five iOS shipping targets."""
+"""Apply retained App Store profiles only to the seven iOS shipping targets."""
 
 import argparse
 import json
@@ -23,6 +23,8 @@ targets = {
     "FileProviderExtension": ".fileprovider",
     "IntentsExtension": ".intents",
     "WidgetExtension": ".widget",
+    "ShareExtension": ".share",
+    "ActionExtension": ".action",
 }
 base = next(identifier for identifier in profile_by_identifier
             if all(identifier + suffix in profile_by_identifier for suffix in targets.values()))

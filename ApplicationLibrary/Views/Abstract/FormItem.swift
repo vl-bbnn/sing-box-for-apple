@@ -22,13 +22,14 @@ public func FormTextItem(_ name: LocalizedStringKey, _ value: String) -> some Vi
             }
         }
     #else
-        HStack {
+        HStack(alignment: .firstTextBaseline) {
             Text(name)
-            Spacer()
             Text(value)
                 .multilineTextAlignment(.trailing)
                 .font(Font.system(.caption, design: .monospaced))
                 .textSelection(.enabled)
+                .frame(maxWidth: .infinity, alignment: .trailing)
+                .fixedSize(horizontal: false, vertical: true)
         }
     #endif
 }
@@ -45,15 +46,24 @@ public func FormTextItem(_ name: LocalizedStringKey, _ systemImage: String, @Vie
             }
         }
     #else
-        HStack {
+        HStack(alignment: .firstTextBaseline) {
             Label(name, systemImage: systemImage)
-            Spacer()
             value()
                 .multilineTextAlignment(.trailing)
                 .font(Font.system(.caption, design: .monospaced))
                 .textSelection(.enabled)
+                .frame(maxWidth: .infinity, alignment: .trailing)
+                .fixedSize(horizontal: false, vertical: true)
         }
     #endif
+}
+
+public func FormProgressView() -> some View {
+    // ProgressView reports Double.leastNormalMagnitude as its first text baseline on iOS,
+    // dragging the baseline of the enclosing stack to the top of the item.
+    ProgressView()
+        .controlSize(.small)
+        .alignmentGuide(.firstTextBaseline) { $0[.bottom] }
 }
 
 public func FormItem(_ title: String, @ViewBuilder content: () -> some View) -> some View {
@@ -136,7 +146,7 @@ public func FormButton(action: @escaping () -> Void, @ViewBuilder label: () -> s
     #endif
 }
 
-public func FormButton(_ titleKey: some StringProtocol, action: @escaping () -> Void) -> some View {
+public func FormButton(_ titleKey: LocalizedStringKey, action: @escaping () -> Void) -> some View {
     Button(titleKey, action: action)
     #if os(macOS)
         .buttonStyle(.plain)
@@ -146,6 +156,14 @@ public func FormButton(_ titleKey: some StringProtocol, action: @escaping () -> 
 
 public func FormButton(role: ButtonRole?, action: @escaping () -> Void, @ViewBuilder label: () -> some View) -> some View {
     Button(role: role, action: action, label: label)
+    #if os(macOS)
+        .buttonStyle(.plain)
+        .foregroundColor(.accentColor)
+    #endif
+}
+
+public func FormLink(destination: URL, @ViewBuilder label: () -> some View) -> some View {
+    Link(destination: destination, label: label)
     #if os(macOS)
         .buttonStyle(.plain)
         .foregroundColor(.accentColor)
@@ -166,6 +184,81 @@ public func FormNavigationLink(@ViewBuilder destination: () -> some View, @ViewB
         }, label: label)
     #endif
 }
+
+public struct FormPickerOption<Value: Hashable>: Identifiable {
+    public let value: Value
+    public let name: String
+
+    public var id: Value {
+        value
+    }
+
+    public init(_ value: Value, _ name: String) {
+        self.value = value
+        self.name = name
+    }
+}
+
+public struct FormPicker<Value: Hashable>: View {
+    private let title: String
+    private let options: [FormPickerOption<Value>]
+    @Binding private var selection: Value
+
+    public init(_ title: String, options: [FormPickerOption<Value>], selection: Binding<Value>) {
+        self.title = title
+        self.options = options
+        _selection = selection
+    }
+
+    public var body: some View {
+        #if os(tvOS)
+            FormNavigationLink {
+                FormPickerListView(title: title, options: options, selection: $selection)
+            } label: {
+                HStack {
+                    Text(title)
+                    Spacer()
+                    Text(options.first { $0.value == selection }?.name ?? "")
+                        .foregroundStyle(.secondary)
+                }
+            }
+        #else
+            Picker(title, selection: $selection) {
+                ForEach(options) { option in
+                    Text(option.name).tag(option.value)
+                }
+            }
+        #endif
+    }
+}
+
+#if os(tvOS)
+    private struct FormPickerListView<Value: Hashable>: View {
+        let title: String
+        let options: [FormPickerOption<Value>]
+        @Binding var selection: Value
+        @Environment(\.dismiss) private var dismiss
+
+        var body: some View {
+            FormView {
+                ForEach(options) { option in
+                    Button {
+                        selection = option.value
+                        dismiss()
+                    } label: {
+                        HStack {
+                            Text(option.name)
+                            Spacer()
+                            Image(systemName: "checkmark")
+                                .opacity(selection == option.value ? 1 : 0)
+                        }
+                    }
+                }
+            }
+            .navigationTitle(title)
+        }
+    }
+#endif
 
 #if os(macOS)
     public func FormNavigationLink(value: some Hashable, @ViewBuilder label: () -> some View) -> some View {

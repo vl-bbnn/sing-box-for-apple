@@ -136,69 +136,64 @@ struct ProfilePickerSheet: View {
         private var nonIOSBody: some View {
             listContent
             #if os(tvOS)
-            .environment(\.editMode, $editMode)
-            .toolbar {
-                ToolbarItem(placement: .confirmationAction) {
-                    TVToolbarButton(title: editMode.isEditing ? String(localized: "Done") : String(localized: "Edit")) {
-                        withAnimation {
-                            if editMode.isEditing {
-                                movingProfileID = nil
-                            }
-                            editMode = editMode.isEditing ? .inactive : .active
+                .environment(\.editMode, $editMode)
+                .toolbar {
+                    ToolbarItem(placement: .confirmationAction) {
+                        TVToolbarButton(title: editMode.isEditing ? String(localized: "Done") : String(localized: "Edit")) {
+                            toggleEditMode()
                         }
                     }
                 }
-            }
-            .navigationDestination(item: $profileToEdit) { profile in
-                EditProfileView()
-                    .environmentObject(profile)
-                    .environmentObject(environments)
-                    .toolbar {
-                        ToolbarItemGroup(placement: .topBarLeading) {
-                            BackButton()
-                        }
-                    }
-            }
-            #elseif os(macOS)
-            .safeAreaInset(edge: .bottom) {
-                VStack(spacing: 0) {
-                    Divider()
-                    HStack {
-                        Spacer()
-                        Button("Cancel") {
-                            dismiss()
-                        }
-                        .keyboardShortcut(.escape, modifiers: [])
-                        if isEditing {
-                            Button("Done") {
-                                withAnimation {
-                                    isEditing = false
-                                }
-                            }
-                            .buttonStyle(.borderedProminent)
-                        } else {
-                            Button("Edit") {
-                                withAnimation {
-                                    isEditing = true
-                                }
-                            }
-                            .buttonStyle(.borderedProminent)
-                        }
-                    }
-                    .padding()
-                    .background(Color(NSColor.controlBackgroundColor))
-                }
-            }
-            .sheet(item: $profileToEdit) { profile in
-                NavigationSheet {
+                .navigationDestination(item: $profileToEdit) { profile in
                     EditProfileView()
                         .environmentObject(profile)
                         .environmentObject(environments)
+                        .toolbar {
+                            ToolbarItemGroup(placement: .topBarLeading) {
+                                BackButton()
+                            }
+                        }
                 }
-                .frame(minWidth: 500, minHeight: 400)
-            }
+            #elseif os(macOS)
+                .safeAreaInset(edge: .bottom) {
+                    VStack(spacing: 0) {
+                        Divider()
+                        HStack {
+                            Spacer()
+                            Button("Cancel") {
+                                dismiss()
+                            }
+                            .keyboardShortcut(.escape, modifiers: [])
+                            if isEditing {
+                                Button("Done") {
+                                    withAnimation {
+                                        isEditing = false
+                                    }
+                                }
+                                .buttonStyle(.borderedProminent)
+                            } else {
+                                Button("Edit") {
+                                    withAnimation {
+                                        isEditing = true
+                                    }
+                                }
+                                .buttonStyle(.borderedProminent)
+                            }
+                        }
+                        .padding()
+                        .background(Color(NSColor.controlBackgroundColor))
+                    }
+                }
+                .sheet(item: $profileToEdit) { profile in
+                    NavigationSheet {
+                        EditProfileView()
+                            .environmentObject(profile)
+                            .environmentObject(environments)
+                    }
+                    .frame(minWidth: 500, minHeight: 400)
+                }
             #endif
-            .alert($alert)
+                .alert($alert)
         }
     #endif
 
@@ -397,6 +392,23 @@ struct ProfilePickerSheet: View {
         }
     #endif
 
+    #if os(tvOS)
+        private func toggleEditMode() {
+            let target = focusedProfileID ?? selectedProfileID
+            if editMode.isEditing {
+                movingProfileID = nil
+            }
+            editMode = editMode.isEditing ? .inactive : .active
+            // Rows swap between the normal and editing layouts, and UIKit drops focus with the
+            // replaced view while focusedProfileID keeps its old value. Assigning that same value
+            // moves nothing, so clear it first to make the next assignment a real focus update.
+            focusedProfileID = nil
+            DispatchQueue.main.async {
+                focusedProfileID = target
+            }
+        }
+    #endif
+
     private func updateProfile(_ profile: ProfilePreview) async {
         do {
             try await profile.origin.updateRemoteProfile()
@@ -556,6 +568,10 @@ private struct ProfilePickerRow: View {
                     tvOSNormalBody
                 }
             }
+            // Animating the swap keeps the outgoing layout alive, and the focus engine will move
+            // focus onto its row card during that window; the card is then torn down and focus is
+            // left on a dead item, which kills every later move.
+            .transaction { $0.animation = nil }
             .sheet(isPresented: $showQRCode) {
                 if let remoteURL = profile.remoteURL {
                     QRCodeSheet(profileName: profile.name, remoteURL: remoteURL)
@@ -643,7 +659,6 @@ private struct ProfilePickerRow: View {
                     Image(systemName: "ellipsis")
                         .font(.system(size: 16))
                 }
-                .buttonStyle(.plain)
                 .actionButtonStyle()
                 .disabled(isUpdating)
                 .padding(.trailing, 12)
@@ -671,7 +686,6 @@ private struct ProfilePickerRow: View {
                         .font(.system(size: 24))
                         .foregroundStyle(.red)
                 }
-                .buttonStyle(.plain)
                 .actionButtonStyle()
 
                 Button {
@@ -680,7 +694,6 @@ private struct ProfilePickerRow: View {
                     Image(systemName: "line.3.horizontal")
                         .font(.system(size: 20))
                 }
-                .buttonStyle(.plain)
                 .actionButtonStyle()
                 .focused(focusedProfileID, equals: profile.id)
             }
@@ -849,9 +862,9 @@ private struct ProfilePickerRow: View {
                     }
                 #endif
             }
-            .contentShape(Rectangle())
             .padding(16)
             .cardStyle()
+            .contentShape(Rectangle())
         }
     #endif
 

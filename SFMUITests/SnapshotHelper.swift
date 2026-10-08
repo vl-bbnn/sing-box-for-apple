@@ -43,6 +43,12 @@ func snapshot(_ name: String, timeWaitingForIdle timeout: TimeInterval) {
     }
     guard let app = currentApp else { return }
     let path = screenshotsDir.appendingPathComponent("Mac-\(name).png")
+    let window = app.windows.firstMatch
+    if window.waitForExistence(timeout: 10) {
+        let screenshot = window.screenshot()
+        try! screenshot.pngRepresentation.write(to: path)
+        return
+    }
     var resolvedWindowID: CGWindowID?
     let deadline = Date().addingTimeInterval(10)
     while resolvedWindowID == nil, Date() < deadline {
@@ -60,8 +66,7 @@ func snapshot(_ name: String, timeWaitingForIdle timeout: TimeInterval) {
             return
         }
     }
-    let screenshot = XCUIScreen.main.screenshot()
-    try! screenshot.pngRepresentation.write(to: path)
+    XCTFail("Unable to capture the app window")
 }
 
 @MainActor

@@ -36,6 +36,22 @@ class AppStoreConnectClient
     bundle = bundles.find { |item| item.dig("attributes", "identifier") == bundle_id }
     raise "bundle ID is not registered" unless bundle
     raise "bundle ID team mismatch" unless bundle.dig("attributes", "seedId") == ENV.fetch("OVERLAY_DEVELOPMENT_TEAM")
+    [".share", ".action"].each do |suffix|
+      identifier = bundle_id + suffix
+      result = request(:get, "/v1/bundleIds", params: { "filter[identifier]" => identifier, "limit" => "200" }).fetch("data")
+      item = result.find { |entry| entry.dig("attributes", "identifier") == identifier }
+      item ||= request(:post, "/v1/bundleIds", body: { data: {
+        type: "bundleIds", attributes: { name: "bbnn-vpn#{suffix}", identifier: identifier, platform: "IOS" }
+      } }).fetch("data")
+      capabilities = request(:get, "/v1/bundleIds/#{item.fetch('id')}/bundleIdCapabilities").fetch("data")
+      unless capabilities.any? { |cap| cap.dig("attributes", "capabilityType") == "APP_GROUPS" }
+        request(:post, "/v1/bundleIdCapabilities", body: { data: {
+          type: "bundleIdCapabilities", attributes: { capabilityType: "APP_GROUPS" },
+          relationships: { bundleId: { data: { type: "bundleIds", id: item.fetch("id") } } }
+        } })
+      end
+      puts "Registered shipping extension #{identifier} with App Groups enabled"
+    end
     puts JSON.pretty_generate({ app_id: app_id, bundle_id: bundle_id, token_mode: @token_mode, developer_api: "accessible" })
   end
 
@@ -85,7 +101,7 @@ class AppStoreConnectClient
 
     bundles = request(:get, "/v1/bundleIds", params: { "filter[identifier]" => bundle_id, "limit" => "200" }).fetch("data")
     receipt = { certificate_id: record.fetch("id"), certificate_sha1: OpenSSL::Digest::SHA1.hexdigest(certificate.to_der), profiles: [] }
-    ["", ".extension", ".fileprovider", ".intents", ".widget"].each do |suffix|
+    ["", ".extension", ".fileprovider", ".intents", ".widget", ".share", ".action"].each do |suffix|
       identifier = bundle_id + suffix
       bundle = bundles.find { |item| item.dig("attributes", "identifier") == identifier }
       raise "missing bundle ID #{identifier}" unless bundle
@@ -147,7 +163,23 @@ class AppStoreConnectClient
       build = response.fetch("data", []).first
       state = build&.dig("attributes", "processingState")
       if state == "VALID"
-        puts JSON.pretty_generate({ app_id: app_id, bundle_id: bundle_id, version: version, build: build })
+        [".share", ".action"].each do |suffix|
+      identifier = bundle_id + suffix
+      result = request(:get, "/v1/bundleIds", params: { "filter[identifier]" => identifier, "limit" => "200" }).fetch("data")
+      item = result.find { |entry| entry.dig("attributes", "identifier") == identifier }
+      item ||= request(:post, "/v1/bundleIds", body: { data: {
+        type: "bundleIds", attributes: { name: "bbnn-vpn#{suffix}", identifier: identifier, platform: "IOS" }
+      } }).fetch("data")
+      capabilities = request(:get, "/v1/bundleIds/#{item.fetch('id')}/bundleIdCapabilities").fetch("data")
+      unless capabilities.any? { |cap| cap.dig("attributes", "capabilityType") == "APP_GROUPS" }
+        request(:post, "/v1/bundleIdCapabilities", body: { data: {
+          type: "bundleIdCapabilities", attributes: { capabilityType: "APP_GROUPS" },
+          relationships: { bundleId: { data: { type: "bundleIds", id: item.fetch("id") } } }
+        } })
+      end
+      puts "Registered shipping extension #{identifier} with App Groups enabled"
+    end
+    puts JSON.pretty_generate({ app_id: app_id, bundle_id: bundle_id, version: version, build: build })
         return
       end
       raise "build processing failed: #{state}" if ["FAILED", "INVALID"].include?(state)

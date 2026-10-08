@@ -81,4 +81,30 @@ public extension EnvironmentValues {
             self[cardConfigurationVersionKey.self] = newValue
         }
     }
+
+    private struct logBottomInsetKey: EnvironmentKey {
+        static var defaultValue: CGFloat = 0
+    }
+
+    var logBottomInset: CGFloat {
+        get {
+            self[logBottomInsetKey.self]
+        }
+        set {
+            self[logBottomInsetKey.self] = newValue
+        }
+    }
+
+    private struct remoteControlInToolbarKey: EnvironmentKey {
+        static var defaultValue: Bool = false
+    }
+
+    var remoteControlInToolbar: Bool {
+        get {
+            self[remoteControlInToolbarKey.self]
+        }
+        set {
+            self[remoteControlInToolbarKey.self] = newValue
+        }
+    }
 }

@@ -1,3 +1,4 @@
+import Combine
 import Foundation
 import SwiftUI
 #if canImport(UIKit)
@@ -182,10 +183,28 @@ public struct ImportRemoteProfileRequest: Hashable, Identifiable {
 @MainActor
 public class ExtensionEnvironments: ObservableObject {
     @Published public var commandClient = CommandClient([.log, .status, .groups, .clashMode])
+    public let crashReportManager = CrashReportManager()
+    public let oomReportManager = OOMReportManager()
+    public let powerReportManager = PowerReportManager()
+    public var totalUnreadReportCount: Int {
+        crashReportManager.unreadCount + oomReportManager.unreadCount + powerReportManager.unreadCount
+    }
+
+    @Published public var taildropUnreadCount = 0
+    @Published public var pendingTaildropEndpointTag: String?
+    public var toolsBadgeCount: Int {
+        totalUnreadReportCount + taildropUnreadCount
+    }
+
     @Published public var extensionProfileLoading = true
     @Published public var extensionProfile: ExtensionProfile?
     @Published public var emptyProfiles = false
     @Published public var pendingImportRemoteProfile: ImportRemoteProfileRequest?
+    @Published public var remoteServer: RemoteServer?
+    /// Set when a remote control session fails: the session is already torn down
+    /// (back to local device), and the UI should surface this alert once.
+    @Published public var remoteControlAlert: AlertState?
+    private var remoteSessionHadConnected = false
 
     public var logSearchText = ""
     public var connectionSearchText = ""
@@ -193,8 +212,41 @@ public class ExtensionEnvironments: ObservableObject {
     public let profileUpdate = ObjectWillChangePublisher()
     public let selectedProfileUpdate = ObjectWillChangePublisher()
     public let openSettings = ObjectWillChangePublisher()
+    private var cancellables = Set<AnyCancellable>()
 
     public init() {
+        crashReportManager.objectWillChange
+            .sink { [weak self] _ in
+                self?.objectWillChange.send()
+            }
+            .store(in: &cancellables)
+        oomReportManager.objectWillChange
+            .sink { [weak self] _ in
+                self?.objectWillChange.send()
+            }
+            .store(in: &cancellables)
+        powerReportManager.objectWillChange
+            .sink { [weak self] _ in
+                self?.objectWillChange.send()
+            }
+            .store(in: &cancellables)
+        commandClient.$isConnected
+            .sink { [weak self] isConnected in
+                guard isConnected else { return }
+                Task { @MainActor [weak self] in
+                    guard let self, remoteServer != nil else { return }
+                    remoteSessionHadConnected = true
+                }
+            }
+            .store(in: &cancellables)
+        commandClient.$lastError
+            .sink { [weak self] message in
+                guard let message else { return }
+                Task { @MainActor [weak self] in
+                    self?.handleRemoteControlError(message)
+                }
+            }
+            .store(in: &cancellables)
         if Variant.screenshotMode {
             extensionProfileLoading = false
             extensionProfile = .mock
@@ -204,12 +256,37 @@ public class ExtensionEnvironments: ObservableObject {
 
     public func postReload() {
         Task {
+            await restoreRemoteControl()
             await reload()
+            await crashReportManager.refresh()
+            await oomReportManager.refresh()
+            await powerReportManager.refresh()
         }
     }
 
+    private var remoteControlRestored = false
+    private func restoreRemoteControl() async {
+        // Remote control is not available on tvOS.
+        #if !os(tvOS)
+            if Variant.screenshotMode {
+                return
+            }
+            guard !remoteControlRestored else { return }
+            remoteControlRestored = true
+            let serverID = await SharedPreferences.activeRemoteServerID.get()
+            guard serverID != 0, remoteServer == nil else { return }
+            guard let server = try? await RemoteServerManager.get(serverID) else {
+                await SharedPreferences.activeRemoteServerID.set(0)
+                return
+            }
+            enterRemoteControl(server)
+        #endif
+    }
+
     public func reload() async {
-        if Variant.screenshotMode { return }
+        if Variant.screenshotMode {
+            return
+        }
         if let newProfile = try? await ExtensionProfile.load() {
             if extensionProfile == nil || extensionProfile?.status == .invalid {
                 newProfile.register()
@@ -222,13 +299,68 @@ public class ExtensionEnvironments: ObservableObject {
         }
     }
 
+    /// Whether a service daemon (local extension or remote server) is available
+    /// for command client calls.
+    public var serviceAvailable: Bool {
+        if remoteServer != nil {
+            return true
+        }
+        return extensionProfile?.status.isConnectedStrict == true
+    }
+
     public func connect() {
-        if Variant.screenshotMode { return }
+        if Variant.screenshotMode {
+            return
+        }
+        if remoteServer != nil {
+            if !commandClient.isConnected {
+                commandClient.connect()
+            }
+            return
+        }
         guard let profile = extensionProfile else {
             return
         }
         if profile.status.isConnected, !commandClient.isConnected {
             commandClient.connect()
         }
+    }
+
+    public func enterRemoteControl(_ server: RemoteServer) {
+        CommandTarget.setRemoteServer(server)
+        remoteServer = server
+        remoteSessionHadConnected = false
+        commandClient.disconnect()
+        commandClient.lastError = nil
+        commandClient.connect()
+        Task {
+            await SharedPreferences.activeRemoteServerID.set(server.mustID)
+        }
+    }
+
+    public func exitRemoteControl() {
+        guard remoteServer != nil else {
+            return
+        }
+        CommandTarget.setRemoteServer(nil)
+        remoteServer = nil
+        remoteSessionHadConnected = false
+        commandClient.disconnect()
+        commandClient.lastError = nil
+        connect()
+        Task {
+            await SharedPreferences.activeRemoteServerID.set(0)
+        }
+    }
+
+    private func handleRemoteControlError(_ message: String) {
+        guard let server = remoteServer, commandClient.lastError == message else {
+            return
+        }
+        let description = remoteSessionHadConnected
+            ? "Disconnected from remote server \(server.displayName)"
+            : "Failed to connect to remote server \(server.displayName)"
+        exitRemoteControl()
+        remoteControlAlert = AlertState(errorMessage: "\(description)\n\(message)")
     }
 }

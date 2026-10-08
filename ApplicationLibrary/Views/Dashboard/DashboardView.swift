@@ -6,9 +6,17 @@ import SwiftUI
 public struct DashboardView: View {
     @EnvironmentObject private var environments: ExtensionEnvironments
     @StateObject private var coordinator = DashboardViewModel()
+    @StateObject private var cardConfiguration = DashboardCardConfiguration()
+
+    #if os(iOS)
+        @Environment(\.remoteControlInToolbar) private var remoteControlInToolbar
+        @State private var showCardManagement = false
+        @State private var remoteServers: [RemoteServer] = []
+    #endif
 
     #if os(macOS)
         @Environment(\.controlActiveState) private var controlActiveState
+        @Environment(\.cardConfigurationVersion) private var cardConfigurationVersion
     #endif
 
     public init() {}
@@ -22,6 +30,28 @@ public struct DashboardView: View {
                     Task { await coordinator.reload() }
                 #endif
             }
+        #if os(iOS)
+            .toolbar {
+                ToolbarItem(placement: .topBarTrailing) {
+                    othersMenu
+                }
+            }
+            .onAppear {
+                Task { await reloadRemoteServers() }
+            }
+            .onReceive(NotificationCenter.default.publisher(for: .remoteServersUpdated)) { _ in
+                Task { await reloadRemoteServers() }
+            }
+            .sheet(isPresented: $showCardManagement, onDismiss: {
+                Task { await cardConfiguration.reload() }
+            }, content: {
+                if #available(iOS 16.0, *) {
+                    CardManagementSheet().presentationDetents([.large]).presentationDragIndicator(.visible)
+                } else {
+                    CardManagementSheet()
+                }
+            })
+        #endif
         #if os(tvOS)
             .navigationDestination(item: $environments.pendingImportRemoteProfile) { request in
                 NewProfileView(.init(name: request.name, url: request.url))
@@ -34,19 +64,50 @@ public struct DashboardView: View {
                             BackButton()
                         }
                     }
-            }
+        }
         #else
-            .sheet(item: $environments.pendingImportRemoteProfile) { request in
-                    importRemoteProfileSheet(for: request)
-                }
+        .sheet(item: $environments.pendingImportRemoteProfile) { request in
+            importRemoteProfileSheet(for: request)
+        }
         #endif
         #if os(macOS)
             .onChangeCompat(of: controlActiveState) { state in
                 guard state != .inactive, Variant.useSystemExtension, !coordinator.isLoading else { return }
                 Task { await coordinator.reload() }
         }
+        .onChangeCompat(of: cardConfigurationVersion) { _ in
+            Task { await cardConfiguration.reload() }
+        }
         #endif
     }
+
+    #if os(iOS)
+        @ViewBuilder
+        private var othersMenu: some View {
+            if remoteControlInToolbar {
+                Button {
+                    showCardManagement = true
+                } label: {
+                    Label("Dashboard Items", systemImage: "square.grid.2x2")
+                }
+            } else {
+                Menu {
+                    Button {
+                        showCardManagement = true
+                    } label: {
+                        Label("Dashboard Items", systemImage: "square.grid.2x2")
+                    }
+                    RemoteControlMenuItems(servers: remoteServers)
+                } label: {
+                    Label("Others", systemImage: "line.3.horizontal.circle")
+                }
+            }
+        }
+
+        private func reloadRemoteServers() async {
+            remoteServers = await (try? RemoteServerManager.list()) ?? []
+        }
+    #endif
 
     private func importRemoteProfileSheet(for request: ImportRemoteProfileRequest) -> some View {
         NavigationSheet(title: "Import Profile", onDismiss: {
@@ -76,7 +137,9 @@ public struct DashboardView: View {
 
     @ViewBuilder
     private var mainContent: some View {
-        if environments.extensionProfileLoading {
+        if environments.remoteServer != nil {
+            RemoteDashboardView(commandClient: environments.commandClient, cardConfiguration: cardConfiguration)
+        } else if environments.extensionProfileLoading {
             ProgressView()
         } else if let profile = environments.extensionProfile {
             activeDashboardView
@@ -99,6 +162,6 @@ public struct DashboardView: View {
     }
 
     private var activeDashboardView: some View {
-        ActiveDashboardView(coordinator: coordinator)
+        ActiveDashboardView(coordinator: coordinator, cardConfiguration: cardConfiguration)
     }
 }

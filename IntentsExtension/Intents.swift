@@ -14,7 +14,7 @@ struct StartServiceIntent: AppIntent {
     @Parameter(title: "Profile", optionsProvider: ProfileProvider())
     var profile: String
 
-    func perform() async throws -> some IntentResult & ProvidesDialog {
+    func perform() async throws -> some IntentResult & ReturnsValue<Bool> {
         guard let extensionProfile = try await (ExtensionProfile.load()) else {
             throw NSError(domain: "IntentsExtension", code: 0, userInfo: [NSLocalizedDescriptionKey: String(localized: "NetworkExtension not installed")])
         }
@@ -32,7 +32,7 @@ struct StartServiceIntent: AppIntent {
         }
         if await extensionProfile.status == .connected {
             if !profileChanged {
-                return .result(dialog: "Service is already running")
+                return .result(value: true)
             }
             try await extensionProfile.reloadService()
         } else if await extensionProfile.status.isConnected {
@@ -40,7 +40,7 @@ struct StartServiceIntent: AppIntent {
         } else {
             try await extensionProfile.start()
         }
-        return .result(dialog: "Service started")
+        return .result(value: true)
     }
 }
 
@@ -53,9 +53,9 @@ struct RestartServiceIntent: AppIntent {
         Summary("Restart service")
     }
 
-    func perform() async throws -> some IntentResult & ProvidesDialog {
+    func perform() async throws -> some IntentResult & ReturnsValue<Bool> {
         guard let extensionProfile = try await (ExtensionProfile.load()) else {
-            return .result(dialog: "Service is not installed")
+            return .result(value: false)
         }
         if await extensionProfile.status == .connected {
             try await extensionProfile.reloadService()
@@ -64,7 +64,7 @@ struct RestartServiceIntent: AppIntent {
         } else {
             try await extensionProfile.start()
         }
-        return .result(dialog: "Service restarted")
+        return .result(value: true)
     }
 }
 
@@ -77,12 +77,12 @@ struct StopServiceIntent: AppIntent {
         Summary("Stop service")
     }
 
-    func perform() async throws -> some IntentResult & ProvidesDialog {
+    func perform() async throws -> some IntentResult & ReturnsValue<Bool> {
         guard let extensionProfile = try await (ExtensionProfile.load()) else {
-            return .result(dialog: "Service is not installed")
+            return .result(value: false)
         }
         try await extensionProfile.stop()
-        return .result(dialog: "Service stopped")
+        return .result(value: false)
     }
 }
 
@@ -157,7 +157,7 @@ struct UpdateProfileIntent: AppIntent {
     var profile: String
 
     init() {}
-    func perform() async throws -> some IntentResult & ProvidesDialog {
+    func perform() async throws -> some IntentResult & ReturnsValue<Bool> {
         guard let profile = try await ProfileManager.get(by: profile) else {
             throw NSError(domain: "IntentsExtension", code: 0, userInfo: [NSLocalizedDescriptionKey: String(localized: "Specified profile not found: \(profile)")])
         }
@@ -165,7 +165,7 @@ struct UpdateProfileIntent: AppIntent {
             throw NSError(domain: "IntentsExtension", code: 0, userInfo: [NSLocalizedDescriptionKey: String(localized: "Specified profile is not a remote profile")])
         }
         try await profile.updateRemoteProfile()
-        return .result(dialog: "Profile updated")
+        return .result(value: true)
     }
 }
 
