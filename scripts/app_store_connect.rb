@@ -216,7 +216,7 @@ class AppStoreConnectClient
     Base64.urlsafe_encode64(value).delete("=")
   end
 
-  def request(method, path, params: nil, body: nil, allowed_statuses: [200, 201, 202, 204, 409, 422])
+  def request(method, path, params: nil, body: nil, allowed_statuses: [200, 201, 202, 204])
     uri = URI.join(API_BASE, path)
     uri.query = URI.encode_www_form(params) if params && !params.empty?
     http = Net::HTTP.new(uri.host, uri.port)
