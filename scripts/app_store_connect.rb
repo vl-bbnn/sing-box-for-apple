@@ -32,10 +32,10 @@ class AppStoreConnectClient
     app_id = find_app_id(bundle_id)
     puts JSON.pretty_generate({ app_id: app_id, bundle_id: bundle_id, token_mode: @token_mode })
     begin
-      response = request(:get, "/v1/bundleIds", params: { "filter[identifier]" => bundle_id, "limit" => "1" })
+      response = request(:get, "/v1/bundleIds", params: { "filter[identifier]" => bundle_id, "limit" => "200" })
       puts JSON.pretty_generate({ developer_api: "accessible", bundle_ids: response.fetch("data", []).map { |item| {id: item.fetch("id"), attributes: item.fetch("attributes")} } })
-      response.fetch("data", []).each do |item|
-        caps = request(:get, "/v1/bundleIds/#{item.fetch('id')}/bundleIdCapabilities", params: { "limit" => "200" })
+      response.fetch("data", []).select { |item| item.dig("attributes", "identifier") == bundle_id }.each do |item|
+        caps = request(:get, "/v1/bundleIds/#{item.fetch('id')}/bundleIdCapabilities")
         puts JSON.pretty_generate({ capabilities: caps.fetch("data", []).map { |cap| cap.fetch("attributes") } })
       end
       certs = request(:get, "/v1/certificates", params: { "limit" => "200" })
