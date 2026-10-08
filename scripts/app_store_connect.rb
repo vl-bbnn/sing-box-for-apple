@@ -113,6 +113,11 @@ class AppStoreConnectClient
       if ["", ".intents"].include?(suffix)
         raise "profile lacks new iCloud container for #{identifier}" unless Array(entitlements["com.apple.developer.icloud-container-identifiers"]).include?("iCloud.#{bundle_id}")
       end
+      if suffix == ".extension"
+        ["com.apple.developer.networking.multicast", "com.apple.developer.networking.wifi-info"].each do |permission|
+          raise "profile lacks #{permission} for #{identifier}" unless entitlements[permission] == true
+        end
+      end
       if ["", ".extension"].include?(suffix)
         raise "profile lacks packet tunnel for #{identifier}" unless Array(entitlements["com.apple.developer.networking.networkextension"]).include?("packet-tunnel-provider")
       end
@@ -121,7 +126,7 @@ class AppStoreConnectClient
         FileUtils.mkdir_p(target)
         File.binwrite(File.join(target, "#{plist.fetch('UUID')}.mobileprovision"), content)
       end
-      receipt[:profiles] << { identifier: identifier, id: profile.fetch("id"), name: name }
+      receipt[:profiles] << { identifier: identifier, id: profile.fetch("id"), name: name, entitlements: entitlements.select { |key, _| key.start_with?("com.apple.") || key == "application-identifier" } }
       puts "Prepared App Store profile for #{identifier}"
     end
     File.write("#{directory}/receipt.json", JSON.pretty_generate(receipt))
