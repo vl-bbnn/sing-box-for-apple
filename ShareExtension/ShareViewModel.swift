@@ -143,7 +143,7 @@ final class ShareViewModel: ObservableObject {
     }
 
     func openApplication() {
-        onOpenApplication?(URL(string: "sing-box://taildrop")!)
+        onOpenApplication?(URL(string: "\(AppConfiguration.clientImportScheme)://taildrop")!)
         cancel()
     }
 

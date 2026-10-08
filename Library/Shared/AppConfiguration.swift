@@ -10,6 +10,10 @@ public enum AppConfiguration {
         overlayValue("OverlayApplicationName", fallback: "sing-box")
     }
 
+    public static var clientImportScheme: String {
+        overlayValue("VPNClientImportScheme", fallback: packageName)
+    }
+
     public static var applicationLink: String {
         overlayValue("OverlayApplicationLink", fallback: "https://example.com/2b2n-vpn/")
     }

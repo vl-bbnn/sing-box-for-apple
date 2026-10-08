@@ -57,7 +57,7 @@ struct ShareView: View {
                     .foregroundStyle(.secondary)
                 Text(unavailableMessage)
                     .multilineTextAlignment(.center)
-                Button("Open sing-box") {
+                Button("Open \(AppConfiguration.applicationName)") {
                     viewModel.openApplication()
                 }
             }
