@@ -7,6 +7,8 @@ require "openssl"
 require "optparse"
 require "time"
 require "uri"
+require "fileutils"
+require "open3"
 
 class AppStoreConnectClient
   API_BASE = "https://api.appstoreconnect.apple.com"
@@ -30,25 +32,99 @@ class AppStoreConnectClient
 
   def verify_app(bundle_id:)
     app_id = find_app_id(bundle_id)
-    puts JSON.pretty_generate({ app_id: app_id, bundle_id: bundle_id, token_mode: @token_mode })
-    begin
-      response = request(:get, "/v1/bundleIds", params: { "filter[identifier]" => bundle_id, "limit" => "200" })
-      puts JSON.pretty_generate({ developer_api: "accessible", bundle_ids: response.fetch("data", []).map { |item| {id: item.fetch("id"), attributes: item.fetch("attributes")} } })
-      response.fetch("data", []).select { |item| item.dig("attributes", "identifier") == bundle_id }.each do |item|
-        caps = request(:get, "/v1/bundleIds/#{item.fetch('id')}/bundleIdCapabilities")
-        puts JSON.pretty_generate({ capabilities: caps.fetch("data", []).map { |cap| cap.fetch("attributes") } })
-      end
-      certs = request(:get, "/v1/certificates", params: { "limit" => "200" })
-      puts JSON.pretty_generate({ certificates: certs.fetch("data", []).map { |cert|
-        attributes = cert.fetch("attributes")
-        parsed = OpenSSL::X509::Certificate.new(Base64.decode64(attributes.fetch("certificateContent")))
-        { id: cert.fetch("id"), type: attributes['certificateType'], expiration: attributes['expirationDate'],
-          sha1: OpenSSL::Digest::SHA1.hexdigest(parsed.to_der), subject: parsed.subject.to_s }
-      } })
-    rescue => error
-      warn error.message
-      raise
+    bundles = request(:get, "/v1/bundleIds", params: { "filter[identifier]" => bundle_id, "limit" => "200" }).fetch("data")
+    bundle = bundles.find { |item| item.dig("attributes", "identifier") == bundle_id }
+    raise "bundle ID is not registered" unless bundle
+    raise "bundle ID team mismatch" unless bundle.dig("attributes", "seedId") == ENV.fetch("OVERLAY_DEVELOPMENT_TEAM")
+    puts JSON.pretty_generate({ app_id: app_id, bundle_id: bundle_id, token_mode: @token_mode, developer_api: "accessible" })
+  end
+
+  def prepare_signing(bundle_id:, build_number:)
+    team = ENV.fetch("OVERLAY_DEVELOPMENT_TEAM")
+    password = ENV.fetch("P12_PASSWORD")
+    raise "empty P12_PASSWORD" if password.empty?
+    directory = "build/signing"
+    FileUtils.mkdir_p(directory, mode: 0700)
+    p12_path = "#{directory}/Distribution.p12"
+    certificates = request(:get, "/v1/certificates", params: { "limit" => "200" }).fetch("data")
+    if File.exist?(p12_path)
+      p12 = OpenSSL::PKCS12.new(File.binread(p12_path), password)
+      certificate = p12.certificate
+      key = p12.key
+      fingerprint = OpenSSL::Digest::SHA1.hexdigest(certificate.to_der)
+      record = certificates.find { |item|
+        der = Base64.decode64(item.dig("attributes", "certificateContent"))
+        OpenSSL::Digest::SHA1.hexdigest(der) == fingerprint
+      }
+      raise "retained signing certificate is missing or expired" unless record && certificate.not_after > Time.now
+    else
+      active = certificates.select { |item|
+        %w[DISTRIBUTION IOS_DISTRIBUTION].include?(item.dig("attributes", "certificateType")) &&
+          Time.parse(item.dig("attributes", "expirationDate")) > Time.now
+      }
+      raise "distribution certificate quota would be exceeded; existing certificates preserved" if active.length >= 3
+      key = OpenSSL::PKey::RSA.new(2048)
+      csr = OpenSSL::X509::Request.new
+      csr.version = 0
+      csr.subject = OpenSSL::X509::Name.parse("/CN=bbnn-vpn CI release")
+      csr.public_key = key.public_key
+      csr.sign(key, OpenSSL::Digest::SHA256.new)
+      record = request(:post, "/v1/certificates", body: { data: {
+        type: "certificates", attributes: { certificateType: "DISTRIBUTION", csrContent: csr.to_pem }
+      } }).fetch("data")
+      certificate = OpenSSL::X509::Certificate.new(Base64.decode64(record.dig("attributes", "certificateContent")))
+      File.binwrite(p12_path, OpenSSL::PKCS12.create(password, "bbnn-vpn distribution", key, certificate).to_der)
+      File.chmod(0600, p12_path)
     end
+    raise "certificate belongs to another team" unless certificate.subject.to_a.any? { |part| part[0] == "OU" && part[1] == team }
+    keychain = File.join(ENV.fetch("RUNNER_TEMP"), "app-signing.keychain-db")
+    _, _, status = Open3.capture3("security", "import", p12_path, "-P", password, "-t", "cert", "-f", "pkcs12", "-k", keychain, "-T", "/usr/bin/codesign", "-T", "/usr/bin/security")
+    raise "distribution identity import failed" unless status.success?
+    _, _, status = Open3.capture3("security", "set-key-partition-list", "-S", "apple-tool:,apple:", "-k", ENV.fetch("KEYCHAIN_PASSWORD"), keychain)
+    raise "distribution keychain setup failed" unless status.success?
+
+    bundles = request(:get, "/v1/bundleIds", params: { "filter[identifier]" => bundle_id, "limit" => "200" }).fetch("data")
+    receipt = { certificate_id: record.fetch("id"), certificate_sha1: OpenSSL::Digest::SHA1.hexdigest(certificate.to_der), profiles: [] }
+    ["", ".extension", ".fileprovider", ".intents", ".widget"].each do |suffix|
+      identifier = bundle_id + suffix
+      bundle = bundles.find { |item| item.dig("attributes", "identifier") == identifier }
+      raise "missing bundle ID #{identifier}" unless bundle
+      raise "bundle ID team mismatch" unless bundle.dig("attributes", "seedId") == team
+      name = "bbnn-ios-#{build_number}-#{identifier}"
+      existing = request(:get, "/v1/profiles", params: { "filter[name]" => name, "limit" => "200" }).fetch("data")
+      profile = existing.find { |item| item.dig("attributes", "name") == name && item.dig("attributes", "profileState") == "ACTIVE" }
+      profile ||= request(:post, "/v1/profiles", body: { data: {
+        type: "profiles", attributes: { name: name, profileType: "IOS_APP_STORE" }, relationships: {
+          bundleId: { data: { type: "bundleIds", id: bundle.fetch("id") } },
+          certificates: { data: [{ type: "certificates", id: record.fetch("id") }] }
+        }
+      } }).fetch("data")
+      content = Base64.decode64(profile.dig("attributes", "profileContent"))
+      path = "#{directory}/#{identifier}.mobileprovision"
+      File.binwrite(path, content)
+      decoded, _, status = Open3.capture3("security", "cms", "-D", "-i", path)
+      raise "profile decoding failed" unless status.success?
+      parsed, _, status = Open3.capture3("python3", "-c", "import sys,plistlib,json; p=plistlib.loads(sys.stdin.buffer.read()); print(json.dumps({'UUID':p['UUID'], 'Entitlements':p['Entitlements']}))", stdin_data: decoded)
+      raise "profile parsing failed" unless status.success?
+      plist = JSON.parse(parsed)
+      entitlements = plist.fetch("Entitlements")
+      raise "profile app identifier mismatch" unless entitlements["application-identifier"] == "#{team}.#{identifier}"
+      raise "profile lacks new App Group for #{identifier}" unless Array(entitlements["com.apple.security.application-groups"]).include?("group.#{bundle_id}")
+      if ["", ".intents"].include?(suffix)
+        raise "profile lacks new iCloud container for #{identifier}" unless Array(entitlements["com.apple.developer.icloud-container-identifiers"]).include?("iCloud.#{bundle_id}")
+      end
+      if ["", ".extension"].include?(suffix)
+        raise "profile lacks packet tunnel for #{identifier}" unless Array(entitlements["com.apple.developer.networking.networkextension"]).include?("packet-tunnel-provider")
+      end
+      ["Library/MobileDevice/Provisioning Profiles", "Library/Developer/Xcode/UserData/Provisioning Profiles"].each do |subdirectory|
+        target = File.join(Dir.home, subdirectory)
+        FileUtils.mkdir_p(target)
+        File.binwrite(File.join(target, "#{plist.fetch('UUID')}.mobileprovision"), content)
+      end
+      receipt[:profiles] << { identifier: identifier, id: profile.fetch("id"), name: name }
+      puts "Prepared App Store profile for #{identifier}"
+    end
+    File.write("#{directory}/receipt.json", JSON.pretty_generate(receipt))
   end
 
   def verify_build(bundle_id:, platform:, version:, build_number:, timeout:)
@@ -338,6 +414,8 @@ client = AppStoreConnectClient.new(
 case command
 when "verify-app"
   client.verify_app(bundle_id: options.fetch(:bundle_id))
+when "prepare-signing"
+  client.prepare_signing(bundle_id: options.fetch(:bundle_id), build_number: options.fetch(:build_number))
 when "verify-build"
   client.verify_build(
     bundle_id: options.fetch(:bundle_id), platform: options.fetch(:platform),
