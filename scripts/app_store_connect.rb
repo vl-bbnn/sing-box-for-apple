@@ -33,7 +33,18 @@ class AppStoreConnectClient
     puts JSON.pretty_generate({ app_id: app_id, bundle_id: bundle_id, token_mode: @token_mode })
     begin
       response = request(:get, "/v1/bundleIds", params: { "filter[identifier]" => bundle_id, "limit" => "1" })
-      puts JSON.pretty_generate({ developer_api: "accessible", bundle_ids: response.fetch("data", []).map { |item| item.fetch("id") } })
+      puts JSON.pretty_generate({ developer_api: "accessible", bundle_ids: response.fetch("data", []).map { |item| {id: item.fetch("id"), attributes: item.fetch("attributes")} } })
+      response.fetch("data", []).each do |item|
+        caps = request(:get, "/v1/bundleIds/#{item.fetch('id')}/bundleIdCapabilities", params: { "limit" => "200" })
+        puts JSON.pretty_generate({ capabilities: caps.fetch("data", []).map { |cap| cap.fetch("attributes") } })
+      end
+      certs = request(:get, "/v1/certificates", params: { "limit" => "200" })
+      puts JSON.pretty_generate({ certificates: certs.fetch("data", []).map { |cert|
+        attributes = cert.fetch("attributes")
+        parsed = OpenSSL::X509::Certificate.new(Base64.decode64(attributes.fetch("certificateContent")))
+        { id: cert.fetch("id"), type: attributes['certificateType'], expiration: attributes['expirationDate'],
+          sha1: OpenSSL::Digest::SHA1.hexdigest(parsed.to_der), subject: parsed.subject.to_s }
+      } })
     rescue => error
       warn error.message
       raise
