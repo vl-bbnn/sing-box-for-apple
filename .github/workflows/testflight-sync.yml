@@ -1,615 +1,168 @@
-name: Sync And Upload TestFlight
+name: Upload Pinned bbnn iOS Release
 
 on:
   workflow_dispatch:
     inputs:
-      force_release:
-        description: Force a build and upload even if upstream version did not change
-        required: false
-        default: false
-        type: boolean
       platform:
-        description: Platform to build and upload
-        required: false
-        default: all
+        description: Preflight only or build and upload iOS
         type: choice
-        options:
-          - all
-          - ios
-          - macos
-          - metadata
-  schedule:
-    - cron: "0 0 * * *"
+        options: [metadata, ios]
+        default: metadata
+      bundle_id:
+        description: Existing App Store Connect bundle ID
+        type: string
+        default: pro.bbnn.vpn
+      version:
+        description: App marketing version
+        type: string
+        default: '1.0'
+      build_number:
+        description: Unique App Store Connect build number
+        type: string
+        default: '2026100801'
 
 permissions:
-  contents: write
+  contents: read
 
 concurrency:
-  group: testflight-sync
+  group: bbnn-ios-upload
   cancel-in-progress: false
 
 env:
-  OVERLAY_RELEASE_BRANCH: stable
-  LIBBOX_APPLE_PLATFORMS: ios,macos
-  LIBBOX_APPLE_PLATFORMS_CACHE_KEY: ios-macos
-  SING_BOX_REPO_URL: https://github.com/vl-bbnn/sing-box.git
-  SING_BOX_REPO_REF: stable
-  SING_BOX_LX: "1"
-  OVERLAY_APPLICATION_NAME: ${{ vars.OVERLAY_APPLICATION_NAME }}
-  VPN_CLIENT_IMPORT_SCHEME: ${{ github.ref_name == 'stage' && 'dev-vpn' || 'pro.bbnn.vpn' }}
+  OVERLAY_APPLICATION_NAME: bbnn-vpn
+  OVERLAY_BASE_PACKAGE_IDENTIFIER: ${{ inputs.bundle_id }}
+  OVERLAY_DEVELOPMENT_TEAM: ${{ vars.OVERLAY_DEVELOPMENT_TEAM }}
+  VPN_CLIENT_IMPORT_SCHEME: pro.bbnn.vpn
   OVERLAY_APPLICATION_LINK: ${{ vars.OVERLAY_APPLICATION_LINK }}
   OVERLAY_CHANGELOG_LINK: ${{ vars.OVERLAY_CHANGELOG_LINK }}
   OVERLAY_CONFIGURATION_LINK: ${{ vars.OVERLAY_CONFIGURATION_LINK }}
   OVERLAY_SOURCE_LINK: ${{ vars.OVERLAY_SOURCE_LINK }}
   OVERLAY_RELEASES_LINK: ${{ vars.OVERLAY_RELEASES_LINK }}
+  SING_BOX_REPO_URL: https://github.com/vl-bbnn/sing-box.git
+  SING_BOX_REPO_REF: ef1d02148a66158e23fc22d4e372f4f3bf855bc1
+  SING_BOX_LX: '1'
+  LIBBOX_VARIANT: ordinary
+  LIBBOX_APPLE_PLATFORMS: ios
+  ASC_KEY_ID: ${{ secrets.ASC_KEY_ID }}
+  ASC_KEY_ISSUER_ID: ${{ secrets.ASC_KEY_ISSUER_ID }}
+  ASC_KEY_P8: ${{ secrets.ASC_KEY_P8 }}
+  RELEASE_VERSION: ${{ inputs.version }}
+  RELEASE_BUILD_NUMBER: ${{ inputs.build_number }}
 
 jobs:
-  detect-release:
+  preflight:
     runs-on: ubuntu-latest
-    outputs:
-      should_release: ${{ steps.prepare.outputs.should_release }}
-      should_push: ${{ steps.prepare.outputs.should_push }}
-      upstream_sha: ${{ steps.prepare.outputs.upstream_sha }}
-      new_version: ${{ steps.prepare.outputs.new_version }}
-      release_notes: ${{ steps.prepare.outputs.release_notes }}
     steps:
-      - name: Checkout repository
-        uses: actions/checkout@v5
-        with:
-          fetch-depth: 0
-
-      - name: Configure remotes
+      - uses: actions/checkout@v5
+      - name: Validate target and existing API access
+        shell: bash
         run: |
-          if git remote get-url upstream >/dev/null 2>&1; then
-            git remote set-url upstream https://github.com/SagerNet/sing-box-for-apple.git
-          else
-            git remote add upstream https://github.com/SagerNet/sing-box-for-apple.git
-          fi
-
-      - name: Validate overlay identity
-        run: test -n "$OVERLAY_APPLICATION_NAME"
-
-      - name: Detect upstream version bump
-        id: prepare
-        run: |
-          if [[ "${{ github.event.inputs.force_release || 'false' }}" == "true" || "${{ github.event.inputs.platform || 'all' }}" == "metadata" ]]; then
-            ./scripts/prepare_overlay_release.sh --force
-          else
-            ./scripts/prepare_overlay_release.sh
-          fi
-
-      - name: Stop when upstream version is unchanged
-        if: steps.prepare.outputs.should_release != 'true'
-        run: echo "No upstream version bump detected."
-
-  prepare-release:
-    needs: detect-release
-    if: needs.detect-release.outputs.should_release == 'true'
-    runs-on: ubuntu-latest
-    outputs:
-      ios_build_exists: ${{ steps.check-ios-marker.outputs.exists }}
-      macos_build_exists: ${{ steps.check-macos-marker.outputs.exists }}
-    env:
-      OVERLAY_DEVELOPMENT_TEAM: ${{ vars.OVERLAY_DEVELOPMENT_TEAM }}
-    steps:
-      - name: Checkout repository
-        uses: actions/checkout@v5
-        with:
-          fetch-depth: 0
-
-      - name: Configure remotes
-        run: |
-          if git remote get-url upstream >/dev/null 2>&1; then
-            git remote set-url upstream https://github.com/SagerNet/sing-box-for-apple.git
-          else
-            git remote add upstream https://github.com/SagerNet/sing-box-for-apple.git
-          fi
-
-      - name: Configure git author
-        run: |
-          git config user.name "github-actions[bot]"
-          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
-
-      - name: Validate workflow configuration
-        run: |
-          test -n "$OVERLAY_APPLICATION_NAME"
-          test -n "$VPN_CLIENT_IMPORT_SCHEME"
+          set -euo pipefail
+          [[ "$OVERLAY_BASE_PACKAGE_IDENTIFIER" == 'pro.bbnn.vpn' ]]
+          [[ "$RELEASE_VERSION" =~ ^[0-9]+\.[0-9]+(\.[0-9]+)?$ ]]
+          [[ "$RELEASE_BUILD_NUMBER" =~ ^[0-9]+$ ]]
           test -n "$OVERLAY_DEVELOPMENT_TEAM"
-
-      - name: Prepare release branch
-        run: |
-          if [[ "${{ github.event.inputs.force_release || 'false' }}" == "true" || "${{ github.event.inputs.platform || 'all' }}" == "metadata" ]]; then
-            ./scripts/prepare_overlay_release.sh --force
-          else
-            ./scripts/prepare_overlay_release.sh
-          fi
-
-      - name: Check existing iOS upload marker
-        id: check-ios-marker
-        run: |
-          if [[ "${{ github.event.inputs.force_release || 'false' }}" == "true" ]]; then
-            echo "exists=false" >> "$GITHUB_OUTPUT"
-            exit 0
-          fi
-          tag="testflight-upload-ios-${{ needs.detect-release.outputs.new_version }}"
-          if git ls-remote --exit-code --tags origin "refs/tags/$tag" >/dev/null 2>&1; then
-            echo "exists=true" >> "$GITHUB_OUTPUT"
-          else
-            echo "exists=false" >> "$GITHUB_OUTPUT"
-          fi
-
-      - name: Check existing macOS upload marker
-        id: check-macos-marker
-        run: |
-          if [[ "${{ github.event.inputs.force_release || 'false' }}" == "true" ]]; then
-            echo "exists=false" >> "$GITHUB_OUTPUT"
-            exit 0
-          fi
-          tag="testflight-upload-macos-${{ needs.detect-release.outputs.new_version }}"
-          if git ls-remote --exit-code --tags origin "refs/tags/$tag" >/dev/null 2>&1; then
-            echo "exists=true" >> "$GITHUB_OUTPUT"
-          else
-            echo "exists=false" >> "$GITHUB_OUTPUT"
-          fi
+          test -n "$ASC_KEY_ID"
+          test -n "$ASC_KEY_ISSUER_ID"
+          test -n "$ASC_KEY_P8"
+          mkdir -p "$RUNNER_TEMP/asc"
+          export ASC_KEY_PATH="$RUNNER_TEMP/asc/AuthKey_${ASC_KEY_ID}.p8"
+          printf '%s' "$ASC_KEY_P8" > "$ASC_KEY_PATH"
+          chmod 600 "$ASC_KEY_PATH"
+          ruby scripts/app_store_connect.rb verify-app --bundle-id "$OVERLAY_BASE_PACKAGE_IDENTIFIER"
 
   upload-ios:
-    needs: [detect-release, prepare-release]
-    if: always() && needs.detect-release.outputs.should_release == 'true' && needs.prepare-release.result == 'success' && needs.prepare-release.outputs.ios_build_exists != 'true' && (github.event_name != 'workflow_dispatch' || github.event.inputs.platform == 'all' || github.event.inputs.platform == 'ios')
+    needs: preflight
+    if: inputs.platform == 'ios'
     runs-on: macos-latest
     timeout-minutes: 90
     env:
-      DEVELOPER_DIR: /Applications/Xcode_26.3.app/Contents/Developer
-      XCODEBUILD_EXTRA_FLAGS: -skipPackagePluginValidation
-      CI_BUILD_NUMBER: ${{ github.run_number }}
-      OVERLAY_BASE_PACKAGE_IDENTIFIER: ${{ vars.OVERLAY_BASE_PACKAGE_IDENTIFIER }}
-      OVERLAY_DEVELOPMENT_TEAM: ${{ vars.OVERLAY_DEVELOPMENT_TEAM }}
-      OVERLAY_MACOS_SYSTEM_PROFILE_SPECIFIER: ${{ vars.OVERLAY_MACOS_SYSTEM_PROFILE_SPECIFIER }}
-      OVERLAY_MACOS_STANDALONE_PROFILE_SPECIFIER: ${{ vars.OVERLAY_MACOS_STANDALONE_PROFILE_SPECIFIER }}
-      ASC_KEY_ID: ${{ secrets.ASC_KEY_ID }}
-      ASC_KEY_ISSUER_ID: ${{ secrets.ASC_KEY_ISSUER_ID }}
-      ASC_KEY_P8: ${{ secrets.ASC_KEY_P8 }}
       BUILD_CERTIFICATE_BASE64: ${{ secrets.BUILD_CERTIFICATE_BASE64 }}
       P12_PASSWORD: ${{ secrets.P12_PASSWORD }}
       KEYCHAIN_PASSWORD: ${{ secrets.KEYCHAIN_PASSWORD }}
+      CI_BUILD_NUMBER: ${{ inputs.build_number }}
+      XCODEBUILD_EXTRA_FLAGS: -skipPackagePluginValidation -skipMacroValidation
     steps:
-      - name: Checkout repository
-        uses: actions/checkout@v5
+      - uses: actions/checkout@v5
         with:
           fetch-depth: 0
           submodules: recursive
-
-      - name: Setup Go
-        uses: actions/setup-go@v6
+      - uses: actions/setup-go@v6
         with:
-          go-version: ~1.25.9
+          go-version: '~1.25.9'
           cache: false
-
-      - name: Install build tools
+      - name: Prepare API key and build configuration
+        shell: bash
         run: |
+          set -euo pipefail
           xcodebuild -version
-          if ! command -v xcbeautify >/dev/null 2>&1; then
-            brew install xcbeautify
-          fi
-
-      - name: Configure remotes
-        run: |
-          if git remote get-url upstream >/dev/null 2>&1; then
-            git remote set-url upstream https://github.com/SagerNet/sing-box-for-apple.git
-          else
-            git remote add upstream https://github.com/SagerNet/sing-box-for-apple.git
-          fi
-
-      - name: Configure git author
-        run: |
-          git config user.name "github-actions[bot]"
-          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
-
-      - name: Write App Store Connect API key
-        run: |
+          command -v xcbeautify >/dev/null || brew install xcbeautify
+          command -v swiftlint >/dev/null || brew install swiftlint
           mkdir -p "$RUNNER_TEMP/asc"
           ASC_KEY_PATH="$RUNNER_TEMP/asc/AuthKey_${ASC_KEY_ID}.p8"
           printf '%s' "$ASC_KEY_P8" > "$ASC_KEY_PATH"
           chmod 600 "$ASC_KEY_PATH"
           echo "ASC_KEY_PATH=$ASC_KEY_PATH" >> "$GITHUB_ENV"
-
-      - name: Validate workflow configuration
-        run: |
-          test -n "$OVERLAY_APPLICATION_NAME"
-          test -n "$VPN_CLIENT_IMPORT_SCHEME"
-          test -n "$OVERLAY_BASE_PACKAGE_IDENTIFIER"
-          test -n "$OVERLAY_DEVELOPMENT_TEAM"
-          test -n "$ASC_KEY_ID"
-          test -n "$ASC_KEY_ISSUER_ID"
-          test -n "$ASC_KEY_P8"
-          test -n "$BUILD_CERTIFICATE_BASE64"
-          test -n "$P12_PASSWORD"
-          test -n "$KEYCHAIN_PASSWORD"
-
-      - name: Install reusable signing identity
-        run: ./scripts/install_apple_signing_assets.sh
-
-      - name: Prepare release branch
-        run: |
-          if [[ "${{ github.event.inputs.force_release || 'false' }}" == "true" ]]; then
-            ./scripts/prepare_overlay_release.sh --force
-          else
-            ./scripts/prepare_overlay_release.sh
-          fi
-
-      - name: Render overlay config
-        run: ./ci_scripts/ci_pre_xcodebuild.sh
-
-      - name: Sync submodules for release branch
-        run: |
-          git submodule sync --recursive
-          git submodule update --init --recursive
-
-      - name: Resolve sing-box source
-        id: sing-box-source
-        run: |
-          if [[ "$SING_BOX_REPO_REF" =~ ^[0-9a-f]{40}$ ]]; then
-            sha="$SING_BOX_REPO_REF"
-          else
-            sha="$(git ls-remote "$SING_BOX_REPO_URL" "refs/heads/$SING_BOX_REPO_REF" | awk '{print $1}')"
-          fi
-          if [[ -z "$sha" ]]; then
-            echo "Unable to resolve $SING_BOX_REPO_URL refs/heads/$SING_BOX_REPO_REF" >&2
-            exit 1
-          fi
-          echo "sha=$sha" >> "$GITHUB_OUTPUT"
-          echo "Using sing-box source $SING_BOX_REPO_URL@$SING_BOX_REPO_REF ($sha)"
-
-      - name: Restore Go libbox cache
-        id: cache-go-libbox
-        uses: actions/cache/restore@v5
+          ./scripts/install_apple_signing_assets.sh
+          ./ci_scripts/ci_pre_xcodebuild.sh
+      - name: Restore pinned ordinary libbox
+        id: libbox-cache
+        uses: actions/cache@v5
         with:
-          path: |
-            ~/go/pkg/mod
-            ~/Library/Caches/go-build
-            ~/Library/Caches/gomobile
-          key: ${{ runner.os }}-go-libbox-${{ steps.sing-box-source.outputs.sha }}-${{ needs.detect-release.outputs.new_version }}
-          restore-keys: |
-            ${{ runner.os }}-go-libbox-${{ steps.sing-box-source.outputs.sha }}-
-            ${{ runner.os }}-go-libbox-
-
-      - name: Restore Libbox.xcframework cache
-        id: cache-libbox-xcframework
-        uses: actions/cache/restore@v5
-        with:
-          path: Libbox.xcframework
-          key: ${{ runner.os }}-libbox-xcframework-${{ env.LIBBOX_APPLE_PLATFORMS_CACHE_KEY }}-${{ steps.sing-box-source.outputs.sha }}-${{ needs.detect-release.outputs.new_version }}
-
-      - name: Build Libbox.xcframework
-        if: steps.cache-libbox-xcframework.outputs.cache-hit != 'true'
-        run: bash ./scripts/build_libbox.sh "${{ needs.detect-release.outputs.new_version }}" "$GITHUB_WORKSPACE/Libbox.xcframework"
-
-      - name: Save Go libbox cache
-        if: steps.cache-go-libbox.outputs.cache-hit != 'true'
-        uses: actions/cache/save@v5
-        with:
-          path: |
-            ~/go/pkg/mod
-            ~/Library/Caches/go-build
-            ~/Library/Caches/gomobile
-          key: ${{ steps.cache-go-libbox.outputs.cache-primary-key }}
-
-      - name: Save Libbox.xcframework cache
-        if: steps.cache-libbox-xcframework.outputs.cache-hit != 'true'
-        uses: actions/cache/save@v5
-        with:
-          path: Libbox.xcframework
-          key: ${{ steps.cache-libbox-xcframework.outputs.cache-primary-key }}
-
-      - name: Activate Libbox.xcframework
+          path: build/libbox/ordinary/Libbox.xcframework
+          key: bbnn-libbox-ios-lx-${{ env.SING_BOX_REPO_REF }}-go1.25.9
+      - name: Build pinned WLT-free libbox
+        if: steps.libbox-cache.outputs.cache-hit != 'true'
+        run: bash scripts/build_libbox.sh 1.13.13
+      - name: Verify ordinary source and variant
         run: |
-          ./scripts/verify_libbox_variant.sh ordinary Libbox.xcframework
-          rm -rf build/libbox/ordinary/Libbox.xcframework
-          mkdir -p build/libbox/ordinary
-          cp -R Libbox.xcframework build/libbox/ordinary/Libbox.xcframework
-
+          scripts/verify_libbox_variant.sh ordinary build/libbox/ordinary/Libbox.xcframework
+          test "$(cat build/libbox/ordinary/Libbox.xcframework/.libbox-source-ref)" = "$SING_BOX_REPO_REF"
+          git diff --exit-code
       - name: Archive iOS
-        run: make archive_ios
-
-      - name: Upload iOS
+        shell: bash
+        run: |
+          make archive_ios XCODEBUILD_EXTRA_FLAGS="$XCODEBUILD_EXTRA_FLAGS MARKETING_VERSION=$RELEASE_VERSION CURRENT_PROJECT_VERSION=$RELEASE_BUILD_NUMBER"
+      - name: Verify archive identity
+        shell: bash
+        run: |
+          python3 - <<'PYVERIFY'
+          import plistlib
+          from pathlib import Path
+          import os
+          app = Path('build/SFI.xcarchive/Products/Applications/bbnn-vpn.app')
+          expected = os.environ['OVERLAY_BASE_PACKAGE_IDENTIFIER']
+          info = plistlib.loads((app/'Info.plist').read_bytes())
+          assert info['CFBundleIdentifier'] == expected, info['CFBundleIdentifier']
+          assert info['CFBundleDisplayName'] == 'bbnn-vpn'
+          assert info['CFBundleShortVersionString'] == os.environ['RELEASE_VERSION']
+          assert info['CFBundleVersion'] == os.environ['RELEASE_BUILD_NUMBER']
+          assert 'pro.bbnn.vpn' in [scheme for item in info['CFBundleURLTypes'] for scheme in item['CFBundleURLSchemes']]
+          for extension in (app/'PlugIns').glob('*.appex'):
+              p = plistlib.loads((extension/'Info.plist').read_bytes())
+              assert p['CFBundleIdentifier'].startswith(expected+'.'), p['CFBundleIdentifier']
+              assert p['CFBundleShortVersionString'] == info['CFBundleShortVersionString']
+              assert p['CFBundleVersion'] == info['CFBundleVersion']
+          print({k: info[k] for k in ('CFBundleIdentifier', 'CFBundleDisplayName', 'CFBundleShortVersionString', 'CFBundleVersion')})
+          PYVERIFY
+          codesign --verify --deep --strict build/SFI.xcarchive/Products/Applications/bbnn-vpn.app
+      - name: Upload to App Store Connect
         run: make upload_ios
-
-      - name: Mark iOS upload complete
+      - name: Verify exact processed build
         run: |
-          tag="testflight-upload-ios-${{ needs.detect-release.outputs.new_version }}"
-          git tag -f "$tag"
-          git push --force origin "refs/tags/$tag"
-
-  publish-ios-group:
-    needs: [detect-release, prepare-release, upload-ios]
-    if: always() && needs.detect-release.outputs.should_release == 'true' && (github.event_name != 'workflow_dispatch' || github.event.inputs.platform == 'all' || github.event.inputs.platform == 'ios' || github.event.inputs.platform == 'metadata') && (needs.prepare-release.outputs.ios_build_exists == 'true' || needs.upload-ios.result == 'success')
-    runs-on: ubuntu-latest
-    env:
-      OVERLAY_BASE_PACKAGE_IDENTIFIER: ${{ vars.OVERLAY_BASE_PACKAGE_IDENTIFIER }}
-      ASC_KEY_ID: ${{ secrets.ASC_KEY_ID }}
-      ASC_KEY_ISSUER_ID: ${{ secrets.ASC_KEY_ISSUER_ID }}
-      ASC_KEY_P8: ${{ secrets.ASC_KEY_P8 }}
-      ASC_BETA_GROUP_ID: ${{ secrets.ASC_BETA_GROUP_ID }}
-      TESTFLIGHT_WHATS_NEW: ${{ needs.detect-release.outputs.release_notes }}
-    steps:
-      - name: Checkout repository
-        uses: actions/checkout@v5
-
-      - name: Write App Store Connect API key
-        run: |
-          mkdir -p "$RUNNER_TEMP/asc"
-          ASC_KEY_PATH="$RUNNER_TEMP/asc/AuthKey_${ASC_KEY_ID}.p8"
-          printf '%s' "$ASC_KEY_P8" > "$ASC_KEY_PATH"
-          chmod 600 "$ASC_KEY_PATH"
-          echo "ASC_KEY_PATH=$ASC_KEY_PATH" >> "$GITHUB_ENV"
-
-      - name: Publish iOS TestFlight metadata
-        continue-on-error: true
-        run: |
-          cmd=(
-            ruby scripts/app_store_connect.rb publish-testflight
-            --bundle-id "$OVERLAY_BASE_PACKAGE_IDENTIFIER"
-            --platform ios
-            --version "${{ needs.detect-release.outputs.new_version }}"
-            --whats-new "$TESTFLIGHT_WHATS_NEW"
-          )
-          if [[ -n "$ASC_BETA_GROUP_ID" ]]; then
-            cmd+=(--beta-group-id "$ASC_BETA_GROUP_ID")
-          fi
-          "${cmd[@]}"
-
-  upload-macos:
-    needs: [detect-release, prepare-release]
-    if: always() && needs.detect-release.outputs.should_release == 'true' && needs.prepare-release.result == 'success' && needs.prepare-release.outputs.macos_build_exists != 'true' && (github.event_name != 'workflow_dispatch' || github.event.inputs.platform == 'all' || github.event.inputs.platform == 'macos')
-    runs-on: macos-26
-    timeout-minutes: 90
-    env:
-      DEVELOPER_DIR: /Applications/Xcode_26.6.app/Contents/Developer
-      XCODEBUILD_EXTRA_FLAGS: -skipPackagePluginValidation
-      CI_BUILD_NUMBER: ${{ github.run_number }}
-      OVERLAY_BASE_PACKAGE_IDENTIFIER: ${{ vars.OVERLAY_BASE_PACKAGE_IDENTIFIER }}
-      OVERLAY_DEVELOPMENT_TEAM: ${{ vars.OVERLAY_DEVELOPMENT_TEAM }}
-      OVERLAY_MACOS_SYSTEM_PROFILE_SPECIFIER: ${{ vars.OVERLAY_MACOS_SYSTEM_PROFILE_SPECIFIER }}
-      OVERLAY_MACOS_STANDALONE_PROFILE_SPECIFIER: ${{ vars.OVERLAY_MACOS_STANDALONE_PROFILE_SPECIFIER }}
-      ASC_KEY_ID: ${{ secrets.ASC_KEY_ID }}
-      ASC_KEY_ISSUER_ID: ${{ secrets.ASC_KEY_ISSUER_ID }}
-      ASC_KEY_P8: ${{ secrets.ASC_KEY_P8 }}
-      BUILD_CERTIFICATE_BASE64: ${{ secrets.BUILD_CERTIFICATE_BASE64 }}
-      P12_PASSWORD: ${{ secrets.P12_PASSWORD }}
-      KEYCHAIN_PASSWORD: ${{ secrets.KEYCHAIN_PASSWORD }}
-    steps:
-      - name: Checkout repository
-        uses: actions/checkout@v5
+          ruby scripts/app_store_connect.rb verify-build \
+            --bundle-id "$OVERLAY_BASE_PACKAGE_IDENTIFIER" --platform ios \
+            --version "$RELEASE_VERSION" --build-number "$RELEASE_BUILD_NUMBER" --timeout 1800 \
+            | tee build/app-store-connect-receipt.json
+      - name: Retain release evidence
+        if: always()
+        uses: actions/upload-artifact@v4
         with:
-          fetch-depth: 0
-          submodules: recursive
-
-      - name: Setup Go
-        uses: actions/setup-go@v6
-        with:
-          go-version: ~1.25.9
-          cache: false
-
-      - name: Install build tools
-        run: |
-          xcodebuild -version
-          if ! command -v xcbeautify >/dev/null 2>&1; then
-            brew install xcbeautify
-          fi
-
-      - name: Configure remotes
-        run: |
-          if git remote get-url upstream >/dev/null 2>&1; then
-            git remote set-url upstream https://github.com/SagerNet/sing-box-for-apple.git
-          else
-            git remote add upstream https://github.com/SagerNet/sing-box-for-apple.git
-          fi
-
-      - name: Configure git author
-        run: |
-          git config user.name "github-actions[bot]"
-          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
-
-      - name: Write App Store Connect API key
-        run: |
-          mkdir -p "$RUNNER_TEMP/asc"
-          ASC_KEY_PATH="$RUNNER_TEMP/asc/AuthKey_${ASC_KEY_ID}.p8"
-          printf '%s' "$ASC_KEY_P8" > "$ASC_KEY_PATH"
-          chmod 600 "$ASC_KEY_PATH"
-          echo "ASC_KEY_PATH=$ASC_KEY_PATH" >> "$GITHUB_ENV"
-
-      - name: Validate workflow configuration
-        run: |
-          test -n "$OVERLAY_APPLICATION_NAME"
-          test -n "$VPN_CLIENT_IMPORT_SCHEME"
-          test -n "$OVERLAY_BASE_PACKAGE_IDENTIFIER"
-          test -n "$OVERLAY_DEVELOPMENT_TEAM"
-          test -n "$ASC_KEY_ID"
-          test -n "$ASC_KEY_ISSUER_ID"
-          test -n "$ASC_KEY_P8"
-          test -n "$BUILD_CERTIFICATE_BASE64"
-          test -n "$P12_PASSWORD"
-          test -n "$KEYCHAIN_PASSWORD"
-
-      - name: Install reusable signing identity
-        run: ./scripts/install_apple_signing_assets.sh
-
-      - name: Prepare release branch
-        run: |
-          if [[ "${{ github.event.inputs.force_release || 'false' }}" == "true" ]]; then
-            ./scripts/prepare_overlay_release.sh --force
-          else
-            ./scripts/prepare_overlay_release.sh
-          fi
-
-      - name: Render overlay config
-        run: ./ci_scripts/ci_pre_xcodebuild.sh
-
-      - name: Sync submodules for release branch
-        run: |
-          git submodule sync --recursive
-          git submodule update --init --recursive
-
-      - name: Resolve sing-box source
-        id: sing-box-source
-        run: |
-          if [[ "$SING_BOX_REPO_REF" =~ ^[0-9a-f]{40}$ ]]; then
-            sha="$SING_BOX_REPO_REF"
-          else
-            sha="$(git ls-remote "$SING_BOX_REPO_URL" "refs/heads/$SING_BOX_REPO_REF" | awk '{print $1}')"
-          fi
-          if [[ -z "$sha" ]]; then
-            echo "Unable to resolve $SING_BOX_REPO_URL refs/heads/$SING_BOX_REPO_REF" >&2
-            exit 1
-          fi
-          echo "sha=$sha" >> "$GITHUB_OUTPUT"
-          echo "Using sing-box source $SING_BOX_REPO_URL@$SING_BOX_REPO_REF ($sha)"
-
-      - name: Restore Go libbox cache
-        id: cache-go-libbox
-        uses: actions/cache/restore@v5
-        with:
+          name: bbnn-ios-${{ inputs.build_number }}-evidence
           path: |
-            ~/go/pkg/mod
-            ~/Library/Caches/go-build
-            ~/Library/Caches/gomobile
-          key: ${{ runner.os }}-go-libbox-${{ steps.sing-box-source.outputs.sha }}-${{ needs.detect-release.outputs.new_version }}
-          restore-keys: |
-            ${{ runner.os }}-go-libbox-${{ steps.sing-box-source.outputs.sha }}-
-            ${{ runner.os }}-go-libbox-
-
-      - name: Restore Libbox.xcframework cache
-        id: cache-libbox-xcframework
-        uses: actions/cache/restore@v5
-        with:
-          path: Libbox.xcframework
-          key: ${{ runner.os }}-libbox-xcframework-${{ env.LIBBOX_APPLE_PLATFORMS_CACHE_KEY }}-${{ steps.sing-box-source.outputs.sha }}-${{ needs.detect-release.outputs.new_version }}
-
-      - name: Build Libbox.xcframework
-        if: steps.cache-libbox-xcframework.outputs.cache-hit != 'true'
-        run: bash ./scripts/build_libbox.sh "${{ needs.detect-release.outputs.new_version }}" "$GITHUB_WORKSPACE/Libbox.xcframework"
-
-      - name: Save Go libbox cache
-        if: steps.cache-go-libbox.outputs.cache-hit != 'true'
-        uses: actions/cache/save@v5
-        with:
-          path: |
-            ~/go/pkg/mod
-            ~/Library/Caches/go-build
-            ~/Library/Caches/gomobile
-          key: ${{ steps.cache-go-libbox.outputs.cache-primary-key }}
-
-      - name: Save Libbox.xcframework cache
-        if: steps.cache-libbox-xcframework.outputs.cache-hit != 'true'
-        uses: actions/cache/save@v5
-        with:
-          path: Libbox.xcframework
-          key: ${{ steps.cache-libbox-xcframework.outputs.cache-primary-key }}
-
-      - name: Activate Libbox.xcframework
-        run: |
-          ./scripts/verify_libbox_variant.sh ordinary Libbox.xcframework
-          rm -rf build/libbox/ordinary/Libbox.xcframework
-          mkdir -p build/libbox/ordinary
-          cp -R Libbox.xcframework build/libbox/ordinary/Libbox.xcframework
-
-      - name: Archive macOS
-        run: make archive_macos
-
-      - name: Upload macOS
-        run: make upload_macos
-
-      - name: Mark macOS upload complete
-        run: |
-          tag="testflight-upload-macos-${{ needs.detect-release.outputs.new_version }}"
-          git tag -f "$tag"
-          git push --force origin "refs/tags/$tag"
-
-  publish-macos-group:
-    needs: [detect-release, prepare-release, upload-macos]
-    if: always() && needs.detect-release.outputs.should_release == 'true' && (github.event_name != 'workflow_dispatch' || github.event.inputs.platform == 'all' || github.event.inputs.platform == 'macos' || github.event.inputs.platform == 'metadata') && (needs.prepare-release.outputs.macos_build_exists == 'true' || needs.upload-macos.result == 'success')
-    runs-on: ubuntu-latest
-    env:
-      OVERLAY_BASE_PACKAGE_IDENTIFIER: ${{ vars.OVERLAY_BASE_PACKAGE_IDENTIFIER }}
-      ASC_KEY_ID: ${{ secrets.ASC_KEY_ID }}
-      ASC_KEY_ISSUER_ID: ${{ secrets.ASC_KEY_ISSUER_ID }}
-      ASC_KEY_P8: ${{ secrets.ASC_KEY_P8 }}
-      ASC_BETA_GROUP_ID: ${{ secrets.ASC_BETA_GROUP_ID }}
-      TESTFLIGHT_WHATS_NEW: ${{ needs.detect-release.outputs.release_notes }}
-    steps:
-      - name: Checkout repository
-        uses: actions/checkout@v5
-
-      - name: Write App Store Connect API key
-        run: |
-          mkdir -p "$RUNNER_TEMP/asc"
-          ASC_KEY_PATH="$RUNNER_TEMP/asc/AuthKey_${ASC_KEY_ID}.p8"
-          printf '%s' "$ASC_KEY_P8" > "$ASC_KEY_PATH"
-          chmod 600 "$ASC_KEY_PATH"
-          echo "ASC_KEY_PATH=$ASC_KEY_PATH" >> "$GITHUB_ENV"
-
-      - name: Publish macOS TestFlight metadata
-        continue-on-error: true
-        run: |
-          cmd=(
-            ruby scripts/app_store_connect.rb publish-testflight
-            --bundle-id "$OVERLAY_BASE_PACKAGE_IDENTIFIER"
-            --platform macos
-            --version "${{ needs.detect-release.outputs.new_version }}"
-            --whats-new "$TESTFLIGHT_WHATS_NEW"
-          )
-          if [[ -n "$ASC_BETA_GROUP_ID" ]]; then
-            cmd+=(--beta-group-id "$ASC_BETA_GROUP_ID")
-          fi
-          "${cmd[@]}"
-
-  finalize-release:
-    needs: [detect-release, prepare-release, upload-ios, upload-macos]
-    if: always() && needs.detect-release.outputs.should_push == 'true' && (github.event_name != 'workflow_dispatch' || github.event.inputs.platform == 'all') && needs.upload-ios.result != 'failure' && needs.upload-macos.result != 'failure'
-    runs-on: ubuntu-latest
-    steps:
-      - name: Checkout repository
-        uses: actions/checkout@v5
-        with:
-          fetch-depth: 0
-
-      - name: Configure remotes
-        run: |
-          if git remote get-url upstream >/dev/null 2>&1; then
-            git remote set-url upstream https://github.com/SagerNet/sing-box-for-apple.git
-          else
-            git remote add upstream https://github.com/SagerNet/sing-box-for-apple.git
-          fi
-
-      - name: Configure git author
-        run: |
-          git config user.name "github-actions[bot]"
-          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
-
-      - name: Prepare release branch
-        run: |
-          if [[ "${{ github.event.inputs.force_release || 'false' }}" == "true" ]]; then
-            ./scripts/prepare_overlay_release.sh --force
-          else
-            ./scripts/prepare_overlay_release.sh
-          fi
-
-      - name: Push synced branches
-        run: |
-          release_branch="${OVERLAY_RELEASE_BRANCH:-stable}"
-          git fetch origin main "$release_branch" --prune
-
-          upstream_sha="${{ needs.detect-release.outputs.upstream_sha }}"
-          remote_main="$(git rev-parse origin/main)"
-          remote_release="$(git rev-parse "origin/$release_branch")"
-
-          if [[ "$remote_main" == "$upstream_sha" ]]; then
-            echo "origin/main already points to $upstream_sha"
-          elif git merge-base --is-ancestor "$remote_main" "$upstream_sha"; then
-            git push origin "$upstream_sha:refs/heads/main"
-          elif git merge-base --is-ancestor "$upstream_sha" "$remote_main"; then
-            echo "origin/main already contains $upstream_sha; skipping main push"
-          else
-            git push --force-with-lease=refs/heads/main:"$remote_main" origin "$upstream_sha:refs/heads/main"
-          fi
-
-          git push --force-with-lease=refs/heads/"$release_branch":"$remote_release" origin HEAD:refs/heads/"$release_branch"
+            build/archive_ios.log
+            build/upload_ios.log
+            build/app-store-connect-receipt.json
+            build/libbox/ordinary/Libbox.xcframework/.libbox-*
+            build/SFI.xcarchive/Info.plist
+          retention-days: 30

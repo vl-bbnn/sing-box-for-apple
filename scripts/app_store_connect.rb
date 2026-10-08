@@ -28,6 +28,36 @@ class AppStoreConnectClient
     ensure_beta_review_submission(build.fetch("id"))
   end
 
+  def verify_app(bundle_id:)
+    app_id = find_app_id(bundle_id)
+    puts JSON.pretty_generate({ app_id: app_id, bundle_id: bundle_id })
+  end
+
+  def verify_build(bundle_id:, platform:, version:, build_number:, timeout:)
+    app_id = find_app_id(bundle_id)
+    deadline = Time.now + timeout
+    loop do
+      response = request(:get, "/v1/builds", params: {
+        "filter[app]" => app_id,
+        "filter[preReleaseVersion.platform]" => platform.upcase,
+        "filter[preReleaseVersion.version]" => version,
+        "filter[version]" => build_number,
+        "fields[builds]" => "version,uploadedDate,processingState",
+        "limit" => "1"
+      })
+      build = response.fetch("data", []).first
+      state = build&.dig("attributes", "processingState")
+      if state == "VALID"
+        puts JSON.pretty_generate({ app_id: app_id, bundle_id: bundle_id, version: version, build: build })
+        return
+      end
+      raise "build processing failed: #{state}" if ["FAILED", "INVALID"].include?(state)
+      raise "timed out waiting for build #{version} (#{build_number})" if Time.now >= deadline
+      warn "waiting for #{bundle_id} #{version} (#{build_number}): #{state || 'not yet visible'}"
+      sleep 20
+    end
+  end
+
   private
 
   def token(mode = @token_mode)
@@ -269,6 +299,7 @@ options = {
 
 parser = OptionParser.new do |opts|
   opts.on("--bundle-id VALUE") { |value| options[:bundle_id] = value }
+  opts.on("--build-number VALUE") { |value| options[:build_number] = value }
   opts.on("--platform VALUE") { |value| options[:platform] = value }
   opts.on("--version VALUE") { |value| options[:version] = value }
   opts.on("--beta-group-id VALUE") { |value| options[:beta_group_id] = value }
@@ -287,6 +318,14 @@ client = AppStoreConnectClient.new(
 )
 
 case command
+when "verify-app"
+  client.verify_app(bundle_id: options.fetch(:bundle_id))
+when "verify-build"
+  client.verify_build(
+    bundle_id: options.fetch(:bundle_id), platform: options.fetch(:platform),
+    version: options.fetch(:version), build_number: options.fetch(:build_number),
+    timeout: options.fetch(:timeout)
+  )
 when "publish-testflight"
   %i[bundle_id platform version whats_new].each do |key|
     raise "missing #{key}" if options[key].nil? || options[key].empty?
