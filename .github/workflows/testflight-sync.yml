@@ -83,6 +83,7 @@ jobs:
     timeout-minutes: 90
     env:
       BUILD_CERTIFICATE_BASE64: ${{ secrets.BUILD_CERTIFICATE_BASE64 }}
+      BBNN_DISTRIBUTION_CERTIFICATE_BASE64: ${{ secrets.BBNN_DISTRIBUTION_CERTIFICATE_BASE64 }}
       P12_PASSWORD: ${{ secrets.P12_PASSWORD }}
       KEYCHAIN_PASSWORD: ${{ secrets.KEYCHAIN_PASSWORD }}
       CI_BUILD_NUMBER: ${{ inputs.build_number }}
@@ -110,6 +111,14 @@ jobs:
           echo "ASC_KEY_PATH=$ASC_KEY_PATH" >> "$GITHUB_ENV"
           ./scripts/install_apple_signing_assets.sh
           ./ci_scripts/ci_pre_xcodebuild.sh
+      - name: Restore reusable bbnn distribution identity
+        shell: bash
+        run: |
+          if [[ -n "$BBNN_DISTRIBUTION_CERTIFICATE_BASE64" ]]; then
+            mkdir -p build/signing
+            printf '%s' "$BBNN_DISTRIBUTION_CERTIFICATE_BASE64" | base64 -D > build/signing/Distribution.p12
+            chmod 600 build/signing/Distribution.p12
+          fi
       - name: Restore retained encrypted signing identity
         if: inputs.signing_run_id != ''
         uses: actions/download-artifact@v4
