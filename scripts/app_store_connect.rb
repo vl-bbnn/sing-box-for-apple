@@ -41,7 +41,7 @@ class AppStoreConnectClient
       result = request(:get, "/v1/bundleIds", params: { "filter[identifier]" => identifier, "limit" => "200" }).fetch("data")
       item = result.find { |entry| entry.dig("attributes", "identifier") == identifier }
       item ||= request(:post, "/v1/bundleIds", body: { data: {
-        type: "bundleIds", attributes: { name: "bbnn-vpn#{suffix}", identifier: identifier, platform: "IOS" }
+        type: "bundleIds", attributes: { name: "bbnn VPN #{suffix.delete_prefix(".")}", identifier: identifier, platform: "IOS" }
       } }).fetch("data")
       capabilities = request(:get, "/v1/bundleIds/#{item.fetch('id')}/bundleIdCapabilities").fetch("data")
       unless capabilities.any? { |cap| cap.dig("attributes", "capabilityType") == "APP_GROUPS" }
@@ -168,7 +168,7 @@ class AppStoreConnectClient
       result = request(:get, "/v1/bundleIds", params: { "filter[identifier]" => identifier, "limit" => "200" }).fetch("data")
       item = result.find { |entry| entry.dig("attributes", "identifier") == identifier }
       item ||= request(:post, "/v1/bundleIds", body: { data: {
-        type: "bundleIds", attributes: { name: "bbnn-vpn#{suffix}", identifier: identifier, platform: "IOS" }
+        type: "bundleIds", attributes: { name: "bbnn VPN #{suffix.delete_prefix(".")}", identifier: identifier, platform: "IOS" }
       } }).fetch("data")
       capabilities = request(:get, "/v1/bundleIds/#{item.fetch('id')}/bundleIdCapabilities").fetch("data")
       unless capabilities.any? { |cap| cap.dig("attributes", "capabilityType") == "APP_GROUPS" }
