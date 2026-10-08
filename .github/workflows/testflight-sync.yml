@@ -79,9 +79,10 @@ jobs:
   upload-ios:
     needs: preflight
     if: inputs.platform == 'ios' || inputs.platform == 'signing'
-    runs-on: macos-latest
+    runs-on: xcode-27
     timeout-minutes: 90
     env:
+      DEVELOPER_DIR: /Applications/Xcode_27.0.app/Contents/Developer
       BUILD_CERTIFICATE_BASE64: ${{ secrets.BUILD_CERTIFICATE_BASE64 }}
       BBNN_DISTRIBUTION_CERTIFICATE_BASE64: ${{ secrets.BBNN_DISTRIBUTION_CERTIFICATE_BASE64 }}
       P12_PASSWORD: ${{ secrets.P12_PASSWORD }}
@@ -102,6 +103,7 @@ jobs:
         run: |
           set -euo pipefail
           xcodebuild -version
+          test "$(xcodebuild -version | tail -1)" = 'Build version 27A266a'
           command -v xcbeautify >/dev/null || brew install xcbeautify
           command -v swiftlint >/dev/null || brew install swiftlint
           mkdir -p "$RUNNER_TEMP/asc"
@@ -160,6 +162,18 @@ jobs:
           scripts/verify_libbox_variant.sh ordinary build/libbox/ordinary/Libbox.xcframework
           test "$(cat build/libbox/ordinary/Libbox.xcframework/.libbox-source-ref)" = "$SING_BOX_REPO_REF"
           git diff --exit-code
+      - name: Verify icon compiler compatibility
+        if: inputs.platform == 'ios'
+        shell: bash
+        run: |
+          mkdir -p build/icon-check
+          set -o pipefail
+          xcrun actool OverlayAppIcon.icon SFI/Assets.xcassets OverlayDevAppIcon.icon \
+            --compile build/icon-check --output-format human-readable-text --notices --warnings \
+            --output-partial-info-plist build/icon-check/Info.plist --app-icon OverlayAppIcon \
+            --accent-color AccentColor --compress-pngs --target-device iphone --target-device ipad \
+            --minimum-deployment-target 15.0 --platform iphoneos \
+            2>&1 | tee build/icon-check.log
       - name: Archive iOS
         if: inputs.platform == 'ios'
         shell: bash
@@ -252,5 +266,6 @@ jobs:
             build/app-store-connect-receipt.json
             build/libbox/ordinary/Libbox.xcframework/.libbox-*
             build/SFI.xcarchive/Info.plist
+            build/icon-check.log
             sing-box.xcodeproj/project.pbxproj
           retention-days: 30
