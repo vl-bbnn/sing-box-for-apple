@@ -26,7 +26,7 @@ on:
         default: '2026100803'
 
 permissions:
-  contents: read
+  contents: write
   actions: read
 
 concurrency:
@@ -132,14 +132,8 @@ jobs:
       - name: Prepare explicit App Store provisioning
         run: |
           ruby scripts/app_store_connect.rb prepare-signing --bundle-id "$OVERLAY_BASE_PACKAGE_IDENTIFIER" --build-number "$RELEASE_BUILD_NUMBER"
-      - name: Retain encrypted signing identity
-        if: always()
-        uses: actions/upload-artifact@v4
-        with:
-          name: bbnn-encrypted-distribution-identity
-          path: build/signing/Distribution.p12
-          retention-days: 30
-          if-no-files-found: error
+      - name: Confirm reusable distribution identity exists
+        run: test -s build/signing/Distribution.p12
       - name: Restore pinned ordinary libbox
         id: libbox-cache
         if: inputs.platform == 'ios'
@@ -231,13 +225,14 @@ jobs:
           PATH=/usr/bin:/bin:/usr/sbin:/sbin:/opt/homebrew/bin xcodebuild -exportArchive \
             -archivePath build/SFI.xcarchive -exportOptionsPlist build/Export.plist -exportPath build/export \
             2>&1 | tee build/export_ios.log
-      - name: Retain signed IPA
+      - name: Retain signed IPA in a draft release
         if: inputs.platform == 'ios'
-        uses: actions/upload-artifact@v4
-        with:
-          name: bbnn-ios-${{ inputs.build_number }}-ipa
-          path: build/export/*.ipa
-          retention-days: 30
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          tag="bbnn-build-${GITHUB_RUN_ID}"
+          gh release create "$tag" --draft --target "$GITHUB_SHA" --title "bbnn-vpn iOS $RELEASE_VERSION ($RELEASE_BUILD_NUMBER)" --notes 'Signed App Store Connect build and evidence.'
+          gh release upload "$tag" build/export/*.ipa
       - name: Upload to App Store Connect
         if: inputs.platform == 'ios'
         shell: bash
@@ -257,19 +252,18 @@ jobs:
             --bundle-id "$OVERLAY_BASE_PACKAGE_IDENTIFIER" --platform ios \
             --version "$RELEASE_VERSION" --build-number "$RELEASE_BUILD_NUMBER" --timeout 1800 \
             | tee build/app-store-connect-receipt.json
-      - name: Retain release evidence
+      - name: Retain release evidence in the draft
         if: always()
-        uses: actions/upload-artifact@v4
-        with:
-          name: bbnn-ios-${{ inputs.build_number }}-evidence
-          path: |
-            build/archive_ios.log
-            build/upload_ios.log
-            build/export_ios.log
-            build/signing/receipt.json
-            build/app-store-connect-receipt.json
-            build/libbox/ordinary/Libbox.xcframework/.libbox-*
-            build/SFI.xcarchive/Info.plist
-            build/icon-check.log
-            sing-box.xcodeproj/project.pbxproj
-          retention-days: 30
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          tag="bbnn-build-${GITHUB_RUN_ID}"
+          gh release view "$tag" >/dev/null || gh release create "$tag" --draft --target "$GITHUB_SHA" --title "bbnn-vpn iOS build $GITHUB_RUN_ID" --notes 'Build evidence.'
+          mkdir -p build/evidence
+          cp sing-box.xcodeproj/project.pbxproj build/evidence/
+          test ! -f build/signing/receipt.json || cp build/signing/receipt.json build/evidence/signing-receipt.json
+          test ! -f build/SFI.xcarchive/Info.plist || cp build/SFI.xcarchive/Info.plist build/evidence/archive-Info.plist
+          find build/libbox -name '.libbox-*' -exec cp {} build/evidence/ \; 2>/dev/null || true
+          find build -maxdepth 1 -type f \( -name '*.log' -o -name '*receipt.json' \) -exec cp {} build/evidence/ \;
+          tar -czf build/evidence.tar.gz -C build/evidence .
+          gh release upload "$tag" build/evidence.tar.gz --clobber
