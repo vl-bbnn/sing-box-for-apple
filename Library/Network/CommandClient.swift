@@ -550,6 +550,9 @@ public class CommandClient: ObservableObject {
             }
         }
 
+        // The stock client does not subscribe to the optional LX DNS stream.
+        func write(_: LibboxDnsQuery?) {}
+
         func write(_ events: LibboxConnectionEvents?) {
             guard let events else {
                 return
