@@ -165,11 +165,11 @@ jobs:
         shell: bash
         run: |
           set -o pipefail
+          python3 scripts/configure_ios_signing.py
           xcodebuild archive -scheme SFI -configuration Release -destination 'generic/platform=iOS' \
             -archivePath build/SFI.xcarchive -skipPackagePluginValidation -skipMacroValidation \
             APP_SHORTCUTS_ENABLE_FLEXIBLE_MATCHING=NO CODE_SIGN_STYLE=Manual CODE_SIGN_IDENTITY='Apple Distribution' \
             DEVELOPMENT_TEAM="$OVERLAY_DEVELOPMENT_TEAM" \
-            'PROVISIONING_PROFILE_SPECIFIER=bbnn-ios-${{ inputs.build_number }}-$(PRODUCT_BUNDLE_IDENTIFIER)' \
             MARKETING_VERSION="$RELEASE_VERSION" CURRENT_PROJECT_VERSION="$RELEASE_BUILD_NUMBER" \
             2>&1 | tee build/archive_ios.log | xcbeautify
       - name: Verify archive identity
@@ -252,4 +252,5 @@ jobs:
             build/app-store-connect-receipt.json
             build/libbox/ordinary/Libbox.xcframework/.libbox-*
             build/SFI.xcarchive/Info.plist
+            sing-box.xcodeproj/project.pbxproj
           retention-days: 30
