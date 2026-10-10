@@ -84,6 +84,8 @@ class AppStoreConnectClient
     raise "replacement equals old build" if old.fetch("id") == replacement.fetch("id")
     raise "replacement is not VALID" unless replacement.dig("attributes", "processingState") == "VALID"
     raise "replacement is expired" if replacement.dig("attributes", "expired")
+    beta = request(:get, "/v1/builds/#{replacement.fetch('id')}/buildBetaDetail").fetch("data")
+    raise "replacement is not available to internal testers" unless beta.dig("attributes", "internalBuildState") == "IN_BETA_TESTING"
     unless old.dig("attributes", "expired")
       request(:patch, "/v1/builds/#{old.fetch('id')}", body: { data: {
         type: "builds", id: old.fetch("id"), attributes: { expired: true }
@@ -91,7 +93,7 @@ class AppStoreConnectClient
     end
     verified = lookup.call(version, build_number)
     raise "expiration was not confirmed" unless verified.dig("attributes", "expired") == true
-    puts JSON.pretty_generate({ app_id: app_id, expired_build: verified, replacement_build: replacement })
+    puts JSON.pretty_generate({ app_id: app_id, expired_build: verified, replacement_build: replacement, replacement_beta_detail: beta })
   end
 
   def prepare_signing(bundle_id:, build_number:)
