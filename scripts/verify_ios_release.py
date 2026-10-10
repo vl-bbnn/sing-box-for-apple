@@ -30,6 +30,11 @@ def inspect(path):
     )}
     bundles = []
     with zipfile.ZipFile(path) as archive:
+        core_binaries = [name for name in archive.namelist() if re.fullmatch(
+            r'Payload/[^/]+\.app/Frameworks/Library\.framework/Library', name
+        )]
+        if len(core_binaries) != 1 or actual_core.encode() not in archive.read(core_binaries[0]):
+            raise ValueError('Expected core version is absent from the shared Library framework')
         for name in archive.namelist():
             if not re.fullmatch(r'Payload/[^/]+\.app/(?:[^/]+/[^/]+\.appex/)?Info\.plist', name):
                 continue
@@ -39,10 +44,6 @@ def inspect(path):
                 raise ValueError(f'Version mismatch in {identifier}')
             if identifier == bundle and info['CFBundleDisplayName'] != 'bbnn-vpn':
                 raise ValueError('Unexpected application name')
-            executable = name.removesuffix('Info.plist') + info['CFBundleExecutable']
-            if identifier == bundle + '.extension':
-                if actual_core.encode() not in archive.read(executable):
-                    raise ValueError('Expected core version is absent from the tunnel executable')
             bundles.append({key: info[key] for key in (
                 'CFBundleIdentifier', 'CFBundleShortVersionString', 'CFBundleVersion'
             )})
