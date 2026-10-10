@@ -55,6 +55,45 @@ class AppStoreConnectClient
     puts JSON.pretty_generate({ app_id: app_id, bundle_id: bundle_id, token_mode: @token_mode, developer_api: "accessible" })
   end
 
+  def inspect_testflight(bundle_id:)
+    app_id = find_app_id(bundle_id)
+    builds = request(:get, "/v1/builds", params: {
+      "filter[app]" => app_id, "include" => "preReleaseVersion,buildBetaDetail",
+      "sort" => "-uploadedDate", "limit" => "200"
+    })
+    versions = request(:get, "/v1/apps/#{app_id}/appStoreVersions", params: { "limit" => "200" })
+    groups = request(:get, "/v1/apps/#{app_id}/betaGroups", params: { "limit" => "200" })
+    raise "testflight inspection requires pagination" if [builds, versions, groups].any? { |r| r.dig("links", "next") }
+    puts JSON.pretty_generate({ app_id: app_id, bundle_id: bundle_id, builds: builds, app_store_versions: versions, beta_groups: groups })
+  end
+
+  def expire_replaced_build(bundle_id:, version:, build_number:, replacement_version:, replacement_build_number:)
+    app_id = find_app_id(bundle_id)
+    lookup = lambda do |marketing_version, number|
+      response = request(:get, "/v1/builds", params: {
+        "filter[app]" => app_id, "filter[preReleaseVersion.platform]" => "IOS",
+        "filter[preReleaseVersion.version]" => marketing_version,
+        "filter[version]" => number, "limit" => "2"
+      })
+      data = response.fetch("data")
+      raise "expected exactly one build #{marketing_version} (#{number})" unless data.length == 1
+      data.first
+    end
+    old = lookup.call(version, build_number)
+    replacement = lookup.call(replacement_version, replacement_build_number)
+    raise "replacement equals old build" if old.fetch("id") == replacement.fetch("id")
+    raise "replacement is not VALID" unless replacement.dig("attributes", "processingState") == "VALID"
+    raise "replacement is expired" if replacement.dig("attributes", "expired")
+    unless old.dig("attributes", "expired")
+      request(:patch, "/v1/builds/#{old.fetch('id')}", body: { data: {
+        type: "builds", id: old.fetch("id"), attributes: { expired: true }
+      } })
+    end
+    verified = lookup.call(version, build_number)
+    raise "expiration was not confirmed" unless verified.dig("attributes", "expired") == true
+    puts JSON.pretty_generate({ app_id: app_id, expired_build: verified, replacement_build: replacement })
+  end
+
   def prepare_signing(bundle_id:, build_number:)
     team = ENV.fetch("OVERLAY_DEVELOPMENT_TEAM")
     password = ENV.fetch("P12_PASSWORD")
@@ -431,6 +470,8 @@ options = {
 parser = OptionParser.new do |opts|
   opts.on("--bundle-id VALUE") { |value| options[:bundle_id] = value }
   opts.on("--build-number VALUE") { |value| options[:build_number] = value }
+  opts.on("--replacement-version VALUE") { |value| options[:replacement_version] = value }
+  opts.on("--replacement-build-number VALUE") { |value| options[:replacement_build_number] = value }
   opts.on("--platform VALUE") { |value| options[:platform] = value }
   opts.on("--version VALUE") { |value| options[:version] = value }
   opts.on("--beta-group-id VALUE") { |value| options[:beta_group_id] = value }
@@ -449,6 +490,13 @@ client = AppStoreConnectClient.new(
 )
 
 case command
+when "inspect-testflight"
+  client.inspect_testflight(bundle_id: options.fetch(:bundle_id))
+when "expire-replaced-build"
+  client.expire_replaced_build(
+    bundle_id: options.fetch(:bundle_id), version: options.fetch(:version), build_number: options.fetch(:build_number),
+    replacement_version: options.fetch(:replacement_version), replacement_build_number: options.fetch(:replacement_build_number)
+  )
 when "verify-app"
   client.verify_app(bundle_id: options.fetch(:bundle_id))
 when "prepare-signing"

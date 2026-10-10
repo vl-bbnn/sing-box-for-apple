@@ -17,13 +17,17 @@ on:
         type: string
         default: ''
       version:
-        description: App marketing version
+        description: App marketing version (must match embedded core base)
         type: string
-        default: '1.14.6'
+        default: '1.14.3'
       build_number:
         description: Unique App Store Connect build number
         type: string
-        default: '2026100803'
+        default: '2026101001'
+      expire_mismatched_build:
+        description: Expire 1.14.6 (2026100803) after the replacement is VALID
+        type: boolean
+        default: false
 
 permissions:
   contents: write
@@ -44,8 +48,9 @@ env:
   OVERLAY_SOURCE_LINK: ${{ vars.OVERLAY_SOURCE_LINK }}
   OVERLAY_RELEASES_LINK: ${{ vars.OVERLAY_RELEASES_LINK }}
   SING_BOX_REPO_URL: https://github.com/vl-bbnn/sing-box.git
-  SING_BOX_REPO_REF: 3a85db1ddb54c55ced03e7cf92aae68b95b3acaf
+  SING_BOX_REPO_REF: 7a15b1f160da161d35b399a55053c33b04fbec6e
   SING_BOX_LX: '1'
+  RELEASE_CORE_VERSION: 1.14.3-lx.14
   LIBBOX_VARIANT: ordinary
   LIBBOX_APPLE_PLATFORMS: ios
   ASC_KEY_ID: ${{ secrets.ASC_KEY_ID }}
@@ -75,6 +80,14 @@ jobs:
           printf '%s' "$ASC_KEY_P8" > "$ASC_KEY_PATH"
           chmod 600 "$ASC_KEY_PATH"
           ruby scripts/app_store_connect.rb verify-app --bundle-id "$OVERLAY_BASE_PACKAGE_IDENTIFIER"
+          ruby scripts/app_store_connect.rb inspect-testflight --bundle-id "$OVERLAY_BASE_PACKAGE_IDENTIFIER" > "$RUNNER_TEMP/asc/testflight-before.json"
+      - name: Retain TestFlight preflight state
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          tag="bbnn-preflight-${GITHUB_RUN_ID}"
+          gh release create "$tag" --draft --target "$GITHUB_SHA" --title "bbnn-vpn TestFlight preflight $GITHUB_RUN_ID" --notes 'App and build metadata. No signing keys.'
+          gh release upload "$tag" "$RUNNER_TEMP/asc/testflight-before.json"
 
   upload-ios:
     needs: preflight
@@ -131,6 +144,7 @@ jobs:
           path: build/signing
       - name: Prepare explicit App Store provisioning
         run: |
+          test -s build/signing/Distribution.p12
           ruby scripts/app_store_connect.rb prepare-signing --bundle-id "$OVERLAY_BASE_PACKAGE_IDENTIFIER" --build-number "$RELEASE_BUILD_NUMBER"
       - name: Confirm reusable distribution identity exists
         run: test -s build/signing/Distribution.p12
@@ -143,7 +157,7 @@ jobs:
           key: bbnn-libbox-ios-lx-${{ env.SING_BOX_REPO_REF }}-go1.26.8
       - name: Build pinned WLT-free libbox
         if: inputs.platform == 'ios' && steps.libbox-cache.outputs.cache-hit != 'true'
-        run: bash scripts/build_libbox.sh 1.14.2
+        run: bash scripts/build_libbox.sh "$RELEASE_VERSION"
       - name: Save compiled ordinary libbox
         if: inputs.platform == 'ios' && steps.libbox-cache.outputs.cache-hit != 'true'
         uses: actions/cache/save@v5
@@ -155,6 +169,14 @@ jobs:
         run: |
           scripts/verify_libbox_variant.sh ordinary build/libbox/ordinary/Libbox.xcframework
           test "$(cat build/libbox/ordinary/Libbox.xcframework/.libbox-source-ref)" = "$SING_BOX_REPO_REF"
+          python3 - <<'PY'
+          import os, re
+          from pathlib import Path
+          version = Path('build/libbox/ordinary/Libbox.xcframework/.libbox-version').read_text().strip()
+          expected = os.environ['RELEASE_CORE_VERSION']
+          assert re.fullmatch(re.escape(expected) + r'-[0-9a-f]{7,40}', version), version
+          assert version.split('-', 1)[0] == os.environ['RELEASE_VERSION'], version
+          PY
           git diff --exit-code
       - name: Verify icon compiler compatibility
         if: inputs.platform == 'ios'
@@ -233,6 +255,9 @@ jobs:
           tag="bbnn-build-${GITHUB_RUN_ID}"
           gh release create "$tag" --draft --target "$GITHUB_SHA" --title "bbnn-vpn iOS $RELEASE_VERSION ($RELEASE_BUILD_NUMBER)" --notes 'Signed App Store Connect build and evidence.'
           gh release upload "$tag" build/export/*.ipa
+      - name: Verify signed IPA versions and embedded core
+        if: inputs.platform == 'ios'
+        run: python3 scripts/verify_ios_release.py build/export/*.ipa > build/ipa-inspection.json
       - name: Upload to App Store Connect
         if: inputs.platform == 'ios'
         shell: bash
@@ -252,6 +277,13 @@ jobs:
             --bundle-id "$OVERLAY_BASE_PACKAGE_IDENTIFIER" --platform ios \
             --version "$RELEASE_VERSION" --build-number "$RELEASE_BUILD_NUMBER" --timeout 1800 \
             | tee build/app-store-connect-receipt.json
+      - name: Expire superseded mismatched TestFlight build
+        if: inputs.platform == 'ios' && inputs.expire_mismatched_build
+        run: |
+          ruby scripts/app_store_connect.rb expire-replaced-build --bundle-id "$OVERLAY_BASE_PACKAGE_IDENTIFIER" \
+            --version 1.14.6 --build-number 2026100803 \
+            --replacement-version "$RELEASE_VERSION" --replacement-build-number "$RELEASE_BUILD_NUMBER" \
+            | tee build/expired-build-receipt.json
       - name: Retain release evidence in the draft
         if: always()
         env:
@@ -264,6 +296,7 @@ jobs:
           test ! -f build/signing/receipt.json || cp build/signing/receipt.json build/evidence/signing-receipt.json
           test ! -f build/SFI.xcarchive/Info.plist || cp build/SFI.xcarchive/Info.plist build/evidence/archive-Info.plist
           find build/libbox -name '.libbox-*' -exec cp {} build/evidence/ \; 2>/dev/null || true
-          find build -maxdepth 1 -type f \( -name '*.log' -o -name '*receipt.json' \) -exec cp {} build/evidence/ \;
+          find build -maxdepth 1 -type f \( -name '*.log' -o -name '*receipt.json' -o -name 'ipa-inspection.json' \) -exec cp {} build/evidence/ \;
+          cp sing-box.xcodeproj/project.xcworkspace/xcshareddata/swiftpm/Package.resolved build/evidence/
           tar -czf build/evidence.tar.gz -C build/evidence .
           gh release upload "$tag" build/evidence.tar.gz --clobber
