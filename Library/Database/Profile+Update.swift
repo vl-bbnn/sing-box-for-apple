@@ -8,7 +8,12 @@ public extension Profile {
             return
         }
         let url = remoteURL
-        let remoteContent = try await HTTPClient.getStringAsync(url)
+        let fetchedContent = try await HTTPClient.getStringAsync(url)
+        #if os(iOS) && SFI_DEV
+            let remoteContent = try WhitelistTransportConfig.compatibleProfile(fetchedContent)
+        #else
+            let remoteContent = fetchedContent
+        #endif
         try await BlockingIO.run {
             var error: NSError?
             LibboxCheckConfig(remoteContent, &error)
@@ -16,18 +21,45 @@ public extension Profile {
                 throw error
             }
         }
+        #if os(iOS) && SFI_DEV
+            try await WhitelistTransportConfig.prepareOfflineRuleSets(remoteContent, profileURL: url)
+        #endif
+
+        let oldContent = try? await readAsync()
+        if oldContent == remoteContent {
+            try await commitRemoteUpdateTimestamp()
+            return
+        }
+
+        if let oldContent, !oldContent.isEmpty {
+            try await writeLastKnownGood(oldContent)
+        }
+        try await writeAsync(remoteContent)
+        do {
+            try await onProfileUpdated()
+        } catch {
+            if let oldContent, !oldContent.isEmpty {
+                try? await writeAsync(oldContent)
+                try? await onProfileUpdated()
+            }
+            throw error
+        }
+        try await writeLastKnownGood(remoteContent)
+        try await commitRemoteUpdateTimestamp()
+    }
+
+    private nonisolated func commitRemoteUpdateTimestamp() async throws {
         await MainActor.run {
             lastUpdated = Date()
         }
         try await ProfileManager.update(self)
-        do {
-            let oldContent = try await readAsync()
-            if oldContent == remoteContent {
-                return
-            }
-        } catch {}
-        try await writeAsync(remoteContent)
-        try await onProfileUpdated()
+    }
+
+    private nonisolated func writeLastKnownGood(_ content: String) async throws {
+        let backupPath = path + ".last-known-good"
+        try await BlockingIO.run {
+            try content.write(toFile: backupPath, atomically: true, encoding: .utf8)
+        }
     }
 
     nonisolated func onProfileUpdated() async throws {

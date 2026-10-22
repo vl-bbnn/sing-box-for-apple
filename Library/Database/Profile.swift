@@ -47,7 +47,7 @@ public class Profile: Record, Identifiable, ObservableObject {
         remoteURL = row[Columns.remoteURL] ?? ""
         autoUpdate = row[Columns.autoUpdate] ?? false
         autoUpdateInterval = row[Columns.autoUpdateInterval] ?? 0
-        lastUpdated = row[Columns.lastUpdated] ?? Date()
+        lastUpdated = row[Columns.lastUpdated]
         try super.init(row: row)
     }
 

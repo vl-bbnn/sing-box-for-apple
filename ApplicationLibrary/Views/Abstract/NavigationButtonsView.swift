@@ -80,7 +80,6 @@ public struct NavigationButtonsView: View {
                     } label: {
                         Label("Groups", systemImage: "rectangle.3.group.fill")
                     }
-                    .accessibilityIdentifier("wlt.groups.open")
                     .labelStyle(.iconOnly)
                     .foregroundStyle(.primary)
                 }

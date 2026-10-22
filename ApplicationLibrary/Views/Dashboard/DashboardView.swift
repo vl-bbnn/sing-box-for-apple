@@ -52,7 +52,9 @@ public struct DashboardView: View {
         NavigationSheet(title: "Import Profile", onDismiss: {
             environments.profileUpdate.send()
         }, content: {
-            NewProfileView(.init(name: request.name, url: request.url))
+            NewProfileView(.init(name: request.name, url: request.url), onSuccess: { profile in
+                await SharedPreferences.selectedProfileID.set(profile.mustID)
+            })
                 .environmentObject(environments)
         })
     }

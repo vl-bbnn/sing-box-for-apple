@@ -1,0 +1,68 @@
+{
+  "name": "WLT EU-only supervised content and playback gate",
+  "apps": {
+    "safari": "com.apple.mobilesafari",
+    "youtube": "com.google.ios.youtube",
+    "tiktok": "com.zhiliaoapp.musically",
+    "instagram": "com.burbn.instagram"
+  },
+  "steps": [
+    {"action": "launch", "app": "vpn", "timeout": 30},
+    {"action": "assert_text", "app": "vpn", "text": "Started", "timeout": 30},
+    {"action": "screenshot", "app": "vpn", "name": "eu-wlt-started"},
+
+    {"action": "launch", "app": "safari", "timeout": 30},
+    {"action": "type_into", "app": "safari", "identifier": "TabBarItemTitle", "text": "https://en.wikipedia.org/wiki/Virtual_private_network\n", "timeout": 10},
+    {"action": "wait", "app": "safari", "seconds": 12},
+    {"action": "assert_texts_absent", "app": "safari", "texts": ["Safari cannot open the page", "The Internet connection appears to be offline", "Не удается открыть страницу", "Подключение к Интернету отсутствует"], "timeout": 1},
+    {"action": "screenshot", "app": "safari", "name": "wikipedia"},
+
+    {"action": "type_into", "app": "safari", "identifier": "TabBarItemTitle", "text": "https://www.google.com/search?q=wlt+eu+iphone+visual+one\n", "timeout": 10},
+    {"action": "wait", "app": "safari", "seconds": 8},
+    {"action": "assert_texts_absent", "app": "safari", "texts": ["Safari cannot open the page", "The Internet connection appears to be offline", "Не удается открыть страницу", "Подключение к Интернету отсутствует"], "timeout": 1},
+    {"action": "screenshot", "app": "safari", "name": "google-search-one"},
+
+    {"action": "type_into", "app": "safari", "identifier": "TabBarItemTitle", "text": "https://browserbench.org/Speedometer3.1/\n", "timeout": 10},
+    {"action": "wait", "app": "safari", "seconds": 10},
+    {"action": "tap_text_any_if_present", "app": "safari", "texts": ["Start Test", "Start Speedometer", "Run Benchmark"], "timeout": 5},
+    {"action": "wait", "app": "safari", "seconds": 60},
+    {"action": "assert_texts_absent", "app": "safari", "texts": ["Safari cannot open the page", "The Internet connection appears to be offline"], "timeout": 1},
+    {"action": "screenshot", "app": "safari", "name": "speedometer"},
+
+    {"action": "type_into", "app": "safari", "identifier": "TabBarItemTitle", "text": "https://www.google.com/search?q=wlt+eu+iphone+visual+two\n", "timeout": 10},
+    {"action": "wait", "app": "safari", "seconds": 8},
+    {"action": "assert_texts_absent", "app": "safari", "texts": ["Safari cannot open the page", "The Internet connection appears to be offline"], "timeout": 1},
+    {"action": "screenshot", "app": "safari", "name": "google-search-two"},
+
+    {"action": "launch", "app": "youtube", "timeout": 30},
+    {"action": "tap_text_any_if_present", "app": "youtube", "texts": ["Accept all", "I agree", "Принять все", "Согласен"], "timeout": 3},
+    {"action": "tap_element", "app": "youtube", "identifier": "id.ui.pivotbar.FEwhat_to_watch.button", "timeout": 20},
+    {"action": "wait", "app": "youtube", "seconds": 8},
+    {"action": "tap_element", "app": "youtube", "identifier": "eml.vwc", "timeout": 30},
+    {"action": "wait", "app": "youtube", "seconds": 8},
+    {"action": "assert_texts_absent", "app": "youtube", "texts": ["You're offline", "No connection", "Something went wrong", "Playback error", "Нет подключения", "Ошибка воспроизведения"], "timeout": 1},
+    {"action": "assert_visual_change", "app": "youtube", "name": "youtube-playback", "seconds": 15, "minimum_changed_ratio": 0.015},
+
+    {"action": "activate", "app": "safari", "timeout": 30},
+    {"action": "type_into", "app": "safari", "identifier": "TabBarItemTitle", "text": "https://www.google.com/search?q=wlt+eu+iphone+visual+three\n", "timeout": 10},
+    {"action": "wait", "app": "safari", "seconds": 8},
+    {"action": "assert_texts_absent", "app": "safari", "texts": ["Safari cannot open the page", "The Internet connection appears to be offline"], "timeout": 1},
+
+    {"action": "launch", "app": "tiktok", "timeout": 30},
+    {"action": "tap_text_any_if_present", "app": "tiktok", "texts": ["Not Now", "Maybe Later", "Не сейчас", "Позже"], "timeout": 3},
+    {"action": "wait", "app": "tiktok", "seconds": 10},
+    {"action": "assert_texts_absent", "app": "tiktok", "texts": ["No internet connection", "Couldn't load", "Tap to retry", "Нет подключения к интернету", "Не удалось загрузить"], "timeout": 1},
+    {"action": "assert_visual_change", "app": "tiktok", "name": "tiktok-playback", "seconds": 15, "minimum_changed_ratio": 0.015},
+
+    {"action": "launch", "app": "instagram", "timeout": 30},
+    {"action": "tap_text_any_if_present", "app": "instagram", "texts": ["Not Now", "Maybe Later", "Не сейчас", "Позже"], "timeout": 3},
+    {"action": "tap_text_any_if_present", "app": "instagram", "texts": ["Reels", "Рилс"], "timeout": 5},
+    {"action": "wait", "app": "instagram", "seconds": 10},
+    {"action": "assert_texts_absent", "app": "instagram", "texts": ["Couldn't refresh feed", "We're having trouble playing this video", "No internet connection", "Не удалось обновить ленту", "Нет подключения к интернету"], "timeout": 1},
+    {"action": "assert_visual_change", "app": "instagram", "name": "instagram-reels-playback", "seconds": 15, "minimum_changed_ratio": 0.015},
+
+    {"action": "activate", "app": "vpn", "timeout": 30},
+    {"action": "assert_text", "app": "vpn", "text": "Started", "timeout": 30},
+    {"action": "screenshot", "app": "vpn", "name": "eu-wlt-content-finished"}
+  ]
+}

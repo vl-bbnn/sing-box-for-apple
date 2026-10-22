@@ -154,17 +154,9 @@ done
 
 go run ./cmd/internal/build_libbox -target apple -platform "$platforms"
 
-source_xcframework="$repo_dir/Libbox.xcframework"
+source_xcframework="${SING_BOX_APPLE_BIND_OUTPUT:-$repo_dir/Libbox.xcframework}"
 if [[ ! -d "$source_xcframework" && -d "$client_root/Libbox.xcframework" ]]; then
 	source_xcframework="$client_root/Libbox.xcframework"
-fi
-# The sing-box Apple builder preserves its upstream behavior and moves the
-# result to a sibling sing-box-for-apple checkout when one exists. A client
-# worktree is not that sibling, so also accept the builder's actual target and
-# relocate it into this worktree's variant directory below.
-builder_copy_xcframework="$(dirname "$repo_dir")/sing-box-for-apple/Libbox.xcframework"
-if [[ ! -d "$source_xcframework" && -d "$builder_copy_xcframework" ]]; then
-	source_xcframework="$builder_copy_xcframework"
 fi
 if [[ ! -d "$source_xcframework" ]]; then
 	echo "Libbox.xcframework was not produced" >&2

@@ -7,6 +7,29 @@ import UserNotifications
   import CoreWLAN
 #endif
 
+private final class WLTPathObservationEpoch {
+  private let lock = NSLock()
+  private var value: UInt64 = 0
+  private var active = false
+  func begin(retire: () -> Void) -> UInt64 {
+    lock.lock(); defer { lock.unlock() }
+    value &+= 1; active = true; retire(); return value
+  }
+  func invalidate(retire: () -> Void) {
+    lock.lock(); defer { lock.unlock() }
+    value &+= 1; active = false; retire()
+  }
+  func install(_ epoch: UInt64, register: () -> Void) {
+    lock.lock(); defer { lock.unlock() }
+    guard active && value == epoch else { return }
+    register()
+  }
+  func isCurrent(_ epoch: UInt64) -> Bool {
+    lock.lock(); defer { lock.unlock() }
+    return active && value == epoch
+  }
+}
+
 public class ExtensionPlatformInterface: NSObject, LibboxPlatformInterfaceProtocol,
   LibboxCommandServerHandlerProtocol
 {
@@ -285,6 +308,45 @@ public class ExtensionPlatformInterface: NSObject, LibboxPlatformInterfaceProtoc
   }
 
   private var nwMonitor: NWPathMonitor?
+  private var wifiObservationMonitor: NWPathMonitor?
+  private var cellularObservationMonitor: NWPathMonitor?
+  private let pathObservationEpoch = WLTPathObservationEpoch()
+  private let pathObservationQueue = DispatchQueue(label: "wlt.path-observation", qos: .utility)
+
+  private func retirePathObservations() {
+    wifiObservationMonitor?.cancel()
+    cellularObservationMonitor?.cancel()
+    wifiObservationMonitor = nil
+    cellularObservationMonitor = nil
+  }
+
+  private func stopPathObservations() {
+    pathObservationEpoch.invalidate { retirePathObservations() }
+  }
+
+  private func startPathObservations(_ epoch: UInt64) {
+    #if os(iOS) && SFI_DEV
+      pathObservationEpoch.install(epoch) {
+      for type in [Network.NWInterface.InterfaceType.wifi, .cellular] {
+        let observation = NWPathMonitor(requiredInterfaceType: type)
+        observation.pathUpdateHandler = { [weak self] path in
+          let entered = Self.pathCallbackUptimeNanos()
+          guard let self, self.pathObservationEpoch.isCurrent(epoch) else { return }
+          let timeText = entered.map { String($0) } ?? "unavailable"
+          let message = "(packet-tunnel): underlay-path-observation epoch=\(epoch) handler_enter_uptime_ns=\(timeText) clock=CLOCK_UPTIME_RAW type=\(type) status=\(path.status) wifi=\(path.usesInterfaceType(.wifi)) cellular=\(path.usesInterfaceType(.cellular)) authority=false"
+          self.pathObservationQueue.async { [weak self] in
+            guard let self, self.pathObservationEpoch.isCurrent(epoch) else { return }
+            PacketTunnelDiagnostics.append(message)
+          }
+        }
+        if type == .wifi { wifiObservationMonitor = observation }
+        else { cellularObservationMonitor = observation }
+        observation.start(queue: DispatchQueue(label: "wlt.observe.\(type)", qos: .userInitiated))
+      }
+      }
+    #endif
+  }
+
 
   public func startDefaultInterfaceMonitor(_ listener: LibboxInterfaceUpdateListenerProtocol?)
     throws
@@ -292,36 +354,100 @@ public class ExtensionPlatformInterface: NSObject, LibboxPlatformInterfaceProtoc
     guard let listener else {
       return
     }
+    let observationEpoch = pathObservationEpoch.begin { retirePathObservations() }
     let monitor = NWPathMonitor()
     nwMonitor = monitor
     let semaphore = DispatchSemaphore(value: 0)
     monitor.pathUpdateHandler = { path in
-      self.onUpdateDefaultInterface(listener, path)
+      #if os(iOS) && SFI_DEV
+        let entered = Self.pathCallbackUptimeNanos()
+        self.onUpdateDefaultInterface(listener, path, handlerEnterUptime: entered)
+      #else
+        self.onUpdateDefaultInterface(listener, path)
+      #endif
       semaphore.signal()
       monitor.pathUpdateHandler = { path in
-        self.onUpdateDefaultInterface(listener, path)
+        #if os(iOS) && SFI_DEV
+          let entered = Self.pathCallbackUptimeNanos()
+          self.onUpdateDefaultInterface(listener, path, handlerEnterUptime: entered)
+        #else
+          self.onUpdateDefaultInterface(listener, path)
+        #endif
       }
     }
     monitor.start(queue: DispatchQueue.global())
     semaphore.wait()
+    startPathObservations(observationEpoch)
   }
 
   private func onUpdateDefaultInterface(
-    _ listener: LibboxInterfaceUpdateListenerProtocol, _ path: Network.NWPath
+    _ listener: LibboxInterfaceUpdateListenerProtocol, _ path: Network.NWPath,
+    handlerEnterUptime: Int64? = nil
   ) {
-    guard path.status != .unsatisfied,
-      let defaultInterface = path.availableInterfaces.first
-    else {
+    #if os(iOS) && SFI_DEV
+      var beforeForward: Int64?
+    #endif
+    if path.status == .unsatisfied {
+      // Publish authoritative loss before synchronous diagnostic file I/O.
+      #if os(iOS) && SFI_DEV
+        beforeForward = Self.pathCallbackUptimeNanos()
+      #endif
       listener.updateDefaultInterface(
         "", interfaceIndex: -1, isExpensive: false, isConstrained: false)
-      return
+    } else if let defaultInterface = activeDefaultInterface(path) {
+      #if os(iOS) && SFI_DEV
+        beforeForward = Self.pathCallbackUptimeNanos()
+      #endif
+      listener.updateDefaultInterface(
+        defaultInterface.name, interfaceIndex: Int32(defaultInterface.index),
+        isExpensive: path.isExpensive, isConstrained: path.isConstrained)
+    } else {
+      #if os(iOS) && SFI_DEV
+        beforeForward = Self.pathCallbackUptimeNanos()
+      #endif
+      listener.updateDefaultInterface(
+        "", interfaceIndex: -1, isExpensive: false, isConstrained: false)
     }
-    listener.updateDefaultInterface(
-      defaultInterface.name, interfaceIndex: Int32(defaultInterface.index),
-      isExpensive: path.isExpensive, isConstrained: path.isConstrained)
+    #if os(iOS) && SFI_DEV
+      let afterForward = Self.pathCallbackUptimeNanos()
+      let selected = activeDefaultInterface(path)
+      let enteredText = handlerEnterUptime.map { String($0) } ?? "unavailable"
+      let beforeText = beforeForward.map { String($0) } ?? "unavailable"
+      let afterText = afterForward.map { String($0) } ?? "unavailable"
+      let message = "(packet-tunnel): physical-path-callback handler_enter_uptime_ns=\(enteredText) before_forward_uptime_ns=\(beforeText) after_forward_uptime_ns=\(afterText) clock=CLOCK_UPTIME_RAW status=\(path.status) selected=\(selected?.name ?? "none") index=\(selected.map { Int($0.index) } ?? -1) wifi=\(path.usesInterfaceType(.wifi)) cellular=\(path.usesInterfaceType(.cellular)) expensive=\(path.isExpensive) constrained=\(path.isConstrained)"
+      pathObservationQueue.async { PacketTunnelDiagnostics.append(message) }
+    #endif
+  }
+
+  #if os(iOS) && SFI_DEV
+    private static func pathCallbackUptimeNanos() -> Int64? {
+      var value = timespec()
+      guard clock_gettime(CLOCK_UPTIME_RAW, &value) == 0 else { return nil }
+      return Int64(value.tv_sec) * 1_000_000_000 + Int64(value.tv_nsec)
+    }
+  #endif
+
+  private func activeDefaultInterface(_ path: Network.NWPath) -> Network.NWInterface? {
+    // availableInterfaces is not ordered by route preference. In particular,
+    // after Wi-Fi/cellular handover it may still list the old interface first,
+    // which prevents libbox from observing the interface change and closing
+    // stale outbound connection pools. Select an interface the path actually
+    // uses, preferring the normal physical underlays over .other/loopback.
+    let preferredTypes: [Network.NWInterface.InterfaceType] = [
+      .wiredEthernet, .wifi, .cellular,
+    ]
+    for type in preferredTypes where path.usesInterfaceType(type) {
+      if let interface = path.availableInterfaces.first(where: { $0.type == type }) {
+        return interface
+      }
+    }
+    return path.availableInterfaces.first(where: {
+      $0.type != .other && $0.type != .loopback
+    }) ?? path.availableInterfaces.first
   }
 
   public func closeDefaultInterfaceMonitor(_: LibboxInterfaceUpdateListenerProtocol?) throws {
+    stopPathObservations()
     nwMonitor?.cancel()
     nwMonitor = nil
   }
@@ -503,12 +629,13 @@ public class ExtensionPlatformInterface: NSObject, LibboxPlatformInterfaceProtoc
     guard let message else {
       return
     }
-    tunnel.writeMessage(message)
+    tunnel.recordCoreRecoveryDiagnostic(message)
   }
 
   public func triggerNativeCrash() throws {}
 
   func reset() {
+    stopPathObservations()
     networkSettings = nil
     nwMonitor?.cancel()
     nwMonitor = nil

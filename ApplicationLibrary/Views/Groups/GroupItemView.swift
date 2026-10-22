@@ -55,12 +55,10 @@ public struct GroupItemView: View {
                 }
             }
         }
-        .accessibilityIdentifier("wlt.outbound.\(group.tag).\(item.tag)")
-        .accessibilityValue(Text(group.selected == item.tag ? "selected" : "available"))
         #if !os(tvOS)
-            .buttonStyle(.borderless)
-            .padding(16)
-            .cardStyle()
+        .buttonStyle(.borderless)
+        .padding(16)
+        .cardStyle()
         #endif
     }
 }

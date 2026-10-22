@@ -1,4 +1,7 @@
 import Foundation
+#if os(iOS) && SFI_DEV
+  import CryptoKit
+#endif
 import Libbox
 import Darwin
 import Network
@@ -19,14 +22,17 @@ open class ExtensionProvider: NEPacketTunnelProvider {
   private static let whitelistTransportMemoryRecoveryThresholdDefault: UInt64 = 42 * 1024 * 1024
   private static let whitelistTransportMemoryRecoveryUrgentThresholdDefault: UInt64 =
     44 * 1024 * 1024
-  private static let whitelistTransportMemoryRecoveryThresholdCore: UInt64 = 48 * 1024 * 1024
+  private static let whitelistTransportMemoryRecoveryThresholdCore: UInt64 = 45 * 1024 * 1024
   private static let whitelistTransportMemoryRecoveryUrgentThresholdCore: UInt64 =
-    56 * 1024 * 1024
+    47 * 1024 * 1024
   private static let whitelistTransportMemoryRecoveryCooldownDefault: TimeInterval = 20
   private static let whitelistTransportMemoryRecoveryUrgentCooldownDefault: TimeInterval = 15
   private static let whitelistTransportMemoryRecoveryCooldownCore: TimeInterval = 45
   private static let whitelistTransportMemoryRecoveryUrgentCooldownCore: TimeInterval = 20
   private static let whitelistTransportMemoryRecoverySkipLogInterval: TimeInterval = 30
+  #if os(iOS) && SFI_DEV
+    private static let wltHeapProfileThreshold: UInt64 = 43 * 1024 * 1024
+  #endif
   private let lifecycleStateLock = NSLock()
   private var stopTunnelGeneration: UInt64 = 0
 
@@ -128,6 +134,7 @@ open class ExtensionProvider: NEPacketTunnelProvider {
 
   override open func startTunnel(options startOptions: [String: NSObject]?) async throws {
     beginDiagnosticsSession()
+    PacketTunnelDiagnostics.appendStartupMilestone("extension_started")
     recordLifecycleEvent("(packet-tunnel): startTunnel entered")
     do {
       try await startTunnelImpl(options: startOptions)
@@ -178,6 +185,7 @@ open class ExtensionProvider: NEPacketTunnelProvider {
 
     var stageStartedAt = Date()
     let effectiveOptions = try resolveStartOptions(startOptions)
+    PacketTunnelDiagnostics.appendStartupMilestone("start_options_received")
     recordStartupStage(
       "resolve-options", startedAt: stageStartedAt, totalStartedAt: startupStartedAt)
     if effectiveOptions["configContent"] == nil {
@@ -236,6 +244,7 @@ open class ExtensionProvider: NEPacketTunnelProvider {
       throw ExtensionStartupError(
         "(packet-tunnel) error: setup service: \(setupError.localizedDescription)")
     }
+    PacketTunnelDiagnostics.appendStartupMilestone("libbox_ready")
     recordStartupStage("libbox-setup", startedAt: stageStartedAt, totalStartedAt: startupStartedAt)
 
     let stderrPath = URL(fileURLWithPath: tempPath, isDirectory: true).appendingPathComponent(
@@ -299,10 +308,12 @@ open class ExtensionProvider: NEPacketTunnelProvider {
       try throwIfStopTunnelRequested(since: startStopGeneration)
       recordNetworkPathSnapshot(stage: "before-start-service")
       writeLifecycleMessage("(packet-tunnel): starting sing-box service")
+      PacketTunnelDiagnostics.appendStartupMilestone("core_starting")
       try await startService()
       try throwIfStopTunnelRequested(since: startStopGeneration)
       writeLifecycleMessage(
         "(packet-tunnel): sing-box service started elapsed=\(formatDuration(Date().timeIntervalSince(stageStartedAt))) memory=\(PacketTunnelDiagnostics.residentMemoryDescription())")
+      PacketTunnelDiagnostics.appendStartupMilestone("core_started")
       recordStartupStage(
         "complete", startedAt: startupStartedAt, totalStartedAt: startupStartedAt)
     } catch {
@@ -326,9 +337,278 @@ open class ExtensionProvider: NEPacketTunnelProvider {
   }
 
   func writeMessage(_ message: String) {
+    PacketTunnelDiagnostics.observeStartupLog(message)
+    recordCoreRecoveryDiagnostic(message)
     if let commandServer {
       commandServer.writeMessage(2, message: message)
     }
+  }
+
+  // Command-server core logs already reside in its bounded log buffer.
+  // Record selected events without feeding them back into that same server.
+  func recordCoreRecoveryDiagnostic(_ message: String) {
+    #if os(iOS) && SFI_DEV
+      recordBoundedTrafficDiagnostic(message)
+      recordBoundedAuthLifecycleDiagnostic(message)
+      recordBoundedServiceTerminalDiagnostic(message)
+      recordBoundedDialCausalDiagnostic(message)
+      recordBoundedActiveAdmissionDiagnostic(message)
+      recordBoundedCloseLifecycleDiagnostic(message)
+      // A malformed dial line must never fall through a broad recovery marker.
+      if message.contains("wlt dial causal event=")
+        || message.contains("wlt dial correlation event=")
+        || message.contains("WLT active admission ")
+        || message.contains("WLT close lifecycle ")
+        || message.contains("WLT startup phase=first_packet")
+        || message.contains("WLT startup phase=traffic_ready")
+      { return }
+      // Keep recovery causes after the bounded command log has been evicted.
+      // These fixed lifecycle/statistics messages contain no destinations or auth.
+      let recoveryMarkers = [
+        "updated default interface ", "missing default interface",
+        "wlt service default interface ", "wlt service ignoring duplicate ",
+        "wlt service replacing carrier ", "wlt service starting carrier after ",
+        "wlt service restarting carrier ", "wlt service carrier restarted",
+        "wlt service old carrier abort", "wlt service stats ",
+        "relay client mux diagnostics registered", "relay client mux terminal stats",
+        "relay client mux open locally retired", "tinymux client open trace",
+        "relay client mux lifetime", "relay client peer write diagnostics registered",
+        "relay client peer write terminal stats", "relay client peer write coverage incomplete",
+        "peer write failed",
+        "wlt payload phase ",
+        "memory pressure: ", "memory threshold reached,",
+      ]
+      if isWhitelistTransportProfileActive,
+        recoveryMarkers.contains(where: { message.contains($0) })
+      {
+        recordLifecycleEvent("(packet-tunnel): core-recovery \(message)")
+      }
+    #endif
+  }
+
+  #if os(iOS) && SFI_DEV
+  // The core forwards these two complete INFO lines without entering the
+  // command log. Match the full formatter envelope and retain only its fixed,
+  // credential-free event text; never persist a suffix or another service tag.
+  private static func validatedCoreTrafficEvent(_ message: String) -> String? {
+    guard message.utf8.count <= 256,
+      !message.contains("\r"), !message.contains("\n")
+    else { return nil }
+    let pattern = #"(?:\x1b\[36mINFO\x1b\[0m|INFO)\[[0-9]{4,}\] (?:\[[0-9]+ [0-9a-z.]+\] )?service/wlt\[wlt-carrier\]: (WLT startup phase=(?:first_packet elapsed_ms=[0-9]{1,13} direction=(?:read|write)|traffic_ready elapsed_ms=[0-9]{1,13}))"#
+    let fullRange = NSRange(message.startIndex..<message.endIndex, in: message)
+    guard let expression = try? NSRegularExpression(pattern: pattern),
+      let match = expression.firstMatch(in: message, range: fullRange),
+      match.range == fullRange,
+      let eventRange = Range(match.range(at: 1), in: message)
+    else { return nil }
+    return String(message[eventRange])
+  }
+
+  private func recordBoundedTrafficDiagnostic(_ message: String) {
+    guard isWhitelistTransportProfileActive,
+      let event = Self.validatedCoreTrafficEvent(message)
+    else { return }
+    recordLifecycleEvent("(packet-tunnel): core-traffic \(event)")
+    PacketTunnelDiagnostics.observeStartupLog(event)
+  }
+  #endif
+
+  // Persist only complete numeric/opaque close lifecycle events from the
+  // capped Go producer. Never mirror a target, transport error or payload.
+  private func recordBoundedCloseLifecycleDiagnostic(_ message: String) {
+    #if os(iOS) && SFI_DEV
+      guard isWhitelistTransportProfileActive,
+        let context = message.range(of: "service/wlt[wlt-carrier]: ")
+      else { return }
+      let event = String(message[context.upperBound...])
+      guard event.hasPrefix("WLT close lifecycle ") else { return }
+      guard event.utf8.count <= 512,
+        !event.contains("\r"), !event.contains("\n"), !event.contains("\u{001b}")
+      else {
+        recordLifecycleEvent("(packet-tunnel): core-close-lifecycle rejected_unallowlisted")
+        return
+      }
+      let capMarker = "^WLT close lifecycle phase=cap_exhausted event=4097 wall_ms=[0-9]{13} cap=4096$"
+      if event.range(of: capMarker, options: .regularExpression) != nil {
+        recordLifecycleEvent("(packet-tunnel): core-close-lifecycle \(event)")
+        return
+      }
+      let patterns = [
+        "^WLT close lifecycle phase=start event=[0-9]{1,4} wall_ms=[0-9]{13} flow_id=[0-9]{1,5} mode=(?:graceful|abort) active=[0-9]{1,6} slots=[0-9]{1,4} kcp_wait_snd=[0-9]{1,13} mux_pending=[0-9]{1,13} kcp_read_errors=[0-9]{1,13} kcp_close_reason=(?:none|local_close|local_abort|read_error:(?:eof|closed|timeout)|write_error:(?:eof|closed|timeout)|other) mux_close_reason=(?:none|local_close_notified|local_abort_notified|remote_close|remote_close_timeout|other) draining=[0-9]{1,6} drain_slots=[0-9]{1,4} hard_ceiling=[0-9]{1,4} permit_owner=(?:active|drain)$",
+        "^WLT close lifecycle phase=end event=[0-9]{1,4} wall_ms=[0-9]{13} flow_id=[0-9]{1,5} mode=(?:graceful|abort) duration_ms=[0-9]{1,13} kcp_close_ms=[0-9]{1,13} kcp_wait_snd=[0-9]{1,13} mux_pending=[0-9]{1,13} kcp_drain_calls=[0-9]{1,13} kcp_drain_ms=[0-9]{1,13} kcp_drain_result=(?:none|acked|timeout|aborted|other) mux_close_ms=[0-9]{1,13} mux_close_wait_ms=[0-9]{1,13} mux_close_control_ms=[0-9]{1,13} mux_close_control_error=[01] mux_close_reason=(?:none|local_close_notified|local_abort_notified|remote_close|remote_close_timeout|other) active=[0-9]{1,6} slots=[0-9]{1,4} permit_released=1 draining=[0-9]{1,6} drain_slots=[0-9]{1,4} hard_ceiling=[0-9]{1,4} retired_owner=(?:active|drain)(?: close_outcome=(?:returned_nil|returned_error))?$",
+      ]
+      let fields = event.split(separator: " ")
+      guard patterns.contains(where: { event.range(of: $0, options: .regularExpression) != nil }),
+        fields.count >= 7,
+        fields[4].hasPrefix("event="), fields[6].hasPrefix("flow_id="),
+        let sequence = UInt64(fields[4].dropFirst(6)), (1...4096).contains(sequence),
+        let flowID = UInt16(fields[6].dropFirst(8))
+      else {
+        recordLifecycleEvent("(packet-tunnel): core-close-lifecycle rejected_unallowlisted")
+        return
+      }
+      _ = flowID
+      recordLifecycleEvent("(packet-tunnel): core-close-lifecycle \(event)")
+    #endif
+  }
+
+  // Carry only the carrier's capped aggregate admission samples into the
+  // retained packet diagnostic. Do not persist an unknown field or payload.
+  private func recordBoundedActiveAdmissionDiagnostic(_ message: String) {
+    #if os(iOS) && SFI_DEV
+      guard isWhitelistTransportProfileActive,
+        let context = message.range(of: "service/wlt[wlt-carrier]: ")
+      else { return }
+      let event = String(message[context.upperBound...])
+      guard event.hasPrefix("WLT active admission ") else { return }
+      let parts = event.split(separator: " ", omittingEmptySubsequences: false)
+      let keys = [
+        "event", "wall_ms", "queue_elapsed_ms", "active_capacity", "pending_capacity",
+        "active_slots_used", "pending_slots_used", "active_count", "pending_count",
+        "registered", "fresh", "pressure_eligible", "closing", "oldest_activity_ms",
+      ]
+      guard parts.count == 4 + keys.count,
+        parts[0] == "WLT", parts[1] == "active", parts[2] == "admission",
+        parts[3] == "stage=saturated" || parts[3] == "stage=wait_timeout"
+      else {
+        recordLifecycleEvent("(packet-tunnel): core-active-admission rejected_unallowlisted")
+        return
+      }
+      var values: [Int64] = []
+      for (index, key) in keys.enumerated() {
+        let field = parts[index + 4]
+        let digits = field.dropFirst(min(field.count, key.count + 1))
+        guard field.hasPrefix("\(key)="),
+          !digits.isEmpty, digits.utf8.count <= 13,
+          digits.utf8.allSatisfy({ $0 >= 48 && $0 <= 57 }),
+          let value = Int64(String(digits))
+        else {
+          recordLifecycleEvent("(packet-tunnel): core-active-admission rejected_unallowlisted")
+          return
+        }
+        values.append(value)
+      }
+      guard (1...64).contains(values[0]),
+        (1_000_000_000_000...9_999_999_999_999).contains(values[1]),
+        values[2] <= 1_000_000_000_000,
+        (1...4096).contains(values[3]), (1...4096).contains(values[4]),
+        values[5] <= values[3], values[6] <= values[4],
+        values[7] <= 1_000_000, values[8] <= 1_000_000,
+        values[9] <= 1_000_000, values[10] <= values[9],
+        values[11] <= values[9], values[12] <= values[9],
+        values[10] + values[11] + values[12] == values[9],
+        values[13] <= 1_000_000_000_000
+      else {
+        recordLifecycleEvent("(packet-tunnel): core-active-admission rejected_unallowlisted")
+        return
+      }
+      recordLifecycleEvent("(packet-tunnel): core-active-admission \(event)")
+    #endif
+  }
+
+  // Persist only complete, endpoint-free dial ID/cause forms. Any appended
+  // payload or malformed producer line becomes an opaque failure marker.
+  private func recordBoundedDialCausalDiagnostic(_ message: String) {
+    #if os(iOS) && SFI_DEV
+      guard isWhitelistTransportProfileActive,
+        let context = message.range(of: "service/wlt[wlt-carrier]: ")
+      else { return }
+      let event = String(message[context.upperBound...])
+      guard event.hasPrefix("wlt dial causal event=")
+        || event.hasPrefix("wlt dial correlation event=")
+      else { return }
+      guard !event.contains("\r"), !event.contains("\n"), !event.contains("\u{001b}") else {
+        recordLifecycleEvent("(packet-tunnel): core-dial-causal rejected_unallowlisted")
+        return
+      }
+      let patterns = [
+        "^wlt dial causal event=carrier_error logical_dial_id=[0-9]{1,20} dial_attempt_id=[0-9]{1,20} carrier_generation=[0-9]{1,20} interface_generation=[0-9]{1,20} tree=[0-9]{1,2}\\.[0-9]{1,2}\\.(?:nil|leaf|net_op|syscall_op|errno|errno_other|local_retired|canceled|deadline|eof|unexpected_eof|closed_pipe|net_closed|service_stopped|join|wrap|mux_closed|session_closed|pong_timeout|remote_disconnect)\\.[0-9]{1,10}\\.[a-f0-9]{16}(?:,[0-9]{1,2}\\.[0-9]{1,2}\\.(?:nil|leaf|net_op|syscall_op|errno|errno_other|local_retired|canceled|deadline|eof|unexpected_eof|closed_pipe|net_closed|service_stopped|join|wrap|mux_closed|session_closed|pong_timeout|remote_disconnect)\\.[0-9]{1,10}\\.[a-f0-9]{16}){0,15} tree_nodes=(?:[1-9]|1[0-6]) tree_truncated=(?:true|false)$",
+        "^wlt dial causal event=early_failure logical_dial_id=[0-9]+ dial_attempt_id=[0-9]+ carrier_generation=[0-9]+ interface_generation=[0-9]+ original_transport_error=true observation_budget_ms=500$",
+        "^wlt dial causal event=admitted logical_dial_id=[0-9]+ dial_attempt_id=[0-9]+ carrier_generation=[0-9]+ interface_generation=[0-9]+ deadline_remaining_ms=-?[0-9]+$",
+        "^wlt dial causal event=settled logical_dial_id=[0-9]+ dial_attempt_id=[0-9]+ outcome=published cause=none$",
+        "^wlt dial causal event=settled logical_dial_id=[0-9]+ dial_attempt_id=[0-9]+ outcome=(?:failed|retired_retry) cause=(?:service_stop|deadline|caller_canceled|local_retirement|carrier_failure_then_local_retirement|carrier_replaced|carrier_failure|unknown) observed_carrier_error=(?:true|false)$",
+        "^wlt dial correlation event=final logical_dial_id=[0-9]+ final_attempt_id=[0-9]+ final_generation=[0-9]+ attempts=[0-9]+ outcome=(?:published|failed)$",
+        "^wlt dial correlation event=retired logical_dial_id=[0-9]+ dial_attempt_id=[0-9]+ carrier_generation=[0-9]+ interface_generation=[0-9]+ retry=(?:true|false)$",
+      ]
+      guard patterns.contains(where: { event.range(of: $0, options: .regularExpression) != nil }) else {
+        recordLifecycleEvent("(packet-tunnel): core-dial-causal rejected_unallowlisted")
+        return
+      }
+      recordLifecycleEvent("(packet-tunnel): core-dial-causal \(event)")
+    #endif
+  }
+
+  // The command log is bounded. Persist only credential-free auth lifecycle
+  // events needed to audit saved-current promotion; never mirror arbitrary
+  // carrier-auth messages or error payloads into packet diagnostics.
+  private func recordBoundedAuthLifecycleDiagnostic(_ message: String) {
+    #if os(iOS) && SFI_DEV
+      guard isWhitelistTransportProfileActive,
+        let context = message.range(of: "service/wlt[wlt-carrier]: ")
+      else { return }
+      let event = String(message[context.upperBound...])
+      guard event.hasPrefix("WLT carrier auth ")
+        || event.hasPrefix("WLT startup phase=provider_refresh_ready")
+      else { return }
+      let patterns = [
+        "^WLT carrier auth event=snapshot_loaded source=current remaining_ttl_seconds=-?[0-9]+ persistence=deferred$",
+        "^WLT startup phase=provider_refresh_ready elapsed_ms=[0-9]+ outcome=(not_needed|cached|refreshed)$",
+        "^WLT carrier auth snapshot promoted after successful connect$",
+        "^WLT carrier auth snapshot saved$",
+        "^WLT carrier auth event=refresh_started source=current remaining_ttl_seconds=-?[0-9]+$",
+        "^WLT carrier auth event=refresh_succeeded source=current remaining_ttl_seconds=-?[0-9]+$",
+        "^WLT carrier auth refresh lifecycle event=saved_call_session_accepted category=none$",
+        "^WLT carrier auth refresh lifecycle event=identity_renewal_not_entered category=none$",
+        "^WLT carrier auth refresh lifecycle event=saved_call_session_rejected category=rejected$",
+        "^WLT carrier auth refresh lifecycle event=calls_session_replacement_started category=none$",
+        "^WLT carrier auth refresh lifecycle event=calls_session_replacement_ready category=none$",
+        "^WLT carrier auth refresh lifecycle event=replacement_call_session_join_succeeded category=none$",
+        "^WLT carrier auth event=fallback_started source=current_refreshed$",
+        "^WLT carrier auth event=fallback_succeeded source=current_refreshed$",
+        "^WLT carrier auth ring event=replenish_deferred reason=serialized_bearer_identity$",
+        "^WLT carrier auth ring event=replenish_deferred retry_seconds=[0-9]+ validated=false$",
+      ]
+      if patterns.contains(where: { event.range(of: $0, options: .regularExpression) != nil }) {
+        recordLifecycleEvent("(packet-tunnel): core-auth-lifecycle \(event)")
+      } else {
+        // Any other auth line, including an error with an address or token,
+        // leaves an opaque disqualifying marker without exposing its payload.
+        recordLifecycleEvent("(packet-tunnel): core-auth-lifecycle WLT carrier auth event=redacted_unallowlisted")
+      }
+    #endif
+  }
+
+  // Service close snapshots are outside the periodic heartbeat markers.
+  // Validate its complete producer shape, then persist numeric fields only.
+  // Reconnect errors can contain arbitrary text and must never be copied.
+  private func recordBoundedServiceTerminalDiagnostic(_ message: String) {
+    #if os(iOS) && SFI_DEV
+      guard isWhitelistTransportProfileActive,
+        let context = message.range(of: "service/wlt[wlt-carrier]: ")
+      else { return }
+      let event = String(message[context.upperBound...])
+      guard event.hasPrefix("wlt service close_snapshot ") else { return }
+      let numericFields = [
+        "active", "peak_active", "draining", "peak_draining", "drain_capacity", "pending", "peak_pending", "opened", "closed",
+        "queued", "dns_open_requests", "dns_open_queued", "dns_open_rejected",
+        "rejected", "rejected_queue", "rejected_active", "rejected_open",
+        "pressure_reclaims", "failed", "max_dial_ms", "reconnect_retries",
+        "reconnect_wait_ms", "reconnects",
+      ]
+      let numericPattern = numericFields.map { "\($0)=[0-9]+" }.joined(separator: " ")
+      let allowed = "^wlt service close_snapshot schema=2 phase=(?:pre_close close_mode=(?:graceful|abort) close_result=not_called|post_close close_mode=(?:graceful|abort) close_result=(?:returned_nil|returned_error)) closure_status=unverified snapshot_consistency=independent_reads carrier_generation=[0-9]+ " + numericPattern
+        + " last_reconnect=(?:|all peers disconnected)$"
+      guard event.range(of: allowed, options: .regularExpression) != nil,
+        let tail = event.range(of: " last_reconnect=")
+      else {
+        recordLifecycleEvent("(packet-tunnel): core-service-close_snapshot rejected_unallowlisted")
+        return
+      }
+      let reconnect = event.hasSuffix("all peers disconnected")
+        ? "all_peers_disconnected" : "none"
+      let numeric = String(event[..<tail.lowerBound])
+      recordLifecycleEvent("(packet-tunnel): core-service-close_snapshot \(numeric) last_reconnect=\(reconnect)")
+    #endif
   }
 
   private func beginDiagnosticsSession() {
@@ -382,6 +662,23 @@ open class ExtensionProvider: NEPacketTunnelProvider {
       let thermalDescription = self?.thermalStateDescription() ?? "unknown"
       self?.recordLifecycleEvent(
         "(packet-tunnel): heartbeat memory=\(memoryDescription) thermal=\(thermalDescription)")
+      #if os(iOS) && SFI_DEV
+        if let self, self.isWhitelistTransportProfileActive {
+          self.recordLifecycleEvent(
+            "(packet-tunnel): go-memory \(LibboxWLTMemoryStatsJSON())")
+          if let memoryBytes,
+            memoryBytes >= Self.wltHeapProfileThreshold,
+            let sessionID = self.diagnosticsSessionID
+          {
+            let path = FilePath.cacheDirectory
+              .appendingPathComponent("wlt-heap-\(sessionID).pprof").path
+            if LibboxWLTRequestHeapProfile(path) {
+              self.recordLifecycleIncident(
+                "(packet-tunnel): go-heap-profile requested session=\(sessionID) memory=\(memoryDescription)")
+            }
+          }
+        }
+      #endif
       if let self, thermalDescription != self.diagnosticsLastThermalState {
         let previousThermalState = self.diagnosticsLastThermalState ?? "unknown"
         self.diagnosticsLastThermalState = thermalDescription
@@ -430,6 +727,18 @@ open class ExtensionProvider: NEPacketTunnelProvider {
         self.recordLifecycleIncident(
           "(packet-tunnel): memory pressure event=\(eventDescription) memory=\(memoryDescription) thermal=\(thermalDescription)")
         #if SFI_DEV
+          self.recordLifecycleIncident(
+            "(packet-tunnel): go-memory-pressure \(LibboxWLTMemoryStatsJSON())")
+          if event.contains(.critical), self.isWhitelistTransportProfileActive,
+            let sessionID = self.diagnosticsSessionID
+          {
+            let path = FilePath.cacheDirectory
+              .appendingPathComponent("wlt-heap-\(sessionID).pprof").path
+            if LibboxWLTRequestHeapProfile(path) {
+              self.recordLifecycleIncident(
+                "(packet-tunnel): go-heap-profile requested session=\(sessionID) reason=critical-pressure")
+            }
+          }
           if let memoryBytes {
             self.scheduleWhitelistTransportMemoryRecoveryIfNeeded(
               memoryBytes: memoryBytes,
@@ -557,6 +866,20 @@ open class ExtensionProvider: NEPacketTunnelProvider {
         memoryRecoveryInProgress = false
       }
       do {
+        if isCoreWhitelistTransportProfile() {
+          let restartError = NSError(
+            domain: "WhitelistTransportMemoryRecovery",
+            code: 1,
+            userInfo: [
+              NSLocalizedDescriptionKey:
+                "Core WLT memory recovery requested a clean provider restart"
+            ]
+          )
+          recordLifecycleIncident(
+            "(packet-tunnel): memory recovery requesting core provider restart reason=\(reason) memory=\(PacketTunnelDiagnostics.residentMemoryDescription())")
+          cancelTunnelWithError(restartError)
+          return
+        }
         try await reloadService()
         recordLifecycleIncident(
           "(packet-tunnel): memory recovery completed reason=\(reason) elapsed=\(formatDuration(Date().timeIntervalSince(recoveryStartedAt))) memory=\(PacketTunnelDiagnostics.residentMemoryDescription())")
@@ -816,12 +1139,16 @@ open class ExtensionProvider: NEPacketTunnelProvider {
     }
     #if SFI_DEV
       if whitelistTransportProfileIsCore {
-        let snapshotFile = FilePath.cacheDirectory
-          .appendingPathComponent("WLT", isDirectory: true)
-          .appendingPathComponent("auth-snapshot.json", isDirectory: false)
+        let snapshotFile = try WLTAuthStorage.snapshotURL(
+          library: FilePath.sharedDirectory.appendingPathComponent("Library", isDirectory: true),
+          legacy: FilePath.cacheDirectory.appendingPathComponent("WLT", isDirectory: true))
+        PacketTunnelDiagnostics.appendStartupMilestone(
+          FileManager.default.fileExists(atPath: snapshotFile.path)
+            ? "wlt_snapshot_file_present" : "wlt_snapshot_file_missing")
         let injectedConfig = WhitelistTransportConfig.injectingCoreAuthSnapshotFile(
           into: configContent,
-          snapshotFile: snapshotFile)
+          snapshotFile: snapshotFile,
+          legacySnapshotFile: FilePath.cacheDirectory.appendingPathComponent("WLT", isDirectory: true).appendingPathComponent("auth-snapshot.json"))
         if injectedConfig != configContent {
           writeLifecycleMessage("(packet-tunnel): core whitelist transport auth snapshot cache configured")
           configContent = injectedConfig
@@ -935,6 +1262,11 @@ open class ExtensionProvider: NEPacketTunnelProvider {
   }
 
   override open func handleAppMessage(_ messageData: Data) async -> Data? {
+    #if os(iOS) && SFI_DEV
+      if ExtensionDiagnosticMessage.isDiagnostic(messageData) {
+        return handleDiagnosticMessage(messageData)
+      }
+    #endif
     do {
       let options = try ExtensionStartOptions.decode(messageData)
       applyStartOptions(options)
@@ -945,6 +1277,74 @@ open class ExtensionProvider: NEPacketTunnelProvider {
       return error.localizedDescription.data(using: .utf8)
     }
   }
+
+  #if os(iOS) && SFI_DEV
+    // Same CLOCK_UPTIME_RAW domain as the retained network callbacks. Zero
+    // declines timing evidence; a diagnostic clock failure cannot change I/O.
+    private static func explicitProbeUptimeNanos() -> Int64 {
+      var value = timespec()
+      guard clock_gettime(CLOCK_UPTIME_RAW, &value) == 0 else { return 0 }
+      return Int64(value.tv_sec) * 1_000_000_000 + Int64(value.tv_nsec)
+    }
+
+    private func handleDiagnosticMessage(_ messageData: Data) -> Data? {
+      let request: ExtensionDiagnosticMessage.Request
+      do {
+        request = try ExtensionDiagnosticMessage.decodeRequest(messageData)
+      } catch {
+        return try? ExtensionDiagnosticMessage.encodeResponse(
+          ExtensionDiagnosticMessage.Response(
+            version: 1, status: "failed", resultJSON: nil,
+            errorCode: "invalid_diagnostic_envelope"))
+      }
+      guard let commandServer else {
+        return try? ExtensionDiagnosticMessage.encodeResponse(
+          ExtensionDiagnosticMessage.Response(
+            version: 1, status: "failed", resultJSON: nil,
+            errorCode: "command_server_unavailable"))
+      }
+      let response: ExtensionDiagnosticMessage.Response
+      do {
+        // Hash the exact existing core request bytes, never a destination,
+        // bearer or request body. Pair markers do not assert success or ACK.
+        let probeDigest = SHA256.hash(data: Data(request.requestJSON.utf8))
+          .map { String(format: "%02x", $0) }.joined()
+        var coreCallReturned = false
+        var probeError: NSError?
+        recordLifecycleEvent(
+          "(packet-tunnel): wlt-explicit-probe schema=1 phase=start request_sha256=\(probeDigest) uptime_ns=\(Self.explicitProbeUptimeNanos())")
+        defer {
+          recordLifecycleEvent(
+            "(packet-tunnel): wlt-explicit-probe schema=1 phase=end request_sha256=\(probeDigest) uptime_ns=\(Self.explicitProbeUptimeNanos()) core_call_returned=\(coreCallReturned) core_error=\(probeError != nil)")
+        }
+        let resultJSON = commandServer.probeWltOutbound(
+          request.requestJSON, error: &probeError)
+        coreCallReturned = true
+        if let probeError {
+          response = ExtensionDiagnosticMessage.Response(
+            version: 1, status: "failed", resultJSON: nil,
+            errorCode: ExtensionDiagnosticMessage.probeErrorCode(probeError))
+          return try? ExtensionDiagnosticMessage.encodeResponse(response)
+        }
+        guard resultJSON.utf8.count <= 16 * 1024 else {
+          response = ExtensionDiagnosticMessage.Response(
+            version: 1, status: "failed", resultJSON: nil,
+            errorCode: "result_too_large")
+          return try? ExtensionDiagnosticMessage.encodeResponse(response)
+        }
+        response = ExtensionDiagnosticMessage.Response(
+          version: 1, status: "success", resultJSON: resultJSON,
+          errorCode: "")
+      } catch {
+        // Core probe errors are deliberately collapsed to a bounded code.
+        // The core result carries its own sanitized network failure details.
+        response = ExtensionDiagnosticMessage.Response(
+          version: 1, status: "failed", resultJSON: nil,
+          errorCode: "probe_rejected")
+      }
+      return try? ExtensionDiagnosticMessage.encodeResponse(response)
+    }
+  #endif
 
   override open func sleep() async {
     writeLifecycleMessage("(packet-tunnel): sleep")

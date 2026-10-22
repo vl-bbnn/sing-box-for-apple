@@ -9,6 +9,171 @@ import os
 
 private let logger = Logger(category: "ExtensionProfile")
 
+#if os(iOS) && SFI_DEV
+  enum ExtensionDiagnosticMessage {
+    private static let magic = Data("SFI_DEV_DIAGNOSTIC\0".utf8)
+    private static let maximumMessageBytes = 32 * 1024
+
+    struct Request: Codable {
+      let version: Int
+      let operation: String
+      let requestJSON: String
+
+      enum CodingKeys: String, CodingKey {
+        case version, operation
+        case requestJSON = "request_json"
+      }
+    }
+
+    struct Response: Codable {
+      let version: Int
+      let status: String
+      let resultJSON: String?
+      let errorCode: String
+
+      enum CodingKeys: String, CodingKey {
+        case version, status
+        case resultJSON = "result_json"
+        case errorCode = "error_code"
+      }
+    }
+
+    // Only fixed errors from the Go probe preflight cross this Dev diagnostic boundary.
+    // gomobile wraps Go errors as NSError(domain: "go", code: 1) and preserves
+    // Error() as localizedDescription. Never return arbitrary Go error text.
+    static func probeErrorCode(_ error: NSError) -> String {
+      guard error.domain == "go", error.code == 1 else {
+        return "probe_rejected"
+      }
+      switch error.localizedDescription {
+      case "invalid request size", "invalid request JSON", "invalid request fields",
+        "invalid common request contract", "invalid HTTPS request contract",
+        "invalid DNS request contract", "invalid probe kind":
+        return "invalid_request"
+      case "active instance unavailable":
+        return "instance_unavailable"
+      case "probe already active for instance":
+        return "probe_busy"
+      case "probe group unavailable":
+        return "group_unavailable"
+      case "invalid probe group membership":
+        return "group_membership"
+      case "invalid probe VLESS leaf", "probe leaf must be concrete":
+        return "vless_leaf"
+      case "invalid probe WLT dependency", "WLT dependency must be concrete":
+        return "wlt_dependency"
+      case "could not encode probe result", "probe result exceeds size bound":
+        return "internal_result"
+      default:
+        return "probe_rejected"
+      }
+    }
+
+    static func isDiagnostic(_ data: Data) -> Bool {
+      data.starts(with: magic)
+    }
+
+    static func encodeProbeRequest(_ requestJSON: String) throws -> Data {
+      try encode(
+        Request(
+          version: 1,
+          operation: "probe_wlt_outbound",
+          requestJSON: requestJSON
+        ))
+    }
+
+    static func decodeRequest(_ data: Data) throws -> Request {
+      let payload = try payload(data)
+      guard
+        let object = try JSONSerialization.jsonObject(with: payload) as? [String: Any],
+        Set(object.keys) == Set(["version", "operation", "request_json"])
+      else {
+        throw CocoaError(.coderInvalidValue)
+      }
+      let request: Request = try decode(data)
+      guard
+        request.version == 1,
+        request.operation == "probe_wlt_outbound",
+        !request.requestJSON.isEmpty,
+        request.requestJSON.utf8.count <= 16 * 1024
+      else {
+        throw CocoaError(.coderInvalidValue)
+      }
+      return request
+    }
+
+    static func encodeResponse(_ response: Response) throws -> Data {
+      try encode(response)
+    }
+
+    static func decodeResponse(_ data: Data) throws -> Response {
+      let responsePayload = try payload(data)
+      guard
+        let object = try JSONSerialization.jsonObject(with: responsePayload) as? [String: Any],
+        Set(object.keys).isSubset(of: Set(["version", "status", "result_json", "error_code"])),
+        Set(["version", "status", "error_code"]).isSubset(of: Set(object.keys))
+      else {
+        throw CocoaError(.coderInvalidValue)
+      }
+      let response: Response = try decode(data)
+      guard
+        response.version == 1,
+        ["success", "failed"].contains(response.status),
+        response.errorCode.count <= 64,
+        response.resultJSON?.utf8.count ?? 0 <= 16 * 1024,
+        (response.status == "success" && response.errorCode.isEmpty
+          && response.resultJSON != nil)
+          || (response.status == "failed" && !response.errorCode.isEmpty
+            && response.resultJSON == nil)
+      else {
+        throw CocoaError(.coderInvalidValue)
+      }
+      return response
+    }
+
+    private static func encode<T: Encodable>(_ value: T) throws -> Data {
+      let encoder = JSONEncoder()
+      encoder.outputFormatting = [.sortedKeys]
+      let payload = try encoder.encode(value)
+      guard payload.count + magic.count <= maximumMessageBytes else {
+        throw CocoaError(.coderInvalidValue)
+      }
+      return magic + payload
+    }
+
+    private static func decode<T: Decodable>(_ data: Data) throws -> T {
+      try JSONDecoder().decode(T.self, from: payload(data))
+    }
+
+    private static func payload(_ data: Data) throws -> Data {
+      guard isDiagnostic(data), data.count <= maximumMessageBytes else {
+        throw CocoaError(.coderInvalidValue)
+      }
+      return Data(data.dropFirst(magic.count))
+    }
+  }
+
+  private final class ExtensionDiagnosticResponseWaiter: @unchecked Sendable {
+    private let lock = NSLock()
+    private var continuation: CheckedContinuation<Data?, Error>?
+
+    func install(_ continuation: CheckedContinuation<Data?, Error>) {
+      lock.lock()
+      self.continuation = continuation
+      lock.unlock()
+    }
+
+    func resume(_ result: Result<Data?, Error>) {
+      lock.lock()
+      let pending = continuation
+      continuation = nil
+      lock.unlock()
+      guard let pending else { return }
+      pending.resume(with: result)
+    }
+  }
+#endif
+
 @MainActor
 public class ExtensionProfile: ObservableObject {
   public static let controlKind = AppConfiguration.widgetControlKind
@@ -20,19 +185,6 @@ public class ExtensionProfile: ObservableObject {
 
   @Published public var status: NEVPNStatus
   @Published public var connectedDate: Date?
-
-  private func traceDeviceStart(_ stage: String, error: Error? = nil) {
-    #if os(iOS) && SFI_DEV
-    let message: String
-    if let error {
-      message = "WLT_DEVICE_START stage=\(stage) status=\(status.rawValue) error=\(error.localizedDescription)"
-    } else {
-      message = "WLT_DEVICE_START stage=\(stage) status=\(status.rawValue)"
-    }
-    NSLog("%@", message)
-    PacketTunnelDiagnostics.append("(app): \(message)")
-    #endif
-  }
 
   public init(_ manager: NEVPNManager) {
     self.manager = manager
@@ -155,6 +307,28 @@ public class ExtensionProfile: ObservableObject {
   }
 
   public func start() async throws {
+    try await start(configContentTransform: nil)
+  }
+
+  #if SFI_DEV
+    public func start(
+      wltRuntimeParameters: WhitelistTransportConfig.RuntimeParameters?
+    ) async throws {
+      let transform = wltRuntimeParameters.map { parameters in
+        { configContent in
+          try WhitelistTransportConfig.applyingRuntimeParameters(
+            parameters,
+            to: configContent
+          )
+        }
+      }
+      try await start(configContentTransform: transform)
+    }
+  #endif
+
+  private func start(
+    configContentTransform: ((String) throws -> String)?
+  ) async throws {
     if isMock {
       status = .connecting
       try await Task.sleep(nanoseconds: 500_000_000)
@@ -163,16 +337,27 @@ public class ExtensionProfile: ObservableObject {
       return
     }
     guard let manager else { return }
-    traceDeviceStart("entered")
-    traceDeviceStart("fetch_profile_begin")
     try await fetchProfile()
-    traceDeviceStart("fetch_profile_done")
+    #if SFI_DEV
+      PacketTunnelDiagnostics.appendStartupMilestone("profile_loaded")
+    #endif
+    let options = try await prepareStartOptions(
+      configContentTransform: configContentTransform
+    )
     manager.isEnabled = true
     let alwaysOn = await SharedPreferences.alwaysOn.get()
     let onDemandEnabled = await SharedPreferences.onDemandEnabled.get()
+    // A manual WLT start must not turn on Connect On Demand implicitly. If the
+    // provider is killed during startup (for example by the iOS memory limit),
+    // an implicit on-demand rule immediately starts it again and can trap the
+    // device in an unbounded reconnect loop. Honor only the user's preferences.
     if alwaysOn || onDemandEnabled {
       manager.isOnDemandEnabled = true
-      await setOnDemandRules(useDefaultRules: alwaysOn)
+      await setOnDemandRules(
+        useDefaultRules: alwaysOn
+      )
+    } else {
+      manager.isOnDemandEnabled = false
     }
     if let proto = manager.protocolConfiguration as? NETunnelProviderProtocol {
       var config = proto.providerConfiguration ?? [:]
@@ -198,21 +383,19 @@ public class ExtensionProfile: ObservableObject {
         }
       }
     #endif
-    traceDeviceStart("save_preferences_begin")
     try await manager.saveToPreferences()
-    traceDeviceStart("save_preferences_done")
-    traceDeviceStart("prepare_options_begin")
-    let options = try await prepareStartOptions()
-    traceDeviceStart("prepare_options_done")
+    #if SFI_DEV
+      PacketTunnelDiagnostics.appendStartupMilestone("start_options_ready")
+    #endif
     #if os(macOS)
       let whitelistTransportStarted = try await WhitelistTransportManager.shared.startIfNeeded()
     #endif
     do {
-      traceDeviceStart("start_tunnel_begin")
       try manager.connection.startVPNTunnel(options: options)
-      traceDeviceStart("start_tunnel_done")
+      #if SFI_DEV
+        PacketTunnelDiagnostics.appendStartupMilestone("extension_start_requested")
+      #endif
     } catch {
-      traceDeviceStart("start_tunnel_failed", error: error)
       #if os(macOS)
         if whitelistTransportStarted {
           await WhitelistTransportManager.shared.stop()
@@ -255,7 +438,68 @@ public class ExtensionProfile: ObservableObject {
     }
   }
 
-  private func prepareStartOptions() async throws -> [String: NSObject] {
+  #if os(iOS) && SFI_DEV
+    public func probeWltOutbound(
+      _ requestJSON: String,
+      timeoutMillis: Int
+    ) async throws -> String {
+      guard !isMock, let session = connection as? NETunnelProviderSession else {
+        throw NSError(
+          domain: "ExtensionDiagnosticMessage", code: -1,
+          userInfo: [NSLocalizedDescriptionKey: "Tunnel session unavailable"])
+      }
+      guard status == .connected else {
+        throw NSError(
+          domain: "ExtensionDiagnosticMessage", code: -2,
+          userInfo: [NSLocalizedDescriptionKey: "Tunnel is not connected"])
+      }
+      guard (1...95_000).contains(timeoutMillis) else {
+        throw NSError(
+          domain: "ExtensionDiagnosticMessage", code: -5,
+          userInfo: [NSLocalizedDescriptionKey: "Diagnostic timeout invalid"])
+      }
+      let message = try ExtensionDiagnosticMessage.encodeProbeRequest(requestJSON)
+      let waiter = ExtensionDiagnosticResponseWaiter()
+      let responseData = try await withCheckedThrowingContinuation {
+        (continuation: CheckedContinuation<Data?, Error>) in
+        waiter.install(continuation)
+        DispatchQueue.global(qos: .utility).asyncAfter(
+          deadline: .now() + .milliseconds(timeoutMillis)
+        ) {
+          waiter.resume(
+            .failure(
+              NSError(
+                domain: "ExtensionDiagnosticMessage", code: -6,
+                userInfo: [NSLocalizedDescriptionKey: "Diagnostic response timeout"])))
+        }
+        do {
+          try session.sendProviderMessage(message) { response in
+            waiter.resume(.success(response))
+          }
+        } catch {
+          waiter.resume(.failure(error))
+        }
+      }
+      guard let responseData else {
+        throw NSError(
+          domain: "ExtensionDiagnosticMessage", code: -3,
+          userInfo: [NSLocalizedDescriptionKey: "Diagnostic response unavailable"])
+      }
+      let response = try ExtensionDiagnosticMessage.decodeResponse(responseData)
+      guard response.status == "success", response.errorCode.isEmpty,
+        let resultJSON = response.resultJSON
+      else {
+        throw NSError(
+          domain: "ExtensionDiagnosticMessage", code: -4,
+          userInfo: [NSLocalizedDescriptionKey: response.errorCode])
+      }
+      return resultJSON
+    }
+  #endif
+
+  private func prepareStartOptions(
+    configContentTransform: ((String) throws -> String)? = nil
+  ) async throws -> [String: NSObject] {
     var options: [String: NSObject] = [
       "manualStart": NSNumber(value: true)
     ]
@@ -269,7 +513,13 @@ public class ExtensionProfile: ObservableObject {
         ])
     }
 
-    let configContent = try await profile.readAsync()
+    var configContent = try await profile.readAsync()
+    #if os(iOS) && SFI_DEV
+      configContent = try WhitelistTransportConfig.localRuleSetConfig(configContent)
+    #endif
+    if let configContentTransform {
+      configContent = try configContentTransform(configContent)
+    }
     options["configContent"] = NSString(string: configContent)
 
     #if !os(macOS)
@@ -289,8 +539,8 @@ public class ExtensionProfile: ObservableObject {
       let usesLegacyWhitelistTransport = WhitelistTransportConfig.usesLegacyWhitelistTransport(configContent)
       if usesCoreWhitelistTransport {
         options["whitelistTransportEnabled"] = NSNumber(value: true)
-        options["whitelistTransportMemoryRecoveryThreshold"] = NSNumber(value: 48 * 1024 * 1024)
-        options["whitelistTransportMemoryRecoveryUrgentThreshold"] = NSNumber(value: 56 * 1024 * 1024)
+        options["whitelistTransportMemoryRecoveryThreshold"] = NSNumber(value: 45 * 1024 * 1024)
+        options["whitelistTransportMemoryRecoveryUrgentThreshold"] = NSNumber(value: 47 * 1024 * 1024)
         options["whitelistTransportMemoryRecoveryCooldown"] = NSNumber(value: 45)
         options["whitelistTransportMemoryRecoveryUrgentCooldown"] = NSNumber(value: 20)
       }
@@ -348,7 +598,6 @@ public class ExtensionProfile: ObservableObject {
       return
     }
     guard let manager else { return }
-    traceDeviceStart("stop_entered")
     if manager.isOnDemandEnabled {
       if let proto = manager.protocolConfiguration as? NETunnelProviderProtocol {
         var config = proto.providerConfiguration ?? [:]
@@ -358,9 +607,7 @@ public class ExtensionProfile: ObservableObject {
       manager.isOnDemandEnabled = false
       try await manager.saveToPreferences()
     }
-    traceDeviceStart("stop_tunnel_begin")
     manager.connection.stopVPNTunnel()
-    traceDeviceStart("stop_tunnel_done")
     Task.detached(priority: .utility) {
       do {
         try LibboxNewStandaloneCommandClient()!.serviceClose()
@@ -390,30 +637,10 @@ public class ExtensionProfile: ObservableObject {
 
   public static func load() async throws -> ExtensionProfile? {
     let managers = try await NETunnelProviderManager.loadAllFromPreferences()
-    let providerBundleIdentifier = Variant.useSystemExtension
-      ? AppConfiguration.systemExtensionBundleID
-      : AppConfiguration.extensionBundleID
-    let matchingManagers = managers.filter { manager in
-      guard let tunnelProtocol = manager.protocolConfiguration as? NETunnelProviderProtocol else {
-        return false
-      }
-      return tunnelProtocol.providerBundleIdentifier == providerBundleIdentifier
-    }
-    #if os(iOS) && SFI_DEV
-      let statuses = matchingManagers
-        .map { "\($0.connection.status.rawValue):\($0.localizedDescription ?? "")" }
-        .joined(separator: ",")
-      let message = "WLT_DEVICE_PROFILE stage=load managers=\(managers.count) matching=\(matchingManagers.count) active=\(matchingManagers.filter { $0.connection.status.isConnected }.count) statuses=\(statuses)"
-      NSLog("%@", message)
-      PacketTunnelDiagnostics.append("(app): \(message)")
-    #endif
-    guard !matchingManagers.isEmpty else {
+    if managers.isEmpty {
       return nil
     }
-    let manager = matchingManagers.first(where: { $0.connection.status.isConnected })
-      ?? matchingManagers.first(where: { $0.localizedDescription == Variant.applicationName })
-      ?? matchingManagers[0]
-    return ExtensionProfile(manager)
+    return ExtensionProfile(managers[0])
   }
 
   public static func install() async throws {

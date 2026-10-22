@@ -27,6 +27,31 @@ die() {
 	exit 1
 }
 
+require_wifi_no_vpn_confirmation() {
+	[[ "${WLT_DEVICE_WIFI_NO_VPN_CONFIRMED:-0}" == "1" ]] \
+		|| die "install and launch require unlocked iPhone on unrestricted Wi-Fi with every VPN stopped; verify the phone, then set WLT_DEVICE_WIFI_NO_VPN_CONFIRMED=1"
+	local proof="${WLT_IOS_WIFI_TRUST_PROOF:-}"
+	[[ -z "$proof" ]] && return
+	[[ -f "$proof" ]] || die "WLT_IOS_WIFI_TRUST_PROOF does not exist"
+	python3 - "$proof" <<'PY' \
+		|| die "WLT_IOS_WIFI_TRUST_PROOF does not prove recent Wi-Fi with VPN stopped"
+from datetime import datetime, timezone
+import json
+import sys
+
+value = json.load(open(sys.argv[1], encoding="utf-8"))
+proved_at = datetime.fromisoformat(str(value.get("proved_at", "")).replace("Z", "+00:00"))
+age = (datetime.now(timezone.utc) - proved_at.astimezone(timezone.utc)).total_seconds()
+valid = (
+    value.get("classification") == "success"
+    and value.get("wifi") is True
+    and value.get("vpn_status") == "disconnected"
+    and 0 <= age <= 900
+)
+raise SystemExit(0 if valid else 1)
+PY
+}
+
 app_path() {
 	local path="$derived_data_path/Build/Products/${configuration}-iphoneos/$app_name"
 	if [[ -d "$path" ]]; then
@@ -61,13 +86,28 @@ devices = json.load(open(path)).get("result", {}).get("devices", [])
 matches = []
 for device in devices:
     hardware = device.get("hardwareProperties", {})
+    connection = device.get("connectionProperties", {})
+    # CoreDevice exposes booted iOS simulators with deviceType=iPhone and a
+    # connected tunnel as well.  They use the host-local `sameMachine`
+    # transport and must never win automatic selection for a physical-device
+    # build/install.
+    is_physical = connection.get("transportType") != "sameMachine"
     platform = str(hardware.get("platform", ""))
     marketing_name = str(hardware.get("marketingName", ""))
     device_type = str(hardware.get("deviceType", ""))
-    if platform == "iOS" or "iPhone" in marketing_name or "iPhone" in device_type:
+    is_iphone = platform == "iOS" or "iPhone" in marketing_name or "iPhone" in device_type
+    if (
+        is_iphone
+        and is_physical
+        and connection.get("pairingState") == "paired"
+        and connection.get("tunnelState") == "connected"
+    ):
         matches.append(device)
 if len(matches) != 1:
-    raise SystemExit(f"expected exactly one iOS device, found {len(matches)}; set DEVICE_ID explicitly")
+    raise SystemExit(
+        f"expected exactly one connected paired physical iOS device, found {len(matches)}; "
+        "set DEVICE_ID explicitly"
+    )
 print(matches[0].get("identifier", ""))
 PY
 }
@@ -145,13 +185,15 @@ build_libbox() {
 	local sing_box_build_tags
 	sing_box_build_tags="$(sing_box_build_tags)"
 	# 2b2n:end wlt
-	SING_BOX_REPO="$sing_box_repo" \
-		LIBBOX_VARIANT=dev \
-		LIBBOX_ACTIVATE=0 \
-		LIBBOX_APPLE_PLATFORMS="$libbox_platforms" \
-		SING_BOX_BUILD_TAGS="$sing_box_build_tags" \
-		bash "$repo_root/scripts/build_libbox.sh" "$sing_box_version" \
-		>"$build_dir/build-libbox-iphone.log" 2>&1
+	(
+		cd "$repo_root"
+		SING_BOX_REPO="$sing_box_repo" \
+			LIBBOX_VARIANT=dev \
+			LIBBOX_ACTIVATE=0 \
+			LIBBOX_APPLE_PLATFORMS="$libbox_platforms" \
+			SING_BOX_BUILD_TAGS="$sing_box_build_tags" \
+			bash "$repo_root/scripts/build_libbox.sh" "$sing_box_version"
+	) >"$build_dir/build-libbox-iphone.log" 2>&1
 	VERIFY_LX_LIBBOX="${SING_BOX_LX:-0}" \
 		bash "$repo_root/scripts/verify_wlt_libbox.sh" "$dev_xcframework" \
 		>>"$build_dir/build-libbox-iphone.log" 2>&1 \
@@ -168,6 +210,15 @@ build_app() {
 	log "building SFI for generic iOS device"
 	[[ "$scheme" == "SFI Dev" ]] || die "WLT device helper requires SFI Dev scheme, got: $scheme"
 	[[ "$configuration" == "Dev" ]] || die "WLT device helper requires Dev configuration, got: $configuration"
+	local client_import_scheme
+	if [[ -n "${VPN_CLIENT_IMPORT_SCHEME:-}" ]]; then
+		client_import_scheme="$VPN_CLIENT_IMPORT_SCHEME"
+	else
+		client_import_scheme="$("$repo_root/scripts/overlay_setting.sh" VPN_CLIENT_IMPORT_SCHEME 2>/dev/null \
+			|| "$repo_root/scripts/overlay_setting.sh" OVERLAY_DEV_URL_SCHEME)"
+	fi
+	[[ "$client_import_scheme" =~ ^[A-Za-z][A-Za-z0-9+.-]*$ ]] \
+		|| die "VPN_CLIENT_IMPORT_SCHEME is not a valid URI scheme"
 	xcodebuild \
 		-project "$repo_root/sing-box.xcodeproj" \
 		-scheme "$scheme" \
@@ -175,6 +226,7 @@ build_app() {
 		-destination 'generic/platform=iOS' \
 		-derivedDataPath "$derived_data_path" \
 		-skipPackagePluginValidation \
+		"VPN_CLIENT_IMPORT_SCHEME=$client_import_scheme" \
 		build >"$build_dir/xcodebuild-sfi-device.log" 2>&1
 	local app
 	app="$(app_path)"
@@ -206,6 +258,7 @@ prepare_devicectl_outputs() {
 
 install_app() {
 	local app device json_path log_path
+	require_wifi_no_vpn_confirmation
 	app="$(app_path)"
 	[[ -n "$app" && -d "$app" ]] || die "built app not found; run build-app first"
 	device="$(device_id)"
@@ -232,6 +285,7 @@ install_app() {
 
 launch_app() {
 	local app device identifier json_path log_path
+	require_wifi_no_vpn_confirmation
 	app="$(app_path)"
 	[[ -n "$app" && -d "$app" ]] || die "built app not found; run build-app first"
 	device="$(device_id)"
@@ -283,6 +337,11 @@ Environment:
   SING_BOX_LX=1            Use Makefile.lx tags from SING_BOX_REPO plus with_wlt.
   SING_BOX_LX_TAGS         Override LX tags when SING_BOX_LX=1.
   WLT_CARRIER_MODULE       WLT private module path; defaults to github.com/vl-bbnn/wlt-carrier.
+  WLT_DEVICE_WIFI_NO_VPN_CONFIRMED=1
+                            Required acknowledgement for install/launch after
+                            verifying unrestricted Wi-Fi and stopped VPN.
+  WLT_IOS_WIFI_TRUST_PROOF Optional recent proof.json from the Dev Wi-Fi
+                            preflight; validated when supplied.
 USAGE
 }
 

@@ -293,6 +293,9 @@
       },
       "shouldTranslate" : false
     },
+    "2b2n-stack" : {
+
+    },
     "5.6 GB" : {
       "localizations" : {
         "fa" : {
@@ -1091,6 +1094,9 @@
         }
       }
     },
+    "Beta Settings" : {
+
+    },
     "Browse" : {
       "localizations" : {
         "fa" : {
@@ -1375,6 +1381,7 @@
       }
     },
     "Changelog" : {
+      "extractionState" : "stale",
       "localizations" : {
         "fa" : {
           "stringUnit" : {
@@ -1718,6 +1725,7 @@
       }
     },
     "Configuration" : {
+      "extractionState" : "stale",
       "localizations" : {
         "fa" : {
           "stringUnit" : {
@@ -3661,7 +3669,18 @@
         }
       }
     },
+    "File will be located at iCloud Drive/%@/%@" : {
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "new",
+            "value" : "File will be located at iCloud Drive/%1$@/%2$@"
+          }
+        }
+      }
+    },
     "File will be located at iCloud Drive/sing-box/%@" : {
+      "extractionState" : "stale",
       "localizations" : {
         "fa" : {
           "stringUnit" : {
@@ -4123,6 +4142,7 @@
       "shouldTranslate" : false
     },
     "https://sing-box.sagernet.org/" : {
+      "extractionState" : "stale",
       "localizations" : {
         "fa" : {
           "stringUnit" : {
@@ -4151,6 +4171,7 @@
       }
     },
     "https://sing-box.sagernet.org/changelog/" : {
+      "extractionState" : "stale",
       "localizations" : {
         "fa" : {
           "stringUnit" : {
@@ -4179,6 +4200,7 @@
       }
     },
     "https://sing-box.sagernet.org/configuration/" : {
+      "extractionState" : "stale",
       "localizations" : {
         "fa" : {
           "stringUnit" : {
@@ -6514,6 +6536,7 @@
       }
     },
     "Quit sing-box" : {
+      "extractionState" : "stale",
       "localizations" : {
         "fa" : {
           "stringUnit" : {
@@ -6596,6 +6619,9 @@
           }
         }
       }
+    },
+    "Reasserting" : {
+
     },
     "Reboot required." : {
       "localizations" : {
@@ -6682,6 +6708,7 @@
       }
     },
     "Releases" : {
+      "extractionState" : "stale",
       "localizations" : {
         "fa" : {
           "stringUnit" : {
@@ -7428,6 +7455,15 @@
       },
       "shouldTranslate" : false
     },
+    "sing-box Apple client" : {
+
+    },
+    "sing-box core" : {
+
+    },
+    "sing-box-lx" : {
+
+    },
     "Slice Size" : {
       "localizations" : {
         "fa" : {
@@ -7513,6 +7549,7 @@
       }
     },
     "Source Code" : {
+      "extractionState" : "stale",
       "localizations" : {
         "fa" : {
           "stringUnit" : {
@@ -7708,6 +7745,12 @@
         }
       }
     },
+    "Started" : {
+
+    },
+    "Starting" : {
+
+    },
     "State" : {
       "localizations" : {
         "fa" : {
@@ -7847,6 +7890,12 @@
           }
         }
       }
+    },
+    "Stopped" : {
+
+    },
+    "Stopping" : {
+
     },
     "System Default" : {
       "localizations" : {

@@ -162,29 +162,15 @@ public struct GlobalChecksModifier: ViewModifier {
     }
 
     private nonisolated func checkDeprecatedNotes() async {
-        #if os(iOS) && SFI_DEV
-            // Restricted-network device scenarios intentionally move the app
-            // to LTE before a cold WLT start. The standalone command check can
-            // time out while the tunnel is stopped and present an alert over
-            // the explicit Start control, which tests the warning UI instead
-            // of the transport. Keep ordinary Dev and release behavior intact.
-            if ProcessInfo.processInfo.environment["WLT_DEVICE_SCENARIO"] == "1" {
-                return
-            }
-        #endif
         let disableWarnings = await SharedPreferences.disableDeprecatedWarnings.get()
         guard !disableWarnings else { return }
 
-        do {
-            let reports = try LibboxNewStandaloneCommandClient()!.getDeprecatedNotes()
-            if reports.hasNext() {
-                await MainActor.run {
-                    showNextDeprecatedNote(reports)
-                }
-            }
-        } catch {
+        guard let reports = try? LibboxNewStandaloneCommandClient()!.getDeprecatedNotes() else {
+            return
+        }
+        if reports.hasNext() {
             await MainActor.run {
-                alert = AlertState(action: "check deprecated notes", error: error)
+                showNextDeprecatedNote(reports)
             }
         }
     }

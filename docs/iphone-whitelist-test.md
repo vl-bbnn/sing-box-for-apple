@@ -28,7 +28,7 @@ tokens, UUIDs, private IPs/domains, or production logs into public notes.
 - Turnable gateway is promoted to
   `0.4.1-2b2n-browser-pass-clean-20260531`.
 - `Libbox.xcframework` was rebuilt from the local
-  `/Users/vl.bbnn/projects/sing-box-workspace/sing-box` working tree.
+  `/Users/operator/projects/sing-box-workspace/sing-box` working tree.
 - The SFI Debug iOS app builds and passes codesign verification.
 - The current diagnostics build adds packet-tunnel session IDs, startup timing,
   heartbeat, memory footprint, and iOS memory-pressure events to exported logs.
@@ -65,7 +65,7 @@ tokens, UUIDs, private IPs/domains, or production logs into public notes.
 Run from:
 
 ```sh
-cd /Users/vl.bbnn/projects/sing-box-workspace/sing-box-for-apple
+cd /Users/operator/projects/sing-box-workspace/sing-box-for-apple
 ```
 
 Check sanitized device/build readiness:
@@ -96,7 +96,7 @@ scripts/iphone_whitelist_device.sh rebuild-all
 The script writes local diagnostic logs under:
 
 ```text
-/Users/vl.bbnn/projects/sing-box-workspace/sing-box-for-apple/build/
+/Users/operator/projects/sing-box-workspace/sing-box-for-apple/build/
 ```
 
 ## Device Requirements
