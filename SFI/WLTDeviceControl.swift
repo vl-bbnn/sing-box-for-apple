@@ -7,6 +7,7 @@ import CoreTelephony
 import CryptoKit
 import Network
 import NetworkExtension
+import Security
 import UIKit
 
 actor WLTDeviceControl {
@@ -231,6 +232,7 @@ actor WLTDeviceControl {
     private struct WorkloadTransactionMetrics: Codable, Sendable {
         let resourceFetchType: String
         let networkProtocolName: String?
+        let publicFixtureRemoteAddress: String?
         let responseStatusCode: Int?
         let proxyConnection: Bool
         let reusedConnection: Bool
@@ -256,6 +258,7 @@ actor WLTDeviceControl {
         enum CodingKeys: String, CodingKey {
             case resourceFetchType = "resource_fetch_type"
             case networkProtocolName = "network_protocol_name"
+            case publicFixtureRemoteAddress = "public_fixture_remote_address"
             case responseStatusCode = "response_status_code"
             case proxyConnection = "proxy_connection"
             case reusedConnection = "reused_connection"
@@ -276,7 +279,7 @@ actor WLTDeviceControl {
             case responseBodyBytesAfterDecoding = "response_body_bytes_after_decoding"
         }
 
-        init(_ metrics: URLSessionTaskTransactionMetrics) {
+        init(_ metrics: URLSessionTaskTransactionMetrics, includePublicFixtureAddress: Bool) {
             resourceFetchType = switch metrics.resourceFetchType {
             case .networkLoad: "network_load"
             case .serverPush: "server_push"
@@ -285,6 +288,7 @@ actor WLTDeviceControl {
             @unknown default: "unknown"
             }
             networkProtocolName = metrics.networkProtocolName
+            publicFixtureRemoteAddress = includePublicFixtureAddress ? metrics.remoteAddress : nil
             responseStatusCode = (metrics.response as? HTTPURLResponse)?.statusCode
             proxyConnection = metrics.isProxyConnection
             reusedConnection = metrics.isReusedConnection
@@ -368,7 +372,7 @@ actor WLTDeviceControl {
             case internalTunnelPhasesVisible = "internal_tunnel_phases_visible"
         }
 
-        init(_ metrics: URLSessionTaskMetrics) {
+        init(_ metrics: URLSessionTaskMetrics, includePublicFixtureAddress: Bool) {
             schema = 1
             scope = "urlsession_client"
             taskIntervalMS = Int64((metrics.taskInterval.duration * 1_000).rounded())
@@ -377,20 +381,27 @@ actor WLTDeviceControl {
             internalTunnelPhasesVisible = false
             // Keep every transaction so redirects and their independent
             // connection/cache behavior are not collapsed into one total.
-            transactions = metrics.transactionMetrics.map(WorkloadTransactionMetrics.init)
+            transactions = metrics.transactionMetrics.map {
+                WorkloadTransactionMetrics($0, includePublicFixtureAddress: includePublicFixtureAddress)
+            }
         }
     }
 
     private final class WorkloadMetricsCollector: NSObject, URLSessionTaskDelegate, @unchecked Sendable {
         private let lock = NSLock()
+        private let includePublicFixtureAddress: Bool
         private var capturedMetrics: WorkloadTaskMetrics?
+
+        init(includePublicFixtureAddress: Bool) {
+            self.includePublicFixtureAddress = includePublicFixtureAddress
+        }
 
         func urlSession(
             _ session: URLSession,
             task: URLSessionTask,
             didFinishCollecting metrics: URLSessionTaskMetrics
         ) {
-            let captured = WorkloadTaskMetrics(metrics)
+            let captured = WorkloadTaskMetrics(metrics, includePublicFixtureAddress: includePublicFixtureAddress)
             lock.lock()
             defer { lock.unlock() }
             capturedMetrics = captured
@@ -414,6 +425,9 @@ actor WLTDeviceControl {
         let taskMetrics: WorkloadTaskMetrics?
         let errorDomain: String?
         let errorCode: Int?
+        let underlyingErrorDomain: String?
+        let underlyingErrorCode: Int?
+        let errorDiagnostics: WorkloadErrorDiagnostics?
 
         enum CodingKeys: String, CodingKey {
             case name, success, classification
@@ -424,6 +438,78 @@ actor WLTDeviceControl {
             case taskMetrics = "task_metrics"
             case errorDomain = "error_domain"
             case errorCode = "error_code"
+            case underlyingErrorDomain = "underlying_error_domain"
+            case underlyingErrorCode = "underlying_error_code"
+            case errorDiagnostics = "error_diagnostics"
+        }
+    }
+
+    // Record only error structure and certificate fingerprints after a failed
+    // request. Never override URLSession's system trust evaluation or export
+    // endpoint or NSError userInfo values. A leaf DER is included only for the
+    // fixed public Cloudflare diagnostic fixture, so SANs can be inspected.
+    private struct WorkloadErrorDiagnostics: Codable {
+        let userInfoKeys: [String]
+        let underlyingUserInfoKeys: [String]
+        let peerTrustPresent: Bool
+        let peerCertificateSHA256: [String]
+        let publicFixtureLeafDERBase64: String?
+        let streamDomain: Int?
+        let streamCode: Int?
+        let originalSSLErrorCode: Int?
+
+        enum CodingKeys: String, CodingKey {
+            case userInfoKeys = "user_info_keys"
+            case underlyingUserInfoKeys = "underlying_user_info_keys"
+            case peerTrustPresent = "peer_trust_present"
+            case peerCertificateSHA256 = "peer_certificate_sha256"
+            case publicFixtureLeafDERBase64 = "public_fixture_leaf_der_base64"
+            case streamDomain = "stream_domain"
+            case streamCode = "stream_code"
+            case originalSSLErrorCode = "original_ssl_error_code"
+        }
+
+        init(_ error: NSError, includePublicFixtureLeaf: Bool) {
+            userInfoKeys = error.userInfo.keys.sorted()
+            let underlying = error.userInfo[NSUnderlyingErrorKey] as? NSError
+            underlyingUserInfoKeys = underlying?.userInfo.keys.sorted() ?? []
+            let trust = Self.peerTrust(in: error)
+                ?? underlying.flatMap(Self.peerTrust(in:))
+            peerTrustPresent = trust != nil
+            if let trust, let chain = SecTrustCopyCertificateChain(trust) as? [SecCertificate] {
+                peerCertificateSHA256 = chain.map { certificate in
+                    let data = SecCertificateCopyData(certificate) as Data
+                    return SHA256.hash(data: data).map { String(format: "%02x", $0) }.joined()
+                }
+                publicFixtureLeafDERBase64 = includePublicFixtureLeaf
+                    ? chain.first.map { (SecCertificateCopyData($0) as Data).base64EncodedString() }
+                    : nil
+            } else {
+                peerCertificateSHA256 = []
+                publicFixtureLeafDERBase64 = nil
+            }
+            streamDomain = Self.streamNumber("_kCFStreamErrorDomainKey", in: error)
+            streamCode = Self.streamNumber("_kCFStreamErrorCodeKey", in: error)
+            originalSSLErrorCode = Self.streamNumber("_kCFNetworkCFStreamSSLErrorOriginalValue", in: error)
+        }
+
+        private static func streamNumber(_ key: String, in error: NSError) -> Int? {
+            var current: NSError? = error
+            for _ in 0..<3 {
+                if let value = current?.userInfo[key] as? NSNumber {
+                    return value.intValue
+                }
+                current = current?.userInfo[NSUnderlyingErrorKey] as? NSError
+            }
+            return nil
+        }
+
+        private static func peerTrust(in error: NSError) -> SecTrust? {
+            guard let value = error.userInfo[NSURLErrorFailingURLPeerTrustErrorKey],
+                  CFGetTypeID(value as CFTypeRef) == SecTrustGetTypeID() else {
+                return nil
+            }
+            return value as! SecTrust
         }
     }
 
@@ -443,6 +529,8 @@ actor WLTDeviceControl {
         let metaFamily: [String: Int]
         let tiktokFamily: [String: Int]
         let youtubeFamily: [String: Int]
+        let twitchFamily: [String: Int]
+        let twitchStreamEvents: [TwitchStreamEvent]
         let githubFamily: [String: Int]
         let neutralExample: [String: Int]
 
@@ -451,8 +539,60 @@ actor WLTDeviceControl {
             case metaFamily = "meta-family"
             case tiktokFamily = "tiktok-family"
             case youtubeFamily = "youtube-family"
+            case twitchFamily = "twitch-family"
+            case twitchStreamEvents = "twitch-stream-events"
             case githubFamily = "github-family"
             case neutralExample = "neutral-example"
+        }
+    }
+
+    private struct TwitchStreamEvent: Codable, Sendable {
+        let category: String
+        let outbound: String
+        let network: String
+        let attempt: String
+        let openMS: Int64
+
+        enum CodingKeys: String, CodingKey {
+            case category
+            case outbound
+            case network
+            case attempt
+            case openMS = "open_ms"
+        }
+    }
+
+    private struct WLTFixtureEvent: Codable, Sendable {
+        let phase: String
+        let fakeIP: String
+        let routeClass: String
+
+        enum CodingKeys: String, CodingKey {
+            case phase
+            case fakeIP = "fake_ip"
+            case routeClass = "route_class"
+        }
+    }
+
+    private struct ClientOpenTraceEvent: Codable {
+        let muxGeneration: UInt64
+        let requestID: UInt16
+        let flowID: UInt16
+        let routeIndex: UInt8
+        let phase: String
+        let elapsedMS: Int64
+        let wallUnixMS: Int64
+        let errorClass: String
+
+        enum CodingKeys: String, CodingKey {
+            case muxGeneration = "mux_generation"
+            case requestID = "request_id"
+            case flowID = "flow_id"
+            case routeIndex = "route_idx"
+            case phase
+            case elapsedMS = "elapsed_ms"
+            case wallUnixMS = "wall_unix_ms"
+            case errorClass = "error_class"
         }
     }
 
@@ -506,7 +646,9 @@ actor WLTDeviceControl {
         let explicitSavedWLTOutboundReachability: [ExplicitWLTProbeResult]?
         let groupSelections: [GroupSelection]?
         let routeDiagnostics: RouteDiagnostics?
+        let clientOpenTrace: [ClientOpenTraceEvent]?
         let routeDiagnosticsScope: String?
+        let wltFixtureEvents: [WLTFixtureEvent]?
         let transportCounters: [String: Int64]?
         let identityRing: IdentityRingStatus?
         let identityRingImport: IdentityRingImportStatus?
@@ -544,7 +686,9 @@ actor WLTDeviceControl {
             case explicitSavedWLTOutboundReachability = "explicit_saved_WLT_outbound_reachability"
             case groupSelections = "group_selections"
             case routeDiagnostics = "route_diagnostics"
+            case clientOpenTrace = "client_open_trace"
             case routeDiagnosticsScope = "route_diagnostics_scope"
+            case wltFixtureEvents = "wlt_fixture_events"
             case transportCounters = "transport_counters"
             case identityRing = "identity_ring"
             case identityRingImport = "identity_ring_import"
@@ -625,7 +769,9 @@ actor WLTDeviceControl {
         let explicitSavedWLTOutboundReachability: [ExplicitWLTProbeResult]?
         let groupSelections: [GroupSelection]?
         let routeDiagnostics: RouteDiagnostics?
+        let clientOpenTrace: [ClientOpenTraceEvent]?
         let routeDiagnosticsScope: String?
+        let wltFixtureEvents: [WLTFixtureEvent]?
         let transportCounters: [String: Int64]?
         let identityRing: IdentityRingStatus?
         let identityRingImport: IdentityRingImportStatus?
@@ -640,7 +786,9 @@ actor WLTDeviceControl {
             explicitSavedWLTOutboundReachability: [ExplicitWLTProbeResult]? = nil,
             groupSelections: [GroupSelection]? = nil,
             routeDiagnostics: RouteDiagnostics? = nil,
+            clientOpenTrace: [ClientOpenTraceEvent]? = nil,
             routeDiagnosticsScope: String? = nil,
+            wltFixtureEvents: [WLTFixtureEvent]? = nil,
             transportCounters: [String: Int64]? = nil,
             identityRing: IdentityRingStatus? = nil,
             identityRingImport: IdentityRingImportStatus? = nil
@@ -654,7 +802,9 @@ actor WLTDeviceControl {
             self.explicitSavedWLTOutboundReachability = explicitSavedWLTOutboundReachability
             self.groupSelections = groupSelections
             self.routeDiagnostics = routeDiagnostics
+            self.clientOpenTrace = clientOpenTrace
             self.routeDiagnosticsScope = routeDiagnosticsScope
+            self.wltFixtureEvents = wltFixtureEvents
             self.transportCounters = transportCounters
             self.identityRing = identityRing
             self.identityRingImport = identityRingImport
@@ -1057,7 +1207,8 @@ actor WLTDeviceControl {
                 probeElapsedMS: nil,
                 soak: nil,
                 runtimeParameters: nil,
-                routeDiagnostics: await loadRouteDiagnostics()
+                routeDiagnostics: await loadRouteDiagnostics(),
+                clientOpenTrace: await loadClientOpenTrace()
             )
         case .identityRingStatus:
             return Outcome(
@@ -1207,6 +1358,7 @@ actor WLTDeviceControl {
                 soak: nil,
                 runtimeParameters: nil,
                 workload: workload,
+                wltFixtureEvents: await loadWLTFixtureEvents(),
                 transportCounters: transportCounters
             )
         case .networkWorkload:
@@ -1221,7 +1373,8 @@ actor WLTDeviceControl {
                 soak: nil,
                 runtimeParameters: nil,
                 workload: workload,
-                routeDiagnostics: await loadRouteDiagnostics()
+                routeDiagnostics: await loadRouteDiagnostics(),
+                wltFixtureEvents: await loadWLTFixtureEvents()
             )
         case .explicitSavedWLTOutboundReachability:
             guard await profile.status == .connected else {
@@ -1926,7 +2079,9 @@ actor WLTDeviceControl {
         var results: [WorkloadProbeResult] = []
         for probe in plan.probes {
             let startedAt = unixMilliseconds()
-            let metricsCollector = WorkloadMetricsCollector()
+            let metricsCollector = WorkloadMetricsCollector(
+                includePublicFixtureAddress: probe.url == "https://cp.cloudflare.com/generate_204"
+            )
             var statusCode = -1
             var bytesRead = 0
             var classification = "request_failed"
@@ -1990,6 +2145,7 @@ actor WLTDeviceControl {
             let finishedAt = unixMilliseconds()
             let taskMetrics = metricsCollector.snapshot()
             let nsError = probeError as NSError?
+            let underlyingError = nsError?.userInfo[NSUnderlyingErrorKey] as? NSError
             results.append(WorkloadProbeResult(
                 name: probe.name,
                 success: probeError == nil && classification == "ok",
@@ -2000,7 +2156,15 @@ actor WLTDeviceControl {
                 taskMetricsStatus: taskMetrics == nil ? "missing" : "collected",
                 taskMetrics: taskMetrics,
                 errorDomain: nsError?.domain,
-                errorCode: nsError?.code
+                errorCode: nsError?.code,
+                underlyingErrorDomain: underlyingError?.domain,
+                underlyingErrorCode: underlyingError?.code,
+                errorDiagnostics: nsError.map {
+                    WorkloadErrorDiagnostics(
+                        $0,
+                        includePublicFixtureLeaf: URL(string: probe.url)?.host == "cp.cloudflare.com"
+                    )
+                }
             ))
         }
         return WorkloadOutcome(route: plan.route, probes: results)
@@ -2017,6 +2181,25 @@ actor WLTDeviceControl {
         "mux_control_errors",
         "mux_flow_drops",
         "peer_reconnect_failures",
+    ])
+
+    // Dev-only, numeric service context for explaining a failed strict gate.
+    // Keep the required zero-tolerance set above unchanged; extra fields are
+    // diagnostic and never turn a missing required counter into a pass.
+    private static let diagnosticCounterNames = Set([
+        "carrier_generation", "interface_generation",
+        "active", "peak_active", "pending", "peak_pending", "opened", "closed",
+        "dns_open_requests", "dns_open_queued", "dns_open_rejected",
+        "rejected_queue", "rejected_active", "rejected_open", "pressure_reclaims",
+        "last_active_wait_ms", "max_active_wait_ms", "last_open_wait_ms", "max_open_wait_ms",
+        "mux_open_pending", "mux_peak_open_pending", "mux_open_requests",
+        "mux_open_replies", "mux_open_canceled", "mux_last_open_ms", "mux_max_open_ms",
+        "mux_last_open_control_write_ms", "mux_max_open_control_write_ms",
+        "mux_last_open_reply_wait_ms", "mux_max_open_reply_wait_ms",
+        "mux_flow_in_kib_s", "mux_flow_out_kib_s", "mux_rate_waits", "mux_rate_wait_ms",
+        "peer_online", "peer_slots", "peer_active_data", "peer_in_kib_s",
+        "peer_out_kib_s", "peer_bytes_in", "peer_bytes_out",
+        "peer_in_queue_full", "peer_out_queue_full",
     ])
 
     private func runWorkloadWithCounters(
@@ -2038,16 +2221,18 @@ actor WLTDeviceControl {
                 var counters: [String: Int64] = [:]
                 for field in message.split(separator: " ") {
                     let pair = field.split(separator: "=", maxSplits: 1)
+                    let name = pair.isEmpty ? "" : String(pair[0])
                     guard
                         pair.count == 2,
-                        Self.zeroToleranceCounterNames.contains(String(pair[0])),
+                        Self.zeroToleranceCounterNames.contains(name)
+                            || Self.diagnosticCounterNames.contains(name),
                         let value = Int64(pair[1])
                     else {
                         continue
                     }
-                    counters[String(pair[0])] = value
+                    counters[name] = value
                 }
-                if Set(counters.keys) == Self.zeroToleranceCounterNames {
+                if Self.zeroToleranceCounterNames.isSubset(of: Set(counters.keys)) {
                     return (workload, counters)
                 }
             }
@@ -2373,14 +2558,71 @@ actor WLTDeviceControl {
         throw ControlError.timeout
     }
 
+    private func loadClientOpenTrace() async -> [ClientOpenTraceEvent] {
+        let commandClient = await MainActor.run { () -> CommandClient in
+            let client = CommandClient(.log, logMaxLines: 3_000)
+            client.connect()
+            return client
+        }
+        defer { Task { @MainActor in commandClient.disconnect() } }
+        let deadline = Date().addingTimeInterval(2)
+        while Date() < deadline {
+            if await MainActor.run(body: { commandClient.isConnected }) {
+                try? await Task.sleep(nanoseconds: 300_000_000)
+                break
+            }
+            try? await Task.sleep(nanoseconds: 100_000_000)
+        }
+        let messages = await MainActor.run { commandClient.logList.map(\.message) }
+        let phases: Set<String> = [
+            "send_begin", "send_end", "reply_received", "open_completed",
+            "canceled", "session_closed", "suppressed",
+        ]
+        let errors: Set<String> = ["none", "control_write", "context_done", "session_closed"]
+        var events: [ClientOpenTraceEvent] = []
+        for message in messages {
+            guard let marker = message.range(of: "tinymux client open trace ") else { continue }
+            let fields = message[marker.upperBound...].split(whereSeparator: \.isWhitespace)
+            var values: [String: String] = [:]
+            for field in fields {
+                let pair = field.split(separator: "=", maxSplits: 1)
+                guard pair.count == 2 else { break }
+                values[String(pair[0])] = String(pair[1])
+            }
+            guard let generationRaw = values["mux_generation"],
+                  let generation = UInt64(generationRaw),
+                  let requestRaw = values["request_id"],
+                  let requestID = UInt16(requestRaw),
+                  let flowRaw = values["flow_id"],
+                  let flowID = UInt16(flowRaw),
+                  let routeRaw = values["route_idx"],
+                  let routeIndex = UInt8(routeRaw),
+                  let phase = values["phase"], phases.contains(phase),
+                  let elapsedRaw = values["elapsed_ms"],
+                  let elapsedMS = Int64(elapsedRaw), elapsedMS >= 0,
+                  let wallRaw = values["wall_unix_ms"],
+                  let wallUnixMS = Int64(wallRaw), wallUnixMS > 0,
+                  let errorClass = values["error_class"], errors.contains(errorClass)
+            else { continue }
+            events.append(ClientOpenTraceEvent(
+                muxGeneration: generation, requestID: requestID, flowID: flowID,
+                routeIndex: routeIndex, phase: phase, elapsedMS: elapsedMS,
+                wallUnixMS: wallUnixMS, errorClass: errorClass
+            ))
+        }
+        return Array(events.suffix(512))
+    }
+
     private func loadRouteDiagnostics() async -> RouteDiagnostics {
         let allowedCategories = [
             "instagram-family", "meta-family", "tiktok-family",
-            "youtube-family", "github-family", "neutral-example",
+            "youtube-family", "twitch-family", "github-family", "neutral-example",
         ]
         let allowedOutbounds = ["wlt-eu", "wlt-ru", "direct", "other"]
         let allowedNetworks = ["tcp", "udp"]
         let allowedAttempts = ["primary", "fallback"]
+        let requiredFieldNames: Set<String> = ["outbound-class", "network", "attempt"]
+        let allowedFieldNames: Set<String> = ["outbound-class", "network", "attempt", "open_ms"]
         let commandClient = await MainActor.run { () -> CommandClient in
             let client = CommandClient(.log, logMaxLines: 3_000)
             client.connect()
@@ -2406,9 +2648,11 @@ actor WLTDeviceControl {
             "meta-family": [:],
             "tiktok-family": [:],
             "youtube-family": [:],
+            "twitch-family": [:],
             "github-family": [:],
             "neutral-example": [:],
         ]
+        var twitchStreamEvents: [TwitchStreamEvent] = []
         for message in messages {
             guard message.components(separatedBy: "wlt-route-leaf-category=").count == 2,
                   !message.contains("wlt-route-policy-category="),
@@ -2418,7 +2662,6 @@ actor WLTDeviceControl {
                 let marker = "wlt-route-leaf-category=\(category) "
                 guard let markerRange = message.range(of: marker) else { continue }
                 let remainder = message[markerRange.upperBound...]
-                let allowedFieldNames = ["outbound-class", "network", "attempt"]
                 var fields: [String: String] = [:]
                 var malformed = false
                 for token in remainder.split(whereSeparator: \.isWhitespace) {
@@ -2435,11 +2678,26 @@ actor WLTDeviceControl {
                     }
                     fields[name] = value
                 }
-                guard !malformed, fields.count == allowedFieldNames.count,
+                guard !malformed, requiredFieldNames.isSubset(of: Set(fields.keys)),
+                      Set(fields.keys).isSubset(of: allowedFieldNames),
                       let outbound = fields["outbound-class"], allowedOutbounds.contains(outbound),
                       let network = fields["network"], allowedNetworks.contains(network),
                       let attempt = fields["attempt"], allowedAttempts.contains(attempt)
                 else { continue }
+                if let openMSText = fields["open_ms"] {
+                    guard category == "twitch-family", network == "tcp",
+                          !openMSText.isEmpty,
+                          openMSText.utf8.allSatisfy({ (48...57).contains($0) }),
+                          let openMS = Int64(openMSText), openMS >= 0
+                    else { continue }
+                    twitchStreamEvents.append(TwitchStreamEvent(
+                        category: category,
+                        outbound: outbound,
+                        network: network,
+                        attempt: attempt,
+                        openMS: openMS
+                    ))
+                }
                 counts[category, default: [:]][outbound, default: 0] += 1
             }
         }
@@ -2448,9 +2706,72 @@ actor WLTDeviceControl {
             metaFamily: counts["meta-family"] ?? [:],
             tiktokFamily: counts["tiktok-family"] ?? [:],
             youtubeFamily: counts["youtube-family"] ?? [:],
+            twitchFamily: counts["twitch-family"] ?? [:],
+            twitchStreamEvents: Array(twitchStreamEvents.suffix(32)),
             githubFamily: counts["github-family"] ?? [:],
             neutralExample: counts["neutral-example"] ?? [:]
         )
+    }
+
+    // Dev-only diagnostics for a fixed public TLS fixture. Do not return the
+    // surrounding log line: it can contain unrelated destination metadata.
+    private func loadWLTFixtureEvents() async -> [WLTFixtureEvent] {
+        let commandClient = await MainActor.run { () -> CommandClient in
+            let client = CommandClient(.log, logMaxLines: 3_000)
+            client.connect()
+            return client
+        }
+        defer { Task { @MainActor in commandClient.disconnect() } }
+        let deadline = Date().addingTimeInterval(2)
+        while Date() < deadline {
+            if await MainActor.run(body: { commandClient.isConnected }) {
+                try? await Task.sleep(nanoseconds: 300_000_000)
+                break
+            }
+            try? await Task.sleep(nanoseconds: 100_000_000)
+        }
+        let messages = await MainActor.run { commandClient.logList.map(\.message) }
+        var events: [WLTFixtureEvent] = []
+        for message in messages {
+            guard let marker = message.range(of: "wlt-fixture phase=") else { continue }
+            let fields = message[marker.lowerBound...].split(whereSeparator: \.isWhitespace).dropFirst()
+            var values: [String: String] = [:]
+            for field in fields {
+                let pair = field.split(separator: "=", maxSplits: 1)
+                guard pair.count == 2 else { break }
+                values[String(pair[0])] = String(pair[1])
+            }
+            guard let phase = values["phase"], ["route", "before-open"].contains(phase),
+                  values["domain"] == "cp.cloudflare.com",
+                  let fakeIP = values["fake_ip"],
+                  fakeIP == "none" || Self.isFixtureFakeIP(fakeIP)
+            else { continue }
+            let routeClass: String
+            if phase == "route" {
+                guard let value = values["outbound_class"],
+                      ["wlt-eu", "wlt-ru", "direct", "other", "group"].contains(value)
+                else { continue }
+                routeClass = value
+            } else {
+                guard values["target"] == "cp.cloudflare.com:443",
+                      let value = values["route_class"],
+                      ["eu", "ru", "direct", "other"].contains(value)
+                else { continue }
+                routeClass = value
+            }
+            events.append(WLTFixtureEvent(phase: phase, fakeIP: fakeIP, routeClass: routeClass))
+        }
+        return Array(events.suffix(32))
+    }
+
+    private static func isFixtureFakeIP(_ value: String) -> Bool {
+        let octets = value.split(separator: ".")
+        guard octets.count == 4,
+              let first = UInt8(octets[0]), first == 198,
+              let second = UInt8(octets[1]), second == 18 || second == 19,
+              UInt8(octets[2]) != nil, UInt8(octets[3]) != nil
+        else { return false }
+        return true
     }
 
     private func writeResult(
@@ -2505,8 +2826,10 @@ actor WLTDeviceControl {
                 outcome?.explicitSavedWLTOutboundReachability,
             groupSelections: outcome?.groupSelections,
             routeDiagnostics: outcome?.routeDiagnostics,
+            clientOpenTrace: outcome?.clientOpenTrace,
             routeDiagnosticsScope: outcome?.routeDiagnosticsScope
                 ?? (outcome?.routeDiagnostics == nil ? nil : "leaf_selection"),
+            wltFixtureEvents: outcome?.wltFixtureEvents,
             transportCounters: outcome?.transportCounters,
             identityRing: outcome?.identityRing,
             identityRingImport: outcome?.identityRingImport,
