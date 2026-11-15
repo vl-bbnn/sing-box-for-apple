@@ -27,6 +27,9 @@ open class ExtensionProvider: NEPacketTunnelProvider {
   private static let whitelistTransportMemoryRecoveryCooldownCore: TimeInterval = 45
   private static let whitelistTransportMemoryRecoveryUrgentCooldownCore: TimeInterval = 20
   private static let whitelistTransportMemoryRecoverySkipLogInterval: TimeInterval = 30
+  #if os(iOS) && SFI_DEV
+    private static let wltHeapProfileThreshold: UInt64 = 43 * 1024 * 1024
+  #endif
   private let lifecycleStateLock = NSLock()
   private var stopTunnelGeneration: UInt64 = 0
 
@@ -332,6 +335,28 @@ open class ExtensionProvider: NEPacketTunnelProvider {
 
   func writeMessage(_ message: String) {
     PacketTunnelDiagnostics.observeStartupLog(message)
+    #if os(iOS) && SFI_DEV
+      // Keep recovery causes after the bounded command log has been evicted.
+      // These fixed lifecycle/statistics messages contain no destinations or auth.
+      let recoveryMarkers = [
+        "updated default interface ", "missing default interface",
+        "wlt service default interface ", "wlt service ignoring duplicate ",
+        "wlt service replacing carrier ", "wlt service starting carrier after ",
+        "wlt service restarting carrier ", "wlt service carrier restarted",
+        "wlt service old carrier abort", "wlt service stats ",
+        "relay client mux diagnostics registered", "relay client mux terminal stats",
+        "relay client mux lifetime", "relay client peer terminal stats",
+        "relay client peer write diagnostics registered",
+        "relay client peer write terminal stats", "relay client peer write coverage incomplete",
+        "peer write failed",
+        "memory pressure: ", "memory threshold reached,",
+      ]
+      if isWhitelistTransportProfileActive,
+        recoveryMarkers.contains(where: { message.contains($0) })
+      {
+        recordLifecycleEvent("(packet-tunnel): core-recovery \(message)")
+      }
+    #endif
     if let commandServer {
       commandServer.writeMessage(2, message: message)
     }
@@ -388,6 +413,23 @@ open class ExtensionProvider: NEPacketTunnelProvider {
       let thermalDescription = self?.thermalStateDescription() ?? "unknown"
       self?.recordLifecycleEvent(
         "(packet-tunnel): heartbeat memory=\(memoryDescription) thermal=\(thermalDescription)")
+      #if os(iOS) && SFI_DEV
+        if let self, self.isWhitelistTransportProfileActive {
+          self.recordLifecycleEvent(
+            "(packet-tunnel): go-memory \(LibboxWLTMemoryStatsJSON())")
+          if let memoryBytes,
+            memoryBytes >= Self.wltHeapProfileThreshold,
+            let sessionID = self.diagnosticsSessionID
+          {
+            let path = FilePath.cacheDirectory
+              .appendingPathComponent("wlt-heap-\(sessionID).pprof").path
+            if LibboxWLTRequestHeapProfile(path) {
+              self.recordLifecycleIncident(
+                "(packet-tunnel): go-heap-profile requested session=\(sessionID) memory=\(memoryDescription)")
+            }
+          }
+        }
+      #endif
       if let self, thermalDescription != self.diagnosticsLastThermalState {
         let previousThermalState = self.diagnosticsLastThermalState ?? "unknown"
         self.diagnosticsLastThermalState = thermalDescription
@@ -436,6 +478,18 @@ open class ExtensionProvider: NEPacketTunnelProvider {
         self.recordLifecycleIncident(
           "(packet-tunnel): memory pressure event=\(eventDescription) memory=\(memoryDescription) thermal=\(thermalDescription)")
         #if SFI_DEV
+          self.recordLifecycleIncident(
+            "(packet-tunnel): go-memory-pressure \(LibboxWLTMemoryStatsJSON())")
+          if event.contains(.critical), self.isWhitelistTransportProfileActive,
+            let sessionID = self.diagnosticsSessionID
+          {
+            let path = FilePath.cacheDirectory
+              .appendingPathComponent("wlt-heap-\(sessionID).pprof").path
+            if LibboxWLTRequestHeapProfile(path) {
+              self.recordLifecycleIncident(
+                "(packet-tunnel): go-heap-profile requested session=\(sessionID) reason=critical-pressure")
+            }
+          }
           if let memoryBytes {
             self.scheduleWhitelistTransportMemoryRecoveryIfNeeded(
               memoryBytes: memoryBytes,
