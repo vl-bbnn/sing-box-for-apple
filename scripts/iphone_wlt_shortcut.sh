@@ -24,6 +24,18 @@ run_coredevice() {
 [[ "$warmup_seconds" =~ ^[0-9]+$ ]] \
   || { echo "WLT_IOS_SHORTCUT_WARMUP_SECONDS must be non-negative" >&2; exit 2; }
 
+# WLT RadioOn disables Wi-Fi. CoreDevice may currently be reaching the phone
+# over Wi-Fi even when its device state looks healthy. Require the physical USB
+# transport before removing that control path so cleanup remains possible.
+if [[ "$shortcut_name" == "WLT RadioOn" ]]; then
+  idevice_id_bin="${WLT_IDEVICE_ID_BIN:-idevice_id}"
+  if ! usb_devices="$("$idevice_id_bin" -l 2>/dev/null)" \
+      || ! /usr/bin/grep -Fxq -- "$device_id" <<<"$usb_devices"; then
+    echo "WLT RadioOn requires this iPhone to be connected and trusted over USB" >&2
+    exit 3
+  fi
+fi
+
 mkdir -p "$artifact_dir"
 encoded_name="$(/usr/bin/python3 - "$shortcut_name" <<'PY'
 import sys

@@ -546,9 +546,6 @@ PY
         xcrun devicectl device process launch
         --device "$device"
     )
-    if [[ "$action" == "stop" || "$action" == "start" || "$action" == "start-probe" ]]; then
-        launch_arguments+=(--terminate-existing)
-    fi
     launch_arguments+=(
         --payload-url "$payload_url"
         --activate
@@ -775,7 +772,9 @@ allowed = {
     "explicit_saved_WLT_outbound_reachability": result.get("explicit_saved_WLT_outbound_reachability"),
     "group_selections": result.get("group_selections"),
     "route_diagnostics": result.get("route_diagnostics"),
+    "client_open_trace": None,
     "route_diagnostics_scope": result.get("route_diagnostics_scope"),
+    "wlt_fixture_events": result.get("wlt_fixture_events"),
     "transport_counters": result.get("transport_counters"),
     "identity_ring": result.get("identity_ring"),
     "identity_ring_import": result.get("identity_ring_import"),
@@ -784,6 +783,22 @@ allowed = {
     "error_domain": result.get("error_domain"),
     "error_code": result.get("error_code"),
 }
+trace = result.get("client_open_trace")
+if trace is not None:
+    integer_fields = {"mux_generation", "request_id", "flow_id", "route_idx", "elapsed_ms", "wall_unix_ms"}
+    string_fields = {"phase", "error_class"}
+    phases = {"send_begin", "send_end", "reply_received", "open_completed", "canceled", "session_closed", "suppressed"}
+    errors = {"none", "control_write", "context_done", "session_closed"}
+    if not isinstance(trace, list) or len(trace) > 512:
+        raise SystemExit("invalid client open trace count")
+    for event in trace:
+        if (not isinstance(event, dict) or set(event) != integer_fields | string_fields
+                or any(type(event[key]) is not int or event[key] < 0 for key in integer_fields)
+                or event["request_id"] > 65535 or event["flow_id"] > 65535
+                or event["route_idx"] > 255 or event["phase"] not in phases
+                or event["error_class"] not in errors):
+            raise SystemExit("invalid client open trace event")
+    allowed["client_open_trace"] = trace
 # Preserve a sanitized result even when a fail-closed evidence contract below
 # rejects it.  Callers can then distinguish transport counters, workload
 # failure, and infrastructure failure without reading private app-container
@@ -933,13 +948,20 @@ if action == "workload" and result.get("state") == "succeeded":
         "peer_reconnect_failures",
     }
     counters = result.get("transport_counters") or {}
-    if set(counters) != expected_counters:
+    if not expected_counters.issubset(counters):
         raise SystemExit("successful WLT workload lacks zero-tolerance counters")
     if any(not isinstance(value, int) or value < 0 for value in counters.values()):
         raise SystemExit("successful WLT workload has invalid transport counters")
     zero_tolerance = expected_counters - {"reconnects", "reconnect_retries"}
     if any(counters[name] != 0 for name in zero_tolerance):
         raise SystemExit("successful WLT workload has non-zero transport counters")
+    optional_zero_tolerance = {
+        "rejected_active", "rejected_open", "rejected_queue",
+        "dns_open_rejected", "mux_open_canceled", "peer_in_queue_full",
+        "peer_out_queue_full",
+    }
+    if any(counters.get(name, 0) != 0 for name in optional_zero_tolerance):
+        raise SystemExit("successful WLT workload has non-zero extended transport counters")
     if counters["reconnects"] > max_successful_reconnects:
         raise SystemExit("successful WLT workload exceeded reconnect allowance")
     if counters["reconnect_retries"] > max_reconnect_retries:

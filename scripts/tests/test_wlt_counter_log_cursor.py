@@ -78,7 +78,10 @@ final class LogClient {
         workload = SOURCE.read_text().split("private func runWorkloadWithCounters(", 1)[1].split(
             "private func selectWorkloadRoute", 1
         )[0]
-        self.assertIn("Set(counters.keys) == Self.zeroToleranceCounterNames", workload)
+        self.assertIn(
+            "Self.zeroToleranceCounterNames.isSubset(of: Set(counters.keys))", workload
+        )
+        self.assertIn("Self.diagnosticCounterNames.contains(name)", workload)
         self.assertIn("throw ControlError.transportCountersUnavailable", workload)
         self.assertNotIn("initialCount", workload)
 

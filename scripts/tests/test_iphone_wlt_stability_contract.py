@@ -309,10 +309,9 @@ class IPhoneWLTStabilityContractTests(unittest.TestCase):
         self.assertIn('"startup_milestones": result.get("startup_milestones")', control)
         self.assertIn("PacketTunnelDiagnostics.startupMilestones()", device_control)
         self.assertIn("request.action == .workload || request.action == .soak", device_control)
-        self.assertIn(
-            '[[ "$action" == "stop" || "$action" == "start" || "$action" == "start-probe" ]]',
-            control,
-        )
+        # Lifecycle payloads must reach the existing app without killing its
+        # active PacketTunnel before it can produce stop/terminal evidence.
+        self.assertNotIn("--terminate-existing", control)
         self.assertIn("retrying delivery once after explicit stop", RUNNER.read_text())
         self.assertIn("start_probe_can_defer_to_workload", RUNNER.read_text())
         self.assertIn("traffic_ready", RUNNER.read_text())
@@ -346,9 +345,16 @@ class IPhoneWLTStabilityContractTests(unittest.TestCase):
         self.assertIn('"wlt-route-leaf-category=\\(category) "', route_diagnostics)
         self.assertIn('fields["network"]', route_diagnostics)
         self.assertIn('fields["attempt"]', route_diagnostics)
+        self.assertIn('fields["open_ms"]', route_diagnostics)
+        self.assertIn('openMSText.utf8.allSatisfy({ (48...57).contains($0) })', route_diagnostics)
+        self.assertIn('let openMS = Int64(openMSText), openMS >= 0', route_diagnostics)
+        self.assertIn('category == "twitch-family", network == "tcp"', route_diagnostics)
+        self.assertIn("twitchStreamEvents.append(TwitchStreamEvent(", route_diagnostics)
+        self.assertIn("Array(twitchStreamEvents.suffix(32))", route_diagnostics)
         self.assertIn("fields[name] == nil", route_diagnostics)
         self.assertIn("allowedFieldNames.contains(name)", route_diagnostics)
-        self.assertIn("fields.count == allowedFieldNames.count", route_diagnostics)
+        self.assertIn("requiredFieldNames.isSubset(of: Set(fields.keys))", route_diagnostics)
+        self.assertIn("Set(fields.keys).isSubset(of: allowedFieldNames)", route_diagnostics)
         self.assertIn('components(separatedBy: "wlt-route-leaf-category=").count == 2', route_diagnostics)
         self.assertNotIn("uniqueKeysWithValues", route_diagnostics)
         self.assertNotIn('"wlt-route-category=\\(category)', route_diagnostics)
@@ -401,7 +407,8 @@ class IPhoneWLTStabilityContractTests(unittest.TestCase):
         self.assertIn("routeDiagnostics: await loadRouteDiagnostics()", network_workload)
         self.assertIn("selectWorkloadRoute(plan.route)", device_control)
         self.assertIn('route == "eu" || route == "ru"', device_control)
-        self.assertIn('(\"whitelist-exit\", \"ru\")', device_control)
+        self.assertIn('let group = clean ? "whitelist-exit"', device_control)
+        self.assertIn('let outbound = clean ? route', device_control)
         workload = device_control.split("private func runWorkload", 1)[1].split(
             "private func selectWorkloadRoute", 1
         )[0]
@@ -410,9 +417,9 @@ class IPhoneWLTStabilityContractTests(unittest.TestCase):
             "private func loadCurrentStatus", 1
         )[0]
         self.assertIn('guard route == "eu"', selector)
-        self.assertIn('(\"whitelist-exit\", \"eu\")', selector)
-        self.assertIn('(\"eu_or_wlt-eu\", \"vless-wlt-eu\")', selector)
-        self.assertNotIn('(\"eu\", \"vless-wlt-eu\")', selector)
+        self.assertIn('let outbound = clean ? route', selector)
+        self.assertIn('route == "ru" ? "ru_or_wlt-ru" : "eu_or_wlt-eu"', selector)
+        self.assertIn('route == "ru" ? "vless-wlt-ru" : "vless-wlt-eu"', selector)
         self.assertNotIn("closeConnections()", selector)
         self.assertIn("workloadProbes", device_control)
         self.assertIn("retryable_start_failure", control := RUNNER.read_text())

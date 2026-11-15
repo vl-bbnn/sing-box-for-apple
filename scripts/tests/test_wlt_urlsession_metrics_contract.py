@@ -68,12 +68,19 @@ class WLTURLSessionMetricsContractTests(unittest.TestCase):
         self.assertIn("guard let start, let end", self.metrics)
         self.assertNotIn("?? 0", self.metrics)
 
-    def test_metrics_do_not_export_endpoint_or_header_values(self):
+    def test_only_fixed_public_fixture_exports_remote_address(self):
+        self.assertIn(
+            'includePublicFixtureAddress: probe.url == "https://cp.cloudflare.com/generate_204"',
+            self.workload,
+        )
+        self.assertIn(
+            "publicFixtureRemoteAddress = includePublicFixtureAddress ? metrics.remoteAddress : nil",
+            self.metrics,
+        )
         for forbidden in (
             "metrics.request.url",
             "metrics.response.url",
             "localAddress",
-            "remoteAddress",
             "allHeaderFields",
         ):
             self.assertNotIn(forbidden, self.metrics)
