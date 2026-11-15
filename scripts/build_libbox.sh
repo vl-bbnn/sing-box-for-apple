@@ -16,6 +16,9 @@ workspace_root="${RUNNER_TEMP:-$(pwd)/build}"
 build_root="$workspace_root/libbox-build"
 repo_dir="${SING_BOX_REPO:-}"
 platforms="${LIBBOX_APPLE_PLATFORMS:-ios,macos}"
+# 2b2n:begin wlt
+extra_tags="${SING_BOX_BUILD_TAGS:-${SING_BOX_EXTRA_TAGS:-}}"
+# 2b2n:end wlt
 
 rm -rf "$destination"
 mkdir -p "$build_root"
@@ -54,6 +57,13 @@ IFS=',' read -r -a platform_list <<<"$platforms"
 for platform in "${platform_list[@]}"; do
 	rm -rf "build/${platform}-"*
 done
+
+# 2b2n:begin wlt
+if [[ -n "$extra_tags" ]]; then
+	export SING_BOX_EXTRA_TAGS="$extra_tags"
+	echo "using extra sing-box build tags: $SING_BOX_EXTRA_TAGS"
+fi
+# 2b2n:end wlt
 
 if [[ "${LIBBOX_SKIP_TOOL_INSTALL:-0}" != "1" ]]; then
 	make lib_install

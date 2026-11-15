@@ -98,14 +98,22 @@ PY
 
 build_libbox() {
 	log "building Libbox.xcframework from local sing-box"
+	# 2b2n:begin wlt
+	local sing_box_build_tags="${SING_BOX_BUILD_TAGS:-with_wlt}"
+	# 2b2n:end wlt
 	SING_BOX_REPO="$sing_box_repo" \
 		LIBBOX_APPLE_PLATFORMS="$libbox_platforms" \
+		SING_BOX_BUILD_TAGS="$sing_box_build_tags" \
 		bash "$repo_root/scripts/build_libbox.sh" "$sing_box_version" \
 		>"$build_dir/build-libbox-iphone.log" 2>&1
-	rg -q "LibboxStartWhitelistTransport" \
-		"$repo_root/Libbox.xcframework/ios-arm64/Libbox.framework/Versions/A/Headers/Libbox.objc.h" \
-		|| die "rebuilt Libbox.xcframework does not expose whitelist transport symbols"
+	bash "$repo_root/scripts/verify_wlt_libbox.sh" "$repo_root/Libbox.xcframework" \
+		>>"$build_dir/build-libbox-iphone.log" 2>&1 \
+		|| die "rebuilt Libbox.xcframework failed WLT verification; see build/build-libbox-iphone.log"
 	log "Libbox build ok"
+}
+
+verify_libbox() {
+	bash "$repo_root/scripts/verify_wlt_libbox.sh" "$repo_root/Libbox.xcframework"
 }
 
 build_app() {
@@ -206,6 +214,7 @@ usage: scripts/iphone_whitelist_device.sh <command>
 Commands:
   preflight     Print sanitized device/build readiness.
   build-libbox  Rebuild Libbox.xcframework from local sing-box.
+  verify-libbox Verify WLT symbols, module linkage, and iOS slices.
   build-app     Build SFI for generic iOS device.
   install       Install the built app on the connected iPhone.
   launch        Launch the installed app on the connected iPhone.
@@ -227,6 +236,9 @@ preflight)
 	;;
 build-libbox)
 	build_libbox
+	;;
+verify-libbox)
+	verify_libbox
 	;;
 build-app)
 	build_app
