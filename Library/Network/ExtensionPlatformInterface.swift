@@ -309,16 +309,24 @@ public class ExtensionPlatformInterface: NSObject, LibboxPlatformInterfaceProtoc
   private func onUpdateDefaultInterface(
     _ listener: LibboxInterfaceUpdateListenerProtocol, _ path: Network.NWPath
   ) {
-    guard path.status != .unsatisfied,
-      let defaultInterface = activeDefaultInterface(path)
-    else {
+    if path.status == .unsatisfied {
+      // Publish authoritative loss before synchronous diagnostic file I/O.
       listener.updateDefaultInterface(
         "", interfaceIndex: -1, isExpensive: false, isConstrained: false)
-      return
+    } else if let defaultInterface = activeDefaultInterface(path) {
+      listener.updateDefaultInterface(
+        defaultInterface.name, interfaceIndex: Int32(defaultInterface.index),
+        isExpensive: path.isExpensive, isConstrained: path.isConstrained)
+    } else {
+      listener.updateDefaultInterface(
+        "", interfaceIndex: -1, isExpensive: false, isConstrained: false)
     }
-    listener.updateDefaultInterface(
-      defaultInterface.name, interfaceIndex: Int32(defaultInterface.index),
-      isExpensive: path.isExpensive, isConstrained: path.isConstrained)
+    #if os(iOS) && SFI_DEV
+      let selected = activeDefaultInterface(path)
+      PacketTunnelDiagnostics.append(
+        "(packet-tunnel): physical-path-callback status=\(path.status) selected=\(selected?.name ?? "none") index=\(selected.map { Int($0.index) } ?? -1) wifi=\(path.usesInterfaceType(.wifi)) cellular=\(path.usesInterfaceType(.cellular)) expensive=\(path.isExpensive) constrained=\(path.isConstrained)"
+      )
+    #endif
   }
 
   private func activeDefaultInterface(_ path: Network.NWPath) -> Network.NWInterface? {
