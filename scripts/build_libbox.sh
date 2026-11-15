@@ -154,7 +154,7 @@ done
 
 go run ./cmd/internal/build_libbox -target apple -platform "$platforms"
 
-source_xcframework="$repo_dir/Libbox.xcframework"
+source_xcframework="${SING_BOX_APPLE_BIND_OUTPUT:-$repo_dir/Libbox.xcframework}"
 if [[ ! -d "$source_xcframework" && -d "$client_root/Libbox.xcframework" ]]; then
 	source_xcframework="$client_root/Libbox.xcframework"
 fi
